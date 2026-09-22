@@ -6,7 +6,7 @@ my @groups =
     'Event and command history' => <streams list-events list-commands>,
     'Entity state' => <create load snapshot>,
     'Command execution and workers' => <command run-command work>,
-    'Saga workflows' => <saga-status advance resolve-action>,
+    'Saga workflows' => <saga-status advance advance-sagas resolve-action>,
     'Monitoring' => <stats web-monitor>;
 
 # Examples assume the application's modules are supplied by configuration.
@@ -102,6 +102,11 @@ my %commands =
         usage => 'advance SAGA',
         description => 'Replay new saga input and process reactions, ready actions, retries, compensations and due timeouts. This can execute aggregate commands and external services. The limit bounds actions processed in this pass; inspect first with saga-status when diagnosing a workflow.',
         examples => ['red-sourcing advance OrderSaga --id=order-id=o1 --limit=10'] },
+    advance-sagas => {
+        usage => 'advance-sagas',
+        description => 'Discover all persisted running or compensating sagas and advance each once. Import their domain and service modules through configuration or -I/-M. --limit bounds actions per saga; --now fixes the evaluation time. Report each final status or error and continue after an isolated saga failure. One-shot mode exits nonzero if any saga fails; --watch repeats until Ctrl-C.',
+        examples => ['red-sourcing advance-sagas --limit=50',
+                     'red-sourcing advance-sagas -M=MyApp::Workflows -M=MyApp::Services --watch --interval=2'] },
     resolve-action => {
         usage => 'resolve-action SAGA ACTION-ID',
         description => 'Record a confirmed result or error for a running or blocked saga action, without reissuing the external operation. Find ACTION-ID through saga-status --details. Pass exactly one of --result (JSON) or --error, then advance the saga to continue.',

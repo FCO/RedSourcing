@@ -74,7 +74,7 @@ subtest 'overview lists every operation in functional groups with examples' => {
         'universal flags are not repeated under each command';
     for <init update types list-entities list-aggregates list-projections list-sagas describe inspect
          streams list-events list-commands create load snapshot command run-command work
-         saga-status advance resolve-action stats web-monitor> -> $name {
+         saga-status advance advance-sagas resolve-action stats web-monitor> -> $name {
         my %page = cli($name, '--help');
         is %page<code>, 0, "$name focused help succeeds";
         is %page<err>, '', "$name focused help has no diagnostics";

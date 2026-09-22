@@ -99,7 +99,7 @@ sub imported-code(@includes, @modules, Str $expression) {
 }
 sub trace-operation {
     enable-flow-tracing if $cli-config.flow-tracing && $*REDSOURCING-CLI-OPERATION
-        eq any(<create load snapshot command run-command work advance resolve-action>);
+        eq any(<create load snapshot command run-command work advance advance-sagas resolve-action>);
 }
 
 sub json-object(Str $source, Str $option --> Hash) {
@@ -656,6 +656,34 @@ multi MAIN('advance', Str $entity, :I(:@includes), :M(:@modules), Str :$ids = '{
         %options<now> = DateTime.new($now) with $now;
         output(entity-record($proxy.^advance(|%options)), $json,
             -> $record { format-details('Saga state', $record) });
+    }
+}
+
+#| Discover and advance every active persisted saga, once or repeatedly.
+multi MAIN('advance-sagas', :I(:@includes), :M(:@modules), UInt :$limit = 100,
+           Str :$now, Bool :$watch = False, Numeric :$interval = 1, Bool :$json = False,
+           Str :f(:$file), Str :$driver = $cli-config.driver // 'SQLite', Str :$database = $cli-config.database // 'a.db', Bool :$debug = $cli-config.debug) {
+    die 'limit and interval must be positive' unless $limit > 0 && $interval > 0;
+    my %options = :$limit;
+    %options<now> = DateTime.new($now) with $now;
+    with-store $driver, $database, $debug, {
+        imported-code(@includes, @modules, 'True');
+        trace-operation;
+        my $stopping = False;
+        my $tap = signal(SIGINT).tap({ $stopping = True }) if $watch;
+        LEAVE $tap.close if $tap.defined;
+        my $first-pass = True;
+        repeat {
+            my %report = advance-sagas(|%options);
+            if $json || %report<advanced> || %report<failed> || $first-pass {
+                output(%report, $json, &format-saga-controller);
+                $*OUT.flush;
+            }
+            $first-pass = False;
+            exit 1 if %report<failed> && !$watch;
+            my $deadline = now + $interval;
+            await Promise.in(0.1 min ($deadline - now)) while $watch && !$stopping && now < $deadline;
+        } while $watch && !$stopping;
     }
 }
 

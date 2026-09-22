@@ -28,8 +28,6 @@ subtest 'the README configuration is usable by application code' => {
     my %result = execute(q:to/CODE/);
         use RedSourcing;
         my $settings = red-sourcing-defaults;
-        my $*RED-DEBUG = $settings.debug;
-        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
         say $settings.driver;
         say StoredEvent.^all.elems;
         CODE

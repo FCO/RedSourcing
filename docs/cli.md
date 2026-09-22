@@ -113,8 +113,8 @@ configure their default Red connection from this same file. It accepts `:file`,
 settings. It reads no command-line arguments, imports no configured modules,
 starts no monitor/worker and creates missing storage tables by default. Pass
 `:!initialize` to suppress table/index creation; existing schemas are not migrated.
-The caller can set
-`my $*RED-DEBUG = $settings.debug` for SQL logging. See
+It sets `$PROCESS::RED-DEBUG` from the effective debug setting for SQL logging;
+a scoped `my $*RED-DEBUG` takes precedence. See
 [application configuration](configuration.md#use-from-application-code).
 `use RedSourcing; config { ... }` also works inside the file;
 

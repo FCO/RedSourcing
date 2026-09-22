@@ -92,7 +92,7 @@ sub validate-connection(%connection) {
 }
 
 # Explicit initialization keeps ordinary domain imports free of connection changes.
-# Debug remains a caller-owned Red dynamic; the returned settings supply its value.
+# Scoped $*RED-DEBUG values override the configured process default.
 sub red-sourcing-defaults(IO() :$file, IO::Path :$directory = $*CWD,
         Str :$driver, Str :$database, Bool :$debug, Bool :$flow-tracing,
         Bool :$initialize = True, :%connection = {} --> Settings) is export {
@@ -106,6 +106,7 @@ sub red-sourcing-defaults(IO() :$file, IO::Path :$directory = $*CWD,
     my $effective = $settings.clone(:driver($selected-driver), :database($selected-database),
         :debug($debug // $settings.debug), :flow-tracing($flow-tracing // $settings.flow-tracing), :connection(%options));
     red-defaults :default(store-driver($selected-driver, $selected-database, :connection(%options)));
+    $PROCESS::RED-DEBUG = $effective.debug;
     if $initialize {
         .^create-table(:unless-exists) for RedSourcing::StoredEvent, RedSourcing::StoredCommand;
     }

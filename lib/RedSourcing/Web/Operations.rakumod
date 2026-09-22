@@ -94,7 +94,7 @@ method arguments(Str $operation, :@positionals = [], :%options = {} --> Array) {
         die "Missing --{%field<name>}" unless %options{%field<name>}:exists;
     }
     # Continuous work is opt-in in the browser, even if the CLI config watches.
-    @arguments.push('--/watch') if $operation eq 'work' && !(%options<watch>:exists);
+    @arguments.push('--/watch') if $operation eq any(<work advance-sagas>) && !(%options<watch>:exists);
     @arguments.Array
 }
 

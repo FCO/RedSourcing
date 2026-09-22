@@ -64,7 +64,7 @@ subtest 'one library import discovers configuration and returns effective settin
             answer => $proxy.answer(:value(5)));
         CODE
     is %result<code>, 0, 'native application bootstrap works without a CLI import';
-    is %result<err>, '', 'configuration metadata does not import domain modules or enable scoped logging';
+    like %result<err>, /'SQL : CREATE TABLE'/, 'configured debug logs SQL during initialization';
     my %settings = from-json %result<out>;
     is %settings<driver>, 'SQLite', 'configured driver is selected';
     is %settings<database>, $project.add('library.db').Str, 'configured SQLite path is based on the file';
@@ -80,7 +80,7 @@ subtest 'one library import discovers configuration and returns effective settin
 };
 subtest 'a fresh process restores entities and commands from the configured store' => {
     my %result = consumer($child, 'use RedSourcing; ' ~ $domain ~ q:to/CODE/);
-        red-sourcing-defaults;
+        red-sourcing-defaults(:!debug);
         my $proxy = ConfiguredCounter.^with-ids(:id(7));
         say $proxy.^load.id;
         say $proxy.^list-commands.head.result;
@@ -110,10 +110,10 @@ subtest 'explicit file and named overrides take precedence and preserve configur
     nok $tmp.add('explicit.db').e, 'explicit database is not rebased onto the file';
     my %relative = load-config(:file($custom.relative($child).Str), :directory($child));
     is %relative<settings>.database, 'other', 'relative explicit files resolve against the supplied directory';
-    my $settings = red-sourcing-defaults(:file($custom), :driver<SQLite>, :database(':memory:'));
+    my $settings = red-sourcing-defaults(:file($custom), :driver<SQLite>, :database(':memory:'), :!debug);
     is $settings.database, ':memory:', 'memory databases retain their special meaning';
 };
-subtest 'missing configuration keeps the library fallback and debug is scoped by the caller' => {
+subtest 'missing configuration keeps the library fallback and debug defaults to quiet' => {
     my $empty = $tmp.add('empty');
     $empty.mkdir;
     my %result = consumer($empty, q:to/CODE/);
@@ -125,27 +125,50 @@ subtest 'missing configuration keeps the library fallback and debug is scoped by
     is %result<code>, 0, 'no file is required';
     is %result<out>, "SQLite/a.db/False\n", 'built-in defaults match the CLI';
     ok $empty.add('a.db').f, 'default SQLite database is relative to process cwd';
+    is %result<err>, '', 'default initialization does not log SQL';
+};
+subtest 'configured process debug can be disabled and overridden in a caller scope' => {
     my %debug = consumer($child, q:to/CODE/);
         use RedSourcing;
-        my $settings = red-sourcing-defaults(:database(':memory:'));
-        my $*RED-DEBUG = $settings.debug;
-        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        red-sourcing-defaults(:database(':memory:'));
+        say $*RED-DEBUG;
+        note 'SCOPED-BEGIN';
+        {
+            my $*RED-DEBUG = False;
+            say StoredEvent.^all.elems;
+        }
+        note 'SCOPED-END';
+        say StoredEvent.^all.elems;
+        note 'DEBUG-OFF';
+        red-sourcing-defaults(:database(':memory:'), :!debug);
+        say $*RED-DEBUG;
+        say StoredEvent.^all.elems;
         CODE
-    is %debug<code>, 0, 'caller can apply the configured Red debug setting';
-    like %debug<err>, /'SQL'/, 'dynamic debug logs SQL in the caller scope';
+    is %debug<code>, 0, 'configured debug requires no caller assignment';
+    is %debug<out>, "True\n0\n0\nFalse\n0\n", 'dynamic lookup uses the configured process default';
+    like %debug<err>.split("SCOPED-BEGIN\n").head, /'SQL : CREATE TABLE'/,
+        'debug applies to automatic table creation';
+    is %debug<err>.split("SCOPED-BEGIN\n").tail.split("SCOPED-END\n").head, '',
+        'a scoped False overrides the process default';
+    like %debug<err>.split("SCOPED-END\n").tail.split("DEBUG-OFF\n").head, /'SQL'/,
+        'the process default resumes after leaving the override scope';
+    is %debug<err>.split("DEBUG-OFF\n").tail, '',
+        ':!debug overrides configured True and suppresses subsequent SQL';
 };
 subtest 'configuration errors leave an existing default connection usable' => {
     my $invalid = $tmp.add('invalid.rakuconf');
-    configuration($invalid, '.connection = %(driver => "SQLite");');
+    configuration($invalid, '.debug = True; .connection = %(driver => "SQLite");');
     my $malformed = $tmp.add('malformed.rakuconf');
     $malformed.spurt('42');
     my $directory = $tmp.add('directory-config');
     $directory.mkdir;
     red-defaults 'SQLite', :database(':memory:');
     schema(StoredEvent, StoredCommand).create;
+    my $debug-before = $PROCESS::RED-DEBUG;
     for $tmp.add('missing'), $invalid, $malformed, $directory -> $bad {
         dies-ok { red-sourcing-defaults(:file($bad)) }, "invalid configuration is rejected: {$bad.basename}";
         is StoredEvent.^all.elems, 0, 'existing default remains available after failure';
+        is $PROCESS::RED-DEBUG, $debug-before, 'invalid configuration preserves the debug default';
     }
     dies-ok { red-sourcing-defaults(:directory($tmp), :connection{:database<bad>}) },
         'reserved options in call-site connection overrides are rejected';
@@ -164,9 +187,9 @@ subtest 'initialization is idempotent and can be disabled without creating traci
     is %disabled<out>, "0\n", 'neither storage nor tracing tables are created';
     is %disabled<err>, '', 'connect-only mode is quiet';
     my %enabled = consumer($child, 'use RedSourcing; ' ~ $domain ~ q:to/CODE/);
-        red-sourcing-defaults;
+        red-sourcing-defaults(:!debug);
         my $before = StoredEvent.^all.elems;
-        red-sourcing-defaults(:initialize(True));
+        red-sourcing-defaults(:initialize(True), :!debug);
         say StoredEvent.^all.elems == $before;
         say ConfiguredCounter.^with-ids(:id(7)).^load.id;
         CODE

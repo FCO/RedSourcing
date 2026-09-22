@@ -11,7 +11,6 @@ sub MAIN(Str :f(:$file) = $?FILE.IO.parent.add('red-sourcing.rakuconf').absolute
          Str :$host = '127.0.0.1', UInt :$port = 3000, Bool :$seed = True) {
     my $settings = red-sourcing-defaults(:$file, :$driver, :$database);
     my $*RED-FALLBACK = False;
-    my $*RED-DEBUG = $settings.debug;
     my $app = App.new.initialize(:$seed).start-controller;
     my $server = web-server(:$host, :$port,
         :application(estate-routes($app)));

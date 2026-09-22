@@ -29,13 +29,17 @@ zef install .
 red-sourcing --help
 ```
 
-For development, use the source tree directly:
+When editing RedSourcing itself, load the checkout's `lib/` so your changes are
+used without reinstalling the distribution:
 
 ```sh
 zef install --deps-only .
 raku -Ilib examples/counter/main.raku
 raku -Ilib bin/red-sourcing.raku --help
 ```
+
+For application development, use the installed module or the
+[Docker image](docs/docker.md).
 
 SQLite is the default when no configuration file exists. PostgreSQL requires
 `DB::Pg`, libpq and an existing database:
@@ -63,8 +67,7 @@ commands, and reconstructs a projection:
 ```raku
 use RedSourcing;
 
-red-defaults 'SQLite', :database(':memory:');
-schema(StoredEvent, StoredCommand).create;
+red-sourcing-defaults(:driver<SQLite>, :database(':memory:'));
 
 class CounterIncremented does Event {
     has Int $.id is required;
@@ -106,6 +109,10 @@ say $pending.run;                      # 5; reuse the stored result
 say CounterTotal.^with-ids(:id(1)).^load.value; # 5
 ```
 
+`red-sourcing-defaults` configures the store and creates missing tables by default.
+This example explicitly selects in-memory SQLite. In an application, call it
+without arguments to use the nearest `red-sourcing.rakuconf`.
+
 The event emission method `counter-incremented` is generated from the aggregate's
 `APPLY` signature. It fills the entity ID, writes the next event version and
 applies the event. The command returns the resulting state. The projection's
@@ -139,12 +146,13 @@ Load it explicitly during application startup:
 use RedSourcing;
 
 my $settings = red-sourcing-defaults;
-my $*RED-DEBUG = $settings.debug;
 ```
 
 `red-sourcing-defaults` searches the current directory and its parents for the
 nearest file, configures Red's default connection, creates missing storage tables
-and returns effective settings. Repeated calls preserve existing tables and data.
+and returns effective settings. It sets `$PROCESS::RED-DEBUG` from the effective
+`.debug` setting, enabling SQL logging automatically when True. A scoped
+`my $*RED-DEBUG` takes precedence. Repeated calls preserve existing tables and data.
 Pass `:!initialize` to connect without creating tables or indexes; schema migrations
 remain explicit.
 Importing the module alone does not configure a connection. Choose another file

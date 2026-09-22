@@ -6,7 +6,6 @@ use Commerce::App;
 sub MAIN(Str :f(:$file) = $?FILE.IO.parent.add('red-sourcing.rakuconf').Str,
          Str :$database, Numeric :$interval where * > 0 = 1, Bool :$once = False) {
     my $settings = red-sourcing-defaults(:$file, :$database);
-    my $*RED-DEBUG = $settings.debug;
     my $shop = Shop.new.initialize;
     $shop.drain;
     return if $once;

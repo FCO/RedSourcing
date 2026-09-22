@@ -58,8 +58,7 @@ RedSourcing - event sourcing, projections and sagas for Raku, built on Red
 =begin code :lang<raku>
 
 use RedSourcing;
-red-defaults 'SQLite', :database(':memory:');
-schema(StoredEvent, StoredCommand).create;
+red-sourcing-defaults(:driver<SQLite>, :database(':memory:'));
 
 class CounterIncremented does Event {
     has Int $.id is required;
@@ -111,7 +110,6 @@ command retains its failure. Sagas submit retries explicitly.
 
 use RedSourcing;
 my $settings = red-sourcing-defaults;
-my $*RED-DEBUG = $settings.debug;
 
 =end code
 
@@ -120,6 +118,8 @@ directory or its parents and configures Red's default connection. C<:file> selec
 an explicit file; C<:driver>, C<:database>, C<:debug> and C<:connection> override its
 values. It returns effective C<RedSourcing::Config::Settings> and creates missing
 storage tables by default; pass C<:!initialize> to suppress table/index creation.
+It sets C<$PROCESS::RED-DEBUG> from the effective debug setting; a scoped
+C<my $*RED-DEBUG> takes precedence.
 It does not migrate existing schemas. Imports and controller startup remain explicit.
 Importing RedSourcing alone has
 no configuration or connection effect.

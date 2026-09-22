@@ -69,14 +69,16 @@ See [workflow visualization](flows.md) for the recorded evidence and its limits.
 use RedSourcing;
 
 my $settings = red-sourcing-defaults;
-my $*RED-DEBUG = $settings.debug;
 ```
 
 The call configures Red's default driver, creates missing `StoredEvent` and
 `StoredCommand` tables, and returns
 `RedSourcing::Config::Settings`. Importing `RedSourcing` does not read files or
-change the connection. Set the Red debug dynamic in the application scope;
-returning `.debug` alone does not enable SQL logging.
+change the connection. The call sets `$PROCESS::RED-DEBUG` from the effective
+`.debug` setting before table initialization, so `.debug = True` or `:debug`
+enables SQL logging automatically. `:!debug` disables the process default.
+A scoped `my $*RED-DEBUG = False` overrides that default within its dynamic scope;
+the process value applies again after leaving the scope.
 
 ```raku
 my $settings = red-sourcing-defaults(:file<deployment.rakuconf>);

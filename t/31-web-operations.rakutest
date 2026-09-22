@@ -53,13 +53,15 @@ my %identity = ids => '{"id":"a=001"}';
 
 subtest 'catalog reflects every CLI operation and validates transport arguments' => {
     my @names = $ops.catalog.map({ |.<commands>.map(*.<name>) });
-    is @names.elems, 23, 'all CLI operations are represented';
+    is @names.elems, 24, 'all CLI operations are represented';
     is $ops.configuration<database>, $database, 'store is fixed at startup';
     is-deeply $ops.arguments('command', :positionals(['Account', 'rename']),
         :options(%(identity => ['id=a=001'], data => '{"name":"$(touch /tmp/nope)"}', async => True))),
         ['command', 'Account', 'rename', '--async', '--data={"name":"$(touch /tmp/nope)"}', '--identity=id=a=001'],
         'argument arrays preserve literal shell characters and repeatable identity values';
     is-deeply $ops.arguments('work'), ['work', '--/watch'], 'browser workers default to one pass';
+    is-deeply $ops.arguments('advance-sagas'), ['advance-sagas', '--/watch'],
+        'browser saga controllers default to one pass';
     for { $ops.arguments('missing') }, { $ops.arguments('web-monitor') },
         { $ops.arguments('command', :positionals(['Account'])) },
         { $ops.arguments('describe', :positionals(['Account', 'extra'])) },

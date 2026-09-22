@@ -577,8 +577,6 @@ use RedSourcing;
 use Restaurant;
 use DeliveryOrder;
 my $settings = red-sourcing-defaults(:file<examples/food-delivery/red-sourcing.rakuconf>);
-my $*RED-DEBUG = $settings.debug;
-.^create-table(:unless-exists) for StoredEvent, StoredCommand;
 ```
 
 The imports above need `-Iexamples/food-delivery` at compile time. The runtime

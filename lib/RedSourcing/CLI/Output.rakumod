@@ -146,6 +146,13 @@ sub format-metrics(%record --> Str) is export {
             }).Array)
 }
 
+sub format-saga-controller(%report --> Str) is export {
+    return 'No active sagas.' unless %report<sagas>;
+    "Advanced {%report<advanced>} sagas ({%report<failed>} failed).\n"
+        ~ format-table(<TYPE STREAM STATUS ERROR>,
+            %report<sagas>.map({ [.<type>, .<stream>, .<status>, .<error> // ''] }).Array)
+}
+
 sub format-work(%record --> Str) is export {
     my @items = %record<processed>.List;
     return 'No due commands.' unless @items;

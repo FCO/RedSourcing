@@ -3,7 +3,7 @@ unit module RedSourcing::Web::Presentation;
 
 sub operation-title(Str $name --> Str) is export {
     %(load => 'Load current state', snapshot => 'Save checkpoint', command => 'Send command',
-      advance => 'Advance saga', saga-status => 'View saga progress', resolve-action => 'Resolve action',
+      advance => 'Advance saga', advance-sagas => 'Advance active sagas', saga-status => 'View saga progress', resolve-action => 'Resolve action',
       describe => 'Describe entity', create => 'Create instance', run-command => 'Run stored command',
       list-events => 'View event history'){$name} // $name.subst('-', ' ', :g).tc
 }
