@@ -1,0 +1,179 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::Inspector;
+use RedSourcing::Config;
+use RedSourcing::Web;
+use RedSourcing::Web::Console;
+use RedSourcing::Web::Operations;
+use RedSourcing::Web::Presentation;
+use RedSourcing::Web::HTML;
+use Cro::HTTP::Router;
+use Cro::HTTP::Request;
+
+my $tmp = tempdir.IO;
+my $database = $tmp.add('context.db').Str;
+$tmp.add('ContextDomain.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module ContextDomain;
+    class Renamed does Event { has Str $.id; has Str $.name }
+    aggregate Account is export {
+        has Str $.id is entity-id;
+        has Str $.name = 'Original';
+        method APPLY(Renamed $e) { $!name = $e.name }
+        #| Change the account's display name.
+        method rename(Str :$name! where *.chars) is command { self.renamed(:$name); %(name => $!name) }
+    }
+    saga Workflow is export {
+        has Str $.id is entity-id;
+        method APPLY(Renamed $e where { .id eqv $!id }) { }
+        method REACT(Renamed $e where { .id eqv $!id }) { self.send }
+        method send { self.^service('context-provider', 'send', \(), :retry{:1max}, :!compensation) }
+    }
+    register-service 'context-provider', -> | { die Uncertain.new(:message('Confirm provider outcome')) };
+    MODULE
+my $settings = Settings.new(:driver<SQLite>, :$database, :includes([$tmp.Str]), :modules(['ContextDomain']));
+my $ops = RedSourcing::Web::Operations.new(:$settings, :directory($tmp));
+LEAVE $ops.close;
+sub finished(%job) {
+    my $deadline = now + 20;
+    loop {
+        my %current = $ops.job(%job<id>);
+        return %current if %current<state> ne 'running';
+        die 'Timed out' if now > $deadline;
+        await Promise.in(.025);
+    }
+}
+sub setup(Str $op, *@positionals, *%options) {
+    my %job = finished($ops.submit($op, :@positionals, :%options));
+    die %job<stderr> unless %job<state> eq 'succeeded';
+    %job
+}
+setup('init');
+my $id = 'a=1, b / São Paulo';
+setup('create', 'Account', ids => to-json({:$id}));
+setup('create', 'Account', ids => '{"id":"other"}');
+setup('create', 'Workflow', ids => to-json({:$id}));
+setup('create', 'Workflow', ids => '{"id":"other"}');
+red-defaults 'SQLite', :$database;
+my $inspector = RedSourcing::Inspector.new(:stored-only);
+my &report = -> { $inspector.report };
+my $source = Supplier.new;
+my $routes = route { include monitor => route {
+    include operations => console-routes($ops, :&report, :origins(['http://localhost:3001']),
+        :lookup(-> $view, $name { ($view eq 'command' ?? $inspector.commands(:id($name.UInt)) !! $inspector.events(:id($name.UInt))).head }));
+    include inspector-routes($inspector, :&report, :updates(-> { Supply.empty }), :operations-url('/monitor/operations'));
+} };
+my $responses = $routes.transformer($source.Supply).Channel;
+sub request(Str $target, Str :$method = 'GET', :%data = {}, Str :$origin = 'http://localhost:3001') {
+    my $req = Cro::HTTP::Request.new(:$method, :$target);
+    $req.append-header('Host', 'localhost:3001');
+    $req.append-header('Origin', $origin); $req.append-header('X-RedSourcing-Console', '1');
+    if %data {
+        my $body = to-json(%data).encode;
+        $req.append-header('Content-Type', 'application/json');
+        $req.set-body-byte-stream(supply { emit $body });
+    }
+    $source.emit($req); $responses.receive
+}
+sub body($r) { $r.body-byte-stream.list.map(*.decode).join }
+my $account = "ContextDomain::Account: id = $id";
+my $workflow = "ContextDomain::Workflow: id = $id";
+sub act(Str $name, Str $operation, *%fields) {
+    my $r = request('/monitor/operations/entity/submit', :method<POST>, :data(%(view => 'stream', :$name, :$operation, |%fields)));
+    die body($r) unless $r.status == 202;
+    my $html = body($r);
+    my $job-id = $html.match(/ 'id="execution-' (\d+) '"' /)[0].UInt;
+    my %job = finished($ops.job($job-id));
+    die %job<stderr> unless %job<state> eq 'succeeded';
+    body(request("/monitor/operations/job/$job-id"))
+}
+subtest 'detail actions stay on the selected record and live updates preserve forms' => {
+    my $html = body(request(detail-url('stream', $workflow)));
+    ok $html.contains('data-operation="advance"') && $html.contains('hx-post="/monitor/operations/entity/submit"'), 'advance is a direct scoped action';
+    ok $html.contains('name="name" value="' ~ escape-html($workflow) ~ '"'), 'full identity-bearing stream is encoded into the action';
+    nok $html.contains('/operations?entity='), 'no generic CLI shortcut remains';
+    ok $html.contains('id="entity-action"') && $html.contains('id="entity-result"'), 'detail has persistent input and result areas';
+    my $fragment = body(request(detail-url('stream', $workflow).subst('/detail?', '/detail-fragment?')));
+    nok $fragment.contains('id="entity-action"'), 'live read-only refresh does not replace input';
+    nok $fragment.contains('id="entity-result"'), 'live refresh preserves execution results';
+};
+subtest 'load and typed command fields use snapshot IDs even without prior commands' => {
+    my $loaded = act($account, 'load');
+    ok $loaded.contains('Original') && $loaded.contains('value-fields'), 'loaded state renders as HTML fields';
+    my $url = '/monitor/operations/entity?view=stream&name=' ~ query-value($account) ~ '&operation=command&fragment=1';
+    my $choices = body(request($url));
+    ok $choices.contains('rename') && $choices.contains('display name'), 'available methods and descriptions come from the entity definition';
+    my $form = body(request($url ~ '&method=rename'));
+    ok $form.contains('name="arg-name"') && $form.contains('required'), 'command has a named, required parameter input';
+    nok $form.contains('name="p-entity"') || $form.contains('name="o-ids"'), 'the entity and IDs are fixed';
+    ok $form.contains('where *.chars'), 'validation declaration is available';
+    my $result = act($account, 'command', method => 'rename', arg-name => '<script>Changed</script>');
+    ok $result.contains('&lt;script&gt;Changed&lt;/script&gt;'), 'domain response is escaped HTML';
+    nok $result.contains('<script>Changed'), 'return values cannot inject markup';
+    ok act($account, 'load').contains('Changed'), 'command changes this account';
+    ok act('ContextDomain::Account: id = other', 'load').contains('Original'), 'another account is unchanged';
+    ok act($account, 'snapshot').contains('value-fields'), 'checkpoint result is a structured record';
+};
+subtest 'saga progress, advancing and confirmed resolution use only this saga' => {
+    my $progress = act($workflow, 'saga-status');
+    ok $progress.contains('workflow-summary') && $progress.contains('Timeouts'), 'progress uses a dedicated workflow presentation';
+    my $advanced = act($workflow, 'advance');
+    ok $advanced.contains('blocked') && $advanced.contains('Confirm provider outcome'), 'advance reports the uncertain action on this saga';
+    my %state = $inspector.saga-status(:stream($workflow));
+    my $action = %state<actions>[0]<id>;
+    my $form = body(request('/monitor/operations/entity?view=stream&name=' ~ query-value($workflow) ~ '&operation=resolve-action&fragment=1'));
+    ok $form.contains(escape-html($action)) && $form.contains('Confirmed outcome'), 'resolution offers this saga’s unsettled action';
+    my $resolved = act($workflow, 'resolve-action', action-id => $action, outcome => 'success', result => '{"accepted":true}');
+    ok $resolved.contains('done') && $resolved.contains('Saved result'), 'confirmed outcome is shown in action history';
+    is $inspector.saga-status(:stream($workflow))<completed-actions>, 1, 'one action is reconciled';
+    is $inspector.saga-status(:stream('ContextDomain::Workflow: id = other'))<actions>.elems, 0, 'other saga remains untouched';
+};
+subtest 'context validation rejects retargeting and cross-origin actions' => {
+    for %(view => 'stream', name => $account, operation => 'load', o-ids => '{"id":"other"}'),
+        %(view => 'stream', name => 'missing', operation => 'snapshot'),
+        %(view => 'stream', name => $account, operation => 'advance'),
+        %(view => 'stream', name => $account, operation => 'command', method => 'missing') -> %data {
+        is request('/monitor/operations/entity/submit', :method<POST>, :%data).status, 400, 'invalid scoped action is rejected';
+    }
+    is request('/monitor/operations/entity/submit', :method<POST>, :origin<http://evil.invalid>,
+        :data(%(view => 'stream', name => $account, operation => 'snapshot'))).status, 403, 'mutations retain origin protection';
+    my $before = $ops.jobs.elems;
+    ok request('/monitor/operations/entity/submit').status >= 400, 'GET cannot execute a scoped action';
+    is $ops.jobs.elems, $before, 'GET starts no work';
+};
+subtest 'type creation and failure reconciliation use dedicated controls' => {
+    my $form = body(request('/monitor/operations/entity?view=type&name=ContextDomain%3A%3AAccount&operation=create&fragment=1'));
+    ok $form.contains('name="id-id"') && $form.contains('Initial values'), 'creation asks for the declared identity and initial values';
+    my $created = request('/monitor/operations/entity/submit', :method<POST>,
+        :data(%(view => 'type', name => 'ContextDomain::Account', operation => 'create', id-id => 'created-here', data => '{"name":"Scoped creation"}')));
+    is $created.status, 202, 'type form creates an instance';
+    my $html = body($created);
+    my $job-id = $html.match(/ 'id="execution-' (\d+) '"' /)[0].UInt;
+    is finished($ops.job($job-id))<state>, 'succeeded', 'creation persists successfully';
+    ok act('ContextDomain::Account: id = created-here', 'load').contains('Scoped creation'), 'created instance has the requested initial values';
+    setup('create', 'Workflow', ids => '{"id":"reject-here"}');
+    setup('command', 'Account', 'rename', ids => '{"id":"created-here"}', data => '{"name":"Next name"}');
+    # Use an independently targeted source fact for a second unresolved saga.
+    setup('create', 'Account', ids => '{"id":"reject-here"}');
+    setup('command', 'Account', 'rename', ids => '{"id":"reject-here"}', data => '{"name":"Reject receipt"}');
+    my $stream = 'ContextDomain::Workflow: id = reject-here';
+    act($stream, 'advance');
+    my $action = $inspector.saga-status(:$stream)<actions>[0]<id>;
+    my $result = act($stream, 'resolve-action', action-id => $action, outcome => 'failure', error => 'Provider confirmed rejection');
+    ok $result.contains('Provider confirmed rejection') && $result.contains('failed'), 'confirmed failure is presented in action history';
+    is $inspector.saga-status(:$stream)<failed-actions>.elems, 1, 'failure outcome is persisted';
+};
+subtest 'arbitrary structured output is readable, including empty and nested values' => {
+    for { status => 'Done', ok => True, missing => Any, list => [1, False],
+          nested => { amount => 2, lines => [{ sku => '<coffee>', quantity => 2 }] } }, [], {},
+        [{status => 'Pending', result => {name => 'Ada'}}], {data => {balance => 10}}, 'answer' -> $value {
+        my $html = result-view($value);
+        ok $html.chars, 'result produces HTML';
+        nok $html.contains('<coffee>'), 'nested values remain escaped';
+    }
+    ok value-view({level => 1}, :depth(13)).contains('omitted'), 'very deep values have a readable limit';
+};
+$source.done;
+done-testing;

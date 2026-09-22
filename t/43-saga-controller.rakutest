@@ -1,0 +1,130 @@
+use Test;
+use RedSourcing;
+
+class ControllerStarted does Event { has Int $.id }
+class ControllerNotSaga does Event { has Int $.id }
+my @effects;
+saga ControllerWorkflow {
+    has Int $.id is entity-id;
+    method APPLY(ControllerStarted $event where { .id eqv $!id }) { }
+    multi method REACT(ControllerStarted $event where { .id eqv $!id }) { self.deliver }
+    multi method REACT(StepSucceeded $event where { .step eq 'deliver' }) { self.^complete }
+    method deliver { self.^service('controller-test', 'deliver', \(:id($.id)), :!compensation) }
+}
+saga ControllerTimer {
+    has Int $.id is entity-id;
+    method APPLY(StepSucceeded $event) { }
+    method expire { self.^complete }
+}
+saga ControllerBroken {
+    has Int $.id is entity-id;
+    method APPLY(ControllerStarted $event where { .id eqv $!id }) { }
+    method REACT(ControllerStarted $event where { .id eqv $!id }) { die 'broken source handler' }
+}
+
+my $*RED-DB;
+my $*RED-FALLBACK = False;
+my $pg-database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $pg-admin;
+my @pg-schemas;
+LEAVE { if $pg-admin.defined { $pg-admin.execute("DROP SCHEMA $_ CASCADE") for @pg-schemas } }
+sub fresh {
+    if $pg-database.defined {
+        die 'Use a simple PostgreSQL test database name' unless $pg-database ~~ /^ <[\w\-]>+ $/;
+        require ::('DB::Pg'); require ::('RedSourcing::PgJSON');
+        $pg-admin //= ::('DB::Pg').new(:conninfo("dbname=$pg-database"));
+        my $schema = 'rs_controller_test_' ~ $*PID ~ '_' ~ @pg-schemas.elems;
+        $pg-admin.execute("CREATE SCHEMA $schema"); @pg-schemas.push($schema);
+        my $pool = ::('DB::Pg').new(:conninfo("dbname=$pg-database options='-csearch_path=$schema'"),
+            :converters(<DateTime UUID Geometric>));
+        $*RED-DB = (database 'Pg', :dbh($pool)) but ::('RedSourcing::PgJSON');
+    } else { $*RED-DB = database 'SQLite', :database(':memory:'); }
+    schema(StoredEvent, StoredCommand).create;
+    @effects = ();
+    register-service 'controller-test', -> $method, Capture $args, Str :$idempotency-key! {
+        @effects.push($args.hash<id>);
+        %(delivered => True)
+    };
+}
+sub start(Int $id) {
+    ControllerWorkflow.^with-ids(:$id).^create;
+    ControllerStarted.emit(:stream("start/$id"), :version(1), :$id);
+}
+
+subtest 'one exported call discovers and advances persisted sagas of every type' => {
+    fresh;
+    is-deeply advance-sagas, %(advanced => 0, failed => 0, sagas => []), 'empty store has no work';
+    start(1); start(2);
+    my %result = advance-sagas;
+    is %result<advanced>, 2, 'both instances are advanced without registering their proxies';
+    is %result<failed>, 0, 'no isolated failures';
+    is-deeply @effects.sort.Array, [1, 2], 'each saga receives only its matching source';
+    is-deeply %result<sagas>.map(*.<status>).Array, ['completed', 'completed'], 'report exposes each final status';
+    is-deeply advance-sagas, %(advanced => 0, failed => 0, sagas => []), 'latest completed controls exclude initial running snapshots';
+};
+subtest 'limits, checkpoints, future timers and compensation use the same controller clock' => {
+    fresh;
+    start(1);
+    my $now = DateTime.now;
+    is advance-sagas(:$now, :limit(0))<advanced>, 1, 'zero limit still consumes source events';
+    is @effects.elems, 0, 'zero limit does not execute an action';
+    my $pending = ControllerWorkflow.^with-ids(:id(1)).^load;
+    is $pending.^state<actions>.head<status>, 'pending', 'pending intent is committed';
+    $pending.^emit-snapshot;
+    is advance-sagas(:now($now.later(:seconds(1))))<advanced>, 1, 'a later checkpoint restores the same pending action';
+    is-deeply @effects.Array, [1], 'action executes once after checkpoint';
+
+    my $timer = ControllerTimer.^with-ids(:id(2)); $timer.^create;
+    {
+        my $*REDSOURCING-NOW = $now;
+        $timer.^load.set-timeout('finish', 10, expire => \());
+    }
+    my $undo = ControllerTimer.^with-ids(:id(3)); $undo.^create;
+    $undo.^load.^compensate;
+    my $finished = ControllerTimer.^with-ids(:id(4)); $finished.^create;
+    $finished.^load.^complete;
+    $finished.^load.^emit-snapshot;
+
+    my %tick = advance-sagas(:now($now.later(:seconds(5))));
+    is %tick<advanced>, 2, 'waiting and compensating instances are active, completed checkpoint is skipped';
+    is $timer.^load.^status, 'running', 'future timer is preserved';
+    is $undo.^load.^status, 'compensated', 'compensation is driven to completion';
+    is advance-sagas(:now($now.later(:seconds(11))))<advanced>, 1, 'only the remaining active timer is advanced';
+    is $timer.^load.^status, 'completed', 'due timeout uses the supplied clock';
+};
+subtest 'a failed source handler is reported without preventing other sagas from progressing' => {
+    fresh;
+    ControllerBroken.^with-ids(:id(9)).^create;
+    ControllerStarted.emit(:stream<bad>, :version(1), :id(9));
+    start(1);
+    my %result = advance-sagas;
+    is %result<failed>, 1, 'failed instance is counted';
+    is %result<advanced>, 1, 'later healthy instance still runs';
+    is %result<sagas>[0]<error>, 'broken source handler', 'error is associated with its stream';
+    is %result<sagas>[0]<stream>, ControllerBroken.^with-ids(:id(9)).^stream-name, 'failed identity is retained';
+    is-deeply @effects.Array, [1], 'healthy effect is executed';
+    is ControllerBroken.^with-ids(:id(9)).^load.^state<actions>.elems, 0, 'failed source is not acknowledged';
+};
+subtest 'unavailable code and invalid persisted types are isolated before invoking them' => {
+    fresh;
+    for ControllerNotSaga.^name, 'MissingControllerSagaModuleForTest' -> $name {
+        StoredEvent.^create(:class($name), :stream("$name: id = 9"), :version(1),
+            :mro('|Entity|RedSourcing::Saga::Runtime|'), :data{:saga-state{:status<running>}});
+    }
+    start(1);
+    my %result = advance-sagas;
+    is %result<failed>, 2, 'both invalid instances are reported';
+    is %result<advanced>, 1, 'healthy instance still advances';
+    like %result<sagas>[0]<error>, /'is not a saga'/, 'ordinary event type is never reconstructed as a workflow';
+    ok %result<sagas>[1]<error>.chars, 'unavailable module has a useful failure message';
+    is-deeply @effects.Array, [1], 'only the healthy workflow executes an effect';
+};
+
+subtest 'discovery obeys the saga phase restrictions even when the store is empty' => {
+    fresh;
+    for <APPLY REACT> -> $phase {
+        my $*REDSOURCING-PHASE = $phase;
+        dies-ok { advance-sagas }, "controller cannot execute from $phase";
+    }
+};
+done-testing;

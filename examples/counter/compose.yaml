@@ -1,0 +1,58 @@
+name: redsourcing-counter
+# Installed framework changes rebuild the shared image; mounted example
+# changes restart long-running processes without re-running one-shot demos.
+x-runtime: &runtime
+  image: redsourcing:local
+  build:
+    context: ../..
+  develop:
+    watch:
+      - action: restart
+        path: .
+        ignore:
+          - "**/.precomp/"
+          - ".precomp/"
+          - "*.db"
+          - "*.db-*"
+          - "compose.yaml"
+          - "README.md"
+      - action: rebuild
+        path: ../../lib
+        ignore: ["**/.precomp/", ".precomp/"]
+      - action: rebuild
+        path: ../../resources
+      - action: rebuild
+        path: ../../bin
+      - action: rebuild
+        path: ../../META6.json
+      - action: rebuild
+        path: ../../Dockerfile
+      - action: rebuild
+        path: ../../.dockerignore
+services:
+  demo:
+    image: redsourcing:local
+    build:
+      context: ../..
+    entrypoint: ["red-sourcing-demo"]
+    command: ["--database=/data/events.db"]
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/data
+    init: true
+  monitor:
+    <<: *runtime
+    working_dir: /app
+    command: ["--database=/data/events.db", "web-monitor", "--host=0.0.0.0", "--port=3001"]
+    depends_on:
+      demo:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${MONITOR_PORT:-3001}:3001"
+    volumes:
+      - .:/app
+      - data:/data
+    init: true
+volumes:
+  data:

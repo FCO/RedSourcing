@@ -1,0 +1,640 @@
+use Test;
+use RedSourcing;
+use JSON::Fast;
+
+class SagaStarted does Event { has Int $.id; }
+class SagaDelivered does Event { has Int $.id; }
+class SagaReserved does Event { has Int $.id; has Str $.reservation-id; }
+my $*RED-DB;
+my %reserve-attempts;
+my %release-attempts;
+my @effects;
+my $fail-reserve = 0;
+my $reserve-conflicts = 0;
+my $fail-release = 0;
+my $compensator-calls = 0;
+my $defaults = 0;
+my $default-calls = 0;
+my $guard-row;
+my @adapter-keys;
+my &payment = -> | { %(payment-id => 'p1', extra => 7) };
+
+aggregate SagaInventory {
+    has Int $.id is entity-id;
+    has Int $.reserved = 0;
+    method APPLY(SagaReserved $event) { $!reserved++ }
+    method reserve(Int :$order-id!) is command {
+        die 'inventory temporarily unavailable' if ++%reserve-attempts{$.id} <= $fail-reserve;
+        self.saga-reserved(:reservation-id("r$order-id"));
+        if $reserve-conflicts-- > 0 {
+            SagaReserved.emit(:stream(self.^stream), :version(self.^version),
+                :id($.id), :reservation-id<collision>);
+        }
+        @effects.push('reserve');
+        %(reservation-id => "r$order-id", extra => 42)
+    }
+    method release(Str :$reservation-id!) is command {
+        die 'release temporarily unavailable' if ++%release-attempts{$.id} <= $fail-release;
+        @effects.push("release:$reservation-id");
+        %(released => True)
+    }
+    method scalar is command { 42 }
+    method defaulted(Int :selection(:$value) = ++$defaults) is command {
+        die 'try again' if ++$default-calls == 1;
+        $value
+    }
+    method even(:b(:$a) where { $_ %% 2 } = 8) is command { $a }
+
+}
+
+saga CheckoutSaga {
+    has Int $.id is entity-id;
+    has Int $.observed = 0;
+    has Bool $.delivered = False;
+    has Bool $.paid = False;
+    has Hash $.details = {};
+
+    multi method APPLY(SagaStarted $e where { .id eqv $!id }) { $!observed++ }
+    multi method APPLY(SagaDelivered $e where { .id eqv $!id }) { $!delivered = True }
+    multi method APPLY(StepSucceeded $e where { .step eq 'charge-payment' }) { $!paid = True }
+
+    multi method REACT(SagaStarted $e where { .id eqv $!id }) {
+        self.set-timeout('delivery-deadline', 900, expire => \(:reason('Delivery deadline exceeded')));
+        self.reserve-stock(:order-id($e.id));
+    }
+    multi method REACT(StepSucceeded $e where { .step eq 'reserve-stock' }) { self.charge-payment }
+    multi method REACT(StepSucceeded $e where { .step eq 'charge-payment' }) { self.finish }
+    multi method REACT(SagaDelivered $e where { .id eqv $!id }) { self.finish }
+    multi method REACT(StepFailed $e) { self.^compensate(:reason($e.error)) }
+
+    method reserve-stock(Int :$order-id!) {
+        self.^command(SagaInventory, 'reserve', \(:$order-id), :retry{:3max,:2delay})
+    }
+    method compensate-reserve-stock(Str :$reservation-id!, |) {
+        $compensator-calls++;
+        self.^command(SagaInventory, 'release', \(:$reservation-id), :retry{:3max,:10delay})
+    }
+    method charge-payment {
+        self.^service('payments', 'charge', \($.id, :amount(12.50)),
+            :retry{:3max-attempts,:backoff(Exponential),:1init-delay,:4max-delay})
+    }
+    method compensate-charge-payment(Str :$payment-id!, |) {
+        $compensator-calls++;
+        self.^service('payments', 'refund', \(:$payment-id), :retry{:3max,:2delay})
+    }
+    method finish { self.^complete if $!paid && $!delivered }
+    method expire(Str :$reason!) is command { self.^compensate(:$reason) }
+    method scalar { self.^command(SagaInventory, 'scalar', \(), :!compensation) }
+}
+
+saga BadApplySaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { SagaInventory.^with-ids(:id(1)).reserve(:order-id(1)) }
+}
+saga BadReactSaga {
+    has Int $.id is entity-id;
+    has Int $.amount = 0;
+    has Hash $.details = {};
+    method APPLY(SagaStarted $e) { }
+    method REACT(SagaStarted $e) {
+        self.^service('payments', 'charge', \());
+        $!details<nested> = { changed => True };
+        $!amount++;
+    }
+}
+saga DirectReactSaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { }
+    method REACT(SagaStarted $e) { SagaInventory.^with-ids(:id(1)).reserve(:order-id(1)) }
+}
+saga ReactionOnlySaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaDelivered $e where { .id eqv $!id }) { }
+    method REACT(SagaStarted $e where { .id eqv $!id }) {
+        self.^command(SagaInventory, 'scalar', \());
+    }
+}
+saga ValidationSaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { }
+    method operation { self.^command(SagaInventory, 'scalar', \(), :compensation<undo>) }
+    method undo(Str :$reservation-id!, |) { self.^command(SagaInventory, 'release', \(:$reservation-id)) }
+    method no-operation { }
+    method invalid-undo { self.^service('payments', 'charge', \(), :compensation<no-operation>) }
+}
+
+class SagaRouted does Event { has Int $.id; has Int $.warehouse-id; }
+my @warehouses;
+aggregate SagaWarehouse {
+    has Int $.warehouse-id is entity-id;
+    method APPLY(SagaStarted $e) { }
+    method reserve is command { %(reservation-id => 'r', warehouse-id => $.warehouse-id) }
+    method release(Str :$reservation-id!, |) is command {
+        @warehouses.push($.warehouse-id); %(released => True)
+    }
+}
+saga RoutingSaga {
+    has Int $.id is entity-id;
+    has Int $.warehouse-id = 1;
+    method APPLY(SagaRouted $e where { .id eqv $!id }) { $!warehouse-id = $e.warehouse-id }
+    method reserve { self.^command(SagaWarehouse, 'reserve', \()) }
+    method compensate-reserve(:$reservation-id!, Int :$warehouse-id! where { $_ == self.warehouse-id }, |) {
+        self.^command(SagaWarehouse, 'release', \(:$reservation-id))
+    }
+}
+saga BadRunSaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { $guard-row.run }
+}
+saga BadEventSaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { SagaStarted.new(:id(2)).emit(:stream<wrong>,:version(1)) }
+}
+saga BadHelperSaga {
+    has Int $.id is entity-id;
+    method APPLY(SagaStarted $e) { self.^service('payments', 'charge', \()) }
+}
+saga InvalidBodySaga {
+    has Int $.id is entity-id;
+    has Int $.count = 0;
+    method APPLY(SagaDelivered $e) { }
+    method mutate { $!count++ }
+    method empty-undo(|) { }
+    method mutating-undo(|) { $!count++; self.^service('payments','refund',\()) }
+    method forward(:$undo = 'empty-undo') { self.^service('payments','charge',\(),:compensation($undo)) }
+}
+
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    %reserve-attempts = (); %release-attempts = (); @effects = (); @adapter-keys = ();
+    $fail-reserve = 0; $reserve-conflicts = 0; $fail-release = 0; $compensator-calls = 0;
+    $defaults = 0; $default-calls = 0; @warehouses = ();
+    &payment = sub ($method, Capture $args, :$idempotency-key!) {
+        @adapter-keys.push($idempotency-key);
+        @effects.push($method);
+        $method eq 'charge' ?? %(payment-id => 'p1', extra => 7) !! %(refunded => True)
+    };
+    register-service('payments', -> |c { payment(|c) });
+    SagaInventory.^with-ids(:id(1)).^create;
+}
+sub proxy($type = CheckoutSaga, $id = 1) { $type.^with-ids(:$id) }
+sub started($id = 1, $version = 1) { SagaStarted.new(:$id).emit(:stream<orders>, :$version) }
+sub advance($p, $now = DateTime.now.later(:seconds(1)), :$limit = 100) { $p.^advance(:$now, :$limit) }
+
+subtest 'successful operations record compensators without executing them; replay is pure' => {
+    fresh;
+    my $p = proxy(); $p.^create;
+    started; started(2, 2);
+    my $s = advance($p);
+    is $s.observed, 1, 'identity predicates exclude another order';
+    ok $s.paid, 'the control success APPLY updates domain state';
+    is $s.^state<compensations>.elems, 2, 'both successful operations register compensation';
+    is $compensator-calls, 0, 'no compensator body has executed';
+    is-deeply @effects, ['reserve', 'charge'], 'only forward effects have happened';
+    is @adapter-keys.elems, 1, 'the adapter receives a stable action key';
+    is $s.^current-id, StoredEvent.^all.grep(*.class eq 'SagaStarted').head.id,
+        'the source cursor is independent from control rows';
+    my $snapshot = $s.^emit-snapshot;
+    ok $snapshot.data<saga-state><compensations>, 'snapshots contain the compensation stack';
+    my $again = $p.^load;
+    is $again.^state<compensations>.elems, 2, 'reload restores both entries';
+    is-deeply @effects, ['reserve', 'charge'], 'reload has no external effects';
+    advance($p);
+    is-deeply @effects, ['reserve', 'charge'], 'advancing again does not redeliver source facts';
+    $again.^compensate(:reason<cancelled>);
+    is $compensator-calls, 0, 'requesting compensation only records the transition';
+    my $done = advance($p);
+    is $done.^status, 'compensated', 'the compensation sequence finishes';
+    is-deeply @effects, ['reserve', 'charge', 'refund', 'release:r1'], 'compensations execute in reverse order';
+    is $compensator-calls, 2, 'each body executes only on compensation';
+    is $done.^state<compensations>.elems, 0, 'entries pop only after successful effects';
+    $done.^compensate;
+    advance($p);
+    is $compensator-calls, 2, 'compensating an already compensated saga is harmless';
+};
+
+subtest 'completion discards compensation and cancels the deadline' => {
+    fresh; my $p = proxy(); started;
+    advance($p);
+    SagaDelivered.new(:id(1)).emit(:stream<deliveries>, :version(1));
+    my $s = advance($p);
+    is $s.^status, 'completed', 'payment and delivery complete the saga';
+    is $s.^state<compensations>.elems, 0, 'completion drops the undo stack';
+    is $s.^state<timers>.elems, 0, 'completion cancels timers';
+    $s.^compensate;
+    is $s.^status, 'completed', 'a completed workflow is not undone';
+    dies-ok { $s.scalar }, 'completed sagas reject new forward effects';
+    dies-ok { $s.set-timeout('late', 1, expire => \(:reason<late>)) }, 'completed sagas reject new timers';
+};
+
+subtest 'optimistic contention does not consume saga retries or fail its action' => {
+    fresh; $reserve-conflicts = 1; started;
+    my $s = advance(proxy());
+    my %action = $s.^state<actions>.head;
+    is %action<status>, 'done', 'the action succeeds after the command retries internally';
+    is %action<attempts>, 1, 'two command invocations consume only one saga attempt';
+    is StoredCommand.^all.elems, 1, 'the saga does not submit a replacement command';
+    is StoredCommand.^all.head.tries, 2, 'the same child records both handler invocations';
+    is SagaInventory.^with-ids(:id(1)).^load.reserved, 1, 'rollback removes the provisional reservation';
+    ok $s.paid, 'the workflow continues normally after the conflict';
+
+    fresh; $reserve-conflicts = 5; started;
+    my $p = proxy();
+    $s = advance($p);
+    %action = $s.^state<actions>.head;
+    my $row-id = %action<row-id>;
+    is %action<status>, 'running', 'persistent contention retains the current action';
+    is %action<attempts>, 1, 'the business retry budget is untouched';
+    is StoredCommand.^all.head.state.Str, 'Pending', 'the claimed child remains resumable';
+    is StoredCommand.^all.head.tries, 5, 'the immediate attempts are observable';
+    nok %action<error>.defined, 'contention does not save an action failure';
+    is $s.^state<compensations>.elems, 0, 'no compensation is scheduled for a conflict';
+    $s = advance($p);
+    %action = $s.^state<actions>.head;
+    is %action<status>, 'done', 'another advance resumes the action after contention ends';
+    is %action<row-id>, $row-id, 'recovery uses the same persisted child command';
+    is %action<attempts>, 1, 'resuming does not consume another saga attempt';
+    is StoredCommand.^all.elems, 1, 'recovery has no failed or duplicate command records';
+    is StoredCommand.^all.head.tries, 6, 'the successful resumed invocation is counted';
+};
+
+subtest 'retry policy belongs to the saga; failed command rows stay terminal' => {
+    fresh; $fail-reserve = 2; started;
+    my $p = proxy(); my $now = DateTime.now.later(:seconds(1));
+    my $s = advance($p, $now);
+    is $s.^state<actions>.head<status>, 'retry', 'the saga schedules another attempt';
+    is StoredCommand.^all.head.state.Str, 'Failed', 'the failed child command is terminal';
+    advance($p, $now.later(:seconds(1)));
+    is %reserve-attempts{1}, 1, 'the next attempt waits for its deadline';
+    advance($p, $now.later(:seconds(2)));
+    is %reserve-attempts{1}, 2, 'a due attempt receives a new command row';
+    $s = advance($p, $now.later(:seconds(4)));
+    is %reserve-attempts{1}, 3, 'max includes the initial attempt';
+    ok $s.paid, 'success resumes the flow';
+    is-deeply StoredCommand.^all.sort(*.id).Seq.map(*.state.Str).Array, ['Failed','Failed','Done'],
+        'command history keeps each outcome separately';
+};
+
+subtest 'exhaustion emits StepFailed and compensates only earlier successes' => {
+    fresh; started;
+    my $calls = 0;
+    &payment = -> | { ++$calls; Retryable.new(:message<declined>).throw };
+    my $p = proxy(); my $now = DateTime.now.later(:seconds(1));
+    advance($p, $now);
+    advance($p, $now.later(:seconds(1)));
+    my $s = advance($p, $now.later(:seconds(3)));
+    is $calls, 3, 'exponential backoff gives three attempts at 0, 1 and 3 seconds';
+    is $s.^status, 'compensated', 'definitive failure triggers the user failure reaction';
+    is-deeply @effects, ['reserve', 'release:r1'], 'a rejected payment has no refund';
+    is $compensator-calls, 1, 'only a confirmed success is undone';
+    is StoredEvent.^all.grep(*.class eq 'RedSourcing::Saga::StepFailed').elems, 1,
+        'exhaustion persists a failure event';
+};
+
+subtest 'service retries share an idempotency key and preserve Captures' => {
+    fresh;
+    my @seen; my $calls = 0;
+    &payment = sub ($method, Capture $args, :$idempotency-key!) {
+        @seen.push([$method, $args.list.Array, $args.hash.Hash, $idempotency-key]);
+        die 'connection interrupted' if ++$calls == 1;
+        %(payment-id => 'p2')
+    };
+    started; my $p = proxy(); my $now = DateTime.now.later(:seconds(1));
+    advance($p, $now);
+    my $s = advance($p, $now.later(:seconds(1)));
+    ok $s.paid, 'idempotent retry succeeds';
+    is @seen[0][3], @seen[1][3], 'both attempts have the same logical operation key';
+    is-deeply @seen[0][1], [1], 'positional arguments survive JSON storage';
+    is @seen[0][2]<amount>, 12.50, 'named arguments survive JSON storage';
+};
+
+subtest 'unknown outcomes block compensation until explicitly reconciled' => {
+    fresh; started;
+    &payment = -> | { Uncertain.new(:message<unknown>).throw };
+    my $p = proxy(); my $now = DateTime.now.later(:seconds(1));
+    advance($p, $now); advance($p, $now.later(:seconds(1)));
+    my $s = advance($p, $now.later(:seconds(3)));
+    is $s.^state<actions>.tail<status>, 'blocked', 'an exhausted unknown outcome is blocked';
+    $s.^compensate(:reason<cancelled>);
+    advance($p, $now.later(:seconds(4)));
+    is $compensator-calls, 0, 'compensation waits for the unresolved effect';
+    dies-ok { $s.^resolve-action('missing', :result{}) }, 'resolution requires a known action';
+    dies-ok { $s.^resolve-action($s.^state<actions>.tail<id>) }, 'resolution requires an outcome';
+    $s.^resolve-action($s.^state<actions>.tail<id>, :result{payment-id => 'late-payment'});
+    &payment = -> $method, | { @effects.push($method); %(refunded => True) };
+    $s = advance($p, $now.later(:seconds(5)));
+    is $s.^status, 'compensated', 'reconciled success is also compensated';
+    is-deeply @effects, ['reserve', 'refund', 'release:r1'], 'late payment is refunded before stock release';
+};
+
+subtest 'compensation retries keep the stack entry until acknowledged' => {
+    fresh; started; my $p = proxy(); advance($p);
+    $fail-release = 1;
+    my $s = $p.^load; $s.^compensate;
+    my $now = DateTime.now.later(:seconds(1));
+    $s = advance($p, $now);
+    is $s.^state<compensations>.elems, 1, 'failed release keeps its entry';
+    is $s.^state<actions>.tail<compensation>, '', 'compensators cannot recursively register inverses';
+    $s.^emit-snapshot;
+    $s = advance($p, $now.later(:seconds(10)));
+    is $s.^status, 'compensated', 'release retry finishes the stack';
+    is $compensator-calls, 2, 'retry does not rerun the compensator body';
+};
+
+subtest 'named timeout replacement, cancellation and terminal firing survive reload' => {
+    fresh; my $p = proxy(); started; my $now = DateTime.now.later(:seconds(1));
+    my $s = advance($p, $now);
+    $s.set-timeout('delivery-deadline', 10, expire => \(:reason<replaced>));
+    $s.set-timeout('cancelled', 0, expire => \(:reason<wrong>));
+    $s.cancel-timeout('cancelled');
+    $s.^emit-snapshot;
+    is $p.^load.^state<timers>.elems, 1, 'only the replacement survives the snapshot';
+    $s.set-timeout('z-followup', 0, expire => \(:reason<wrong>));
+    my $future = DateTime.now.later(:seconds(11));
+    $s = $p.^check-timeouts(:now($future));
+    is $s.^status, 'compensated', 'the timeout invokes its own saga method';
+    is $s.^state<reason>, 'replaced', 'the Capture passes its named reason';
+    is StoredEvent.^all.grep(*.class eq 'RedSourcing::Saga::TimeoutTriggered').elems, 1,
+        'one control event acknowledges the timeout';
+    $p.^check-timeouts(:now($future));
+    is $compensator-calls, 2, 'checking again does not fire twice';
+};
+
+subtest 'APPLY forbids effects and REACT rejects domain mutation before releasing intents' => {
+    for BadApplySaga, BadReactSaga, DirectReactSaga -> $type {
+        fresh; started;
+        my $p = proxy($type);
+        my $rows = StoredEvent.^all.elems;
+        dies-ok { advance($p) }, "{$type.^name} rejects its invalid handler";
+        is StoredCommand.^all.elems, 0, 'no child command was submitted';
+        is-deeply @effects, [], 'no adapter was invoked';
+        is StoredEvent.^all.elems, $rows, 'no invalid reaction was acknowledged';
+        is $p.^load.^current-id, 0, 'the source cursor stays unchanged';
+    }
+    my $bad = proxy(BadReactSaga).^load;
+    is-deeply $bad.details, {}, 'nested domain mutation was discarded';
+    is $bad.amount, 0, 'scalar domain mutation was discarded';
+};
+
+subtest 'REACT signatures also select events and direct calls plan operations' => {
+    fresh; started;
+    my $p = proxy(ReactionOnlySaga);
+    my $s = advance($p);
+    is $s.^state<actions>.head<result>, 42, 'events selected only by REACT are consumed';
+    my $checkout = proxy().^load;
+    my $id = $checkout.scalar;
+    is StoredCommand.^all.elems, 1, 'a direct saga method plans without running the child';
+    my $actions = $checkout.^pending-actions;
+    $actions.tail<method> = 'corrupted';
+    is $checkout.^state<actions>.tail<method>, 'scalar', 'inspection returns an isolated copy';
+    $s = advance(proxy());
+    is $s.^state<actions>.head<id>, $id, 'the plan has a durable action ID';
+    is $s.^state<actions>.head<result>, 42, 'uncompensated operations may return scalar results';
+};
+
+subtest 'completed child commands are reused after a crash before saga acknowledgement' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    $s.reserve-stock(:order-id(1));
+    {
+        $*RED-DB.prepare(q:to/SQL/).execute;
+            CREATE TRIGGER reject_saga_ack BEFORE INSERT ON red_sourcing_event
+            WHEN NEW.class = 'RedSourcing::Saga::StepSucceeded'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated crash before acknowledgement');
+            END
+            SQL
+        LEAVE $*RED-DB.prepare('DROP TRIGGER reject_saga_ack').execute;
+        dies-ok { advance($p) }, 'the controller crashes after the command commits';
+    }
+    is StoredCommand.^all.head.state.Str, 'Done', 'the child already committed';
+    is $p.^load.^state<actions>.head<status>, 'running', 'the durable claim is recoverable';
+    my $done = advance($p);
+    is %reserve-attempts{1}, 1, 'recovery reuses the child result';
+    is $done.^state<actions>.head<status>, 'done', 'recovery acknowledges the success';
+};
+
+subtest 'invalid compensation binding blocks a confirmed success without running the inverse' => {
+    fresh;
+    my $p = proxy(ValidationSaga); my $s = $p.^load;
+    $s.operation;
+    $s = advance($p);
+    is $s.^state<actions>.head<status>, 'blocked', 'a scalar cannot bind to the named compensation';
+    is $s.^state<actions>.head<result>, 42, 'the confirmed result is preserved';
+    is $s.^state<compensations>.elems, 0, 'no invalid invocation is pushed';
+    dies-ok { $s.^resolve-action($s.^state<actions>.head<id>, :result{}, :error<bad>) },
+        'resolution cannot provide conflicting outcomes';
+};
+
+subtest 'policy, target and timeout validation fail before persisting an intent' => {
+    fresh; my $s = proxy().^load;
+    for {:0max}, {:delay(-1)}, {:wat(1)}, {:backoff('linear')} -> %policy {
+        dies-ok { $s.^command(SagaInventory, 'scalar', \(), :retry(%policy)) }, 'invalid retry policy';
+    }
+    dies-ok { $s.^command(SagaInventory, 'missing', \()) }, 'only registered commands are accepted';
+    dies-ok { $s.^command(SagaInventory, 'scalar', \(1)) }, 'aggregate arguments must be named';
+    dies-ok { $s.^command(CheckoutSaga, 'expire', \(:reason<x>)) }, 'sagas are not aggregate targets';
+    dies-ok { $s.^command(SagaInventory, 'scalar', \(), :compensation<missing>) }, 'explicit compensators must exist';
+    dies-ok { $s.^service('missing', 'charge', \()) }, 'services must be registered';
+    dies-ok { $s.set-timeout('bad', -1, expire => \()) }, 'negative timeout';
+    dies-ok { $s.set-timeout('bad', 1) }, 'missing timeout method';
+    dies-ok { $s.set-timeout('bad', 1, missing => \()) }, 'unknown timeout method';
+    dies-ok { $s.set-timeout('bad', 1, expire => 1) }, 'timeout args must be a Capture';
+    class NoId { }
+    dies-ok { SagaInventory.^from(NoId.new) }, 'from reports missing target IDs';
+    is StoredCommand.^all.elems, 0, 'validation submits no commands';
+    is $s.^state<actions>.elems, 0, 'validation leaves no partial intents';
+    dies-ok { SagaInventory.^with-ids(:id(1)).^advance }, 'advance rejects non-saga proxies';
+};
+
+subtest 'normalized aggregate arguments freeze aliases and defaults across retries' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    my $id = $s.^command(SagaInventory, 'defaulted', \(), :retry{:2max,:1delay});
+    is $defaults, 1, 'defaults are evaluated when planning';
+    is $s.^state<actions>.head<args><named><value>, 1, 'the canonical default is persisted';
+    my $now = DateTime.now.later(:seconds(1));
+    advance($p, $now);
+    $s = advance($p, $now.later(:seconds(1)));
+    is $s.^state<actions>.head<result>, 1, 'a retry retains the first default value';
+    is $defaults, 1, 'execution does not reevaluate a normalized default';
+    $s.^command(SagaInventory.^with-ids(:id(1)), 'defaulted', \(:selection(8)));
+    $s = advance($p, $now.later(:seconds(2)));
+    is $s.^state<actions>.tail<result>, 8, 'an explicit proxy and a named alias are accepted';
+    my $count = $s.^state<actions>.elems;
+    dies-ok { $s.^command(SagaInventory,'even',\(:a(3))) }, 'native constraints are checked before persisting';
+    is $s.^state<actions>.elems, $count, 'invalid arguments create no action';
+};
+
+subtest 'compensation target inference uses the original context, including non-identity attributes' => {
+    fresh; SagaWarehouse.^with-ids(:warehouse-id(1)).^create;
+    SagaWarehouse.^with-ids(:warehouse-id(2)).^create;
+    my $p = proxy(RoutingSaga); my $s = $p.^load;
+    $s.reserve;
+    SagaRouted.new(:id(1), :warehouse-id(2)).emit(:stream<routing>,:version(1));
+    $s = advance($p);
+    is $s.warehouse-id, 2, 'a later event changes the domain routing value';
+    $s.^compensate; $s = advance($p);
+    is-deeply @warehouses, [1], 'the inverse targets the original warehouse';
+    is $s.warehouse-id, 2, 'compensation does not revert current domain attributes';
+};
+
+subtest 'APPLY also forbids execution, event emission and saga helpers' => {
+    for BadRunSaga, BadEventSaga, BadHelperSaga -> $type {
+        fresh;
+        $guard-row = SagaInventory.^with-ids(:id(1)).scalar(:!sync);
+        started;
+        my $before = StoredEvent.^all.elems;
+        dies-ok { advance(proxy($type)) }, "{$type.^name} rejects the effect";
+        is $guard-row.state.Str, 'Pending', 'the existing command was not run';
+        is StoredEvent.^all.elems, $before, 'no event or control was appended';
+    }
+};
+
+subtest 'permanent service failures skip retries and unclassified failures block at exhaustion' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    &payment = -> | { Permanent.new(:message<rejected>).throw };
+    $s.charge-payment;
+    $s = advance($p);
+    is $s.^state<actions>.head<attempts>, 1, 'permanent rejection is not retried';
+    is $s.^status, 'compensated', 'the failure reaction terminates an empty compensation stack';
+    fresh; $s = proxy().^load;
+    &payment = -> | { die 'unknown provider exception' };
+    $s.^service('payments','charge',\());
+    $s = advance(proxy());
+    is $s.^state<actions>.head<status>, 'blocked', 'an unclassified exhausted service error is uncertain';
+    $s.^resolve-action($s.^state<actions>.head<id>, :error('Confirmed no charge'));
+    is $s.^status, 'compensating', 'confirmed failure triggers the failure reaction';
+    dies-ok { $s.^resolve-action($s.^state<actions>.head<id>, :result{}) }, 'terminal outcomes cannot be resolved again';
+};
+
+subtest 'cancelling an uncertain scheduled retry waits for reconciliation' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    &payment = -> | { Uncertain.new(:message<unknown>).throw };
+    $s.charge-payment; $s = advance($p);
+    is $s.^state<actions>.head<status>, 'retry', 'an uncertain result can be retried idempotently';
+    $s.^compensate;
+    is $s.^state<actions>.head<status>, 'blocked', 'cancellation does not forget a possibly completed effect';
+    is advance($p).^status, 'compensating', 'the saga waits instead of reporting compensation complete';
+    $s.^resolve-action($s.^state<actions>.head<id>, :error('Confirmed absent'));
+    is advance($p).^status, 'compensated', 'reconciled failure permits termination';
+};
+
+subtest 'a running forward operation is settled without scheduling further forward work' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    $s.reserve-stock(:order-id(1));
+    {
+        $*RED-DB.prepare(q:to/SQL/).execute;
+            CREATE TRIGGER reject_late_ack BEFORE INSERT ON red_sourcing_event
+            WHEN NEW.class = 'RedSourcing::Saga::StepSucceeded'
+            BEGIN SELECT RAISE(ABORT, 'ack unavailable'); END
+            SQL
+        LEAVE $*RED-DB.prepare('DROP TRIGGER reject_late_ack').execute;
+        dies-ok { advance($p) }, 'the forward result has not yet been acknowledged';
+    }
+    $s = $p.^load; $s.^compensate;
+    $s = advance($p);
+    is $s.^status, 'compensated', 'late success is registered and undone';
+    is-deeply @effects, ['reserve', 'release:r1'], 'payment is not started during cancellation';
+};
+
+subtest 'service recovery repeats the key after a missing acknowledgement' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    $s.charge-payment;
+    my %memo; my @keys; my $charges = 0;
+    &payment = sub ($method, Capture $args, :$idempotency-key!) {
+        @keys.push($idempotency-key);
+        return %memo{$idempotency-key} if %memo{$idempotency-key}:exists;
+        $charges++; %memo{$idempotency-key} = %(payment-id => 'recoverable');
+    };
+    {
+        $*RED-DB.prepare(q:to/SQL/).execute;
+            CREATE TRIGGER reject_service_ack BEFORE INSERT ON red_sourcing_event
+            WHEN NEW.class = 'RedSourcing::Saga::StepSucceeded'
+            BEGIN SELECT RAISE(ABORT, 'ack unavailable'); END
+            SQL
+        LEAVE $*RED-DB.prepare('DROP TRIGGER reject_service_ack').execute;
+        dies-ok { advance($p) }, 'the provider completes before acknowledgement fails';
+    }
+    $s = advance($p);
+    is $charges, 1, 'the adapter deduplicates the logical effect';
+    is @keys.elems, 2, 'recovery invokes the provider again';
+    is @keys[0], @keys[1], 'recovery passes the original operation key';
+    ok $s.paid, 'recovered success updates domain state';
+};
+
+subtest 'invalid timer and compensation bodies leave their durable work unacknowledged' => {
+    fresh; my $p = proxy(InvalidBodySaga); my $s = $p.^load;
+    dies-ok { $s.mutate }, 'ordinary saga methods also reject domain mutation';
+    $s.set-timeout('bad', 0, mutate => \());
+    dies-ok { advance($p) }, 'a mutating timeout body is rejected';
+    is $p.^load.^state<timers>.elems, 1, 'the timer remains pending';
+    $s.cancel-timeout('bad');
+    $s.forward; $s = advance($p); $s.^compensate;
+    dies-ok { advance($p) }, 'an inverse must schedule one operation';
+    is $p.^load.^state<compensations>.elems, 1, 'the invalid inverse keeps its stack entry';
+    fresh; $p = proxy(InvalidBodySaga); $s = $p.^load;
+    $s.forward(:undo<mutating-undo>); $s = advance($p); $s.^compensate;
+    dies-ok { advance($p) }, 'a compensator must not change domain state';
+    is $p.^load.count, 0, 'the mutation is discarded';
+};
+
+subtest 'completion, limits and optimistic conflicts preserve pending work' => {
+    fresh; my $p = proxy(); my $s = $p.^load;
+    $s.scalar;
+    dies-ok { $s.^complete }, 'completion rejects pending operations';
+    $s = advance($p, DateTime.now.later(:seconds(1)), :limit(0));
+    is $s.^state<actions>.head<status>, 'pending', 'a zero limit does not execute effects';
+    my $stale = $p.^load;
+    $s.scalar;
+    throws-like { $stale.scalar }, RedSourcing::X::OptimisticLockFailed,
+        'two stale planners cannot commit the same control version';
+    is $p.^load.^state<actions>.elems, 2, 'the rejected planner leaves no partial operation';
+    $s.^compensate;
+    dies-ok { $s.^complete }, 'a compensating saga cannot complete normally';
+};
+
+subtest 'the documented order saga example runs end to end' => {
+    my $result = run $*EXECUTABLE, '-Ilib', 'examples/order-saga/main.raku', :out, :err;
+    my $output = $result.out.slurp-rest;
+    my $error = $result.err.slurp-rest;
+    is $result.exitcode, 0, 'the example exits successfully';
+    is $error, '', 'the example produces no diagnostics';
+    like $output, /'Registered compensations: 2'/, 'forward execution saves the undo stack';
+    like $output, /'After deadline: compensated'/, 'the deadline triggers compensation';
+    like $output, /'Stock reserved: False'/, 'the final inverse releases stock';
+};
+
+subtest 'exported failure categories have defaults and loaded timeout checks share the controller' => {
+    is Permanent.new.message, 'Operation rejected', 'default definite rejection';
+    is Retryable.new.message, 'Operation failed without taking effect', 'default retryable failure';
+    is Uncertain.new.message, 'External outcome is unknown', 'default uncertain outcome';
+    fresh;
+    my $s = proxy().^load;
+    is $s.^check-timeouts.^status, 'running', 'loaded sagas expose the same timer controller';
+    class NativeSagaCommand does Command { has $.value }
+    my @emitted = supply { NativeSagaCommand.new(:value(42)).emit }.list;
+    is @emitted.head.value, 42, 'the Command role preserves native no-argument supply emission';
+    is StoredCommand.^all.elems, 0, 'native emission does not create a stored command';
+    StoredEvent.^create(:class('Missing::SagaDomainEvent'), :mro('|Any|'),
+        :stream<unloaded-domain>, :version(1), :data{value => 42});
+    my $raw = StoredEvent.list-events(:stream<unloaded-domain>).head;
+    isa-ok $raw, StoredEvent, 'history preserves rows for an unloaded domain class';
+    is $raw.data<value>, 42, 'the unknown event retains its payload';
+};
+
+subtest 'direct APPLY and REACT calls retain their enforced scopes and signatures' => {
+    fresh;
+    my $event = SagaStarted.new(:id(1));
+    my $apply = proxy(BadApplySaga).^load;
+    dies-ok { $apply.APPLY($event) }, 'a direct APPLY call cannot emit a command';
+    my $react = proxy(BadReactSaga).^load;
+    dies-ok { $react.REACT($event) }, 'a direct REACT call cannot change domain state';
+    is $react.amount, 0, 'the original object remains unchanged';
+    is StoredCommand.^all.elems, 0, 'no command escaped either direct handler';
+    my $good = proxy().^load;
+    dies-ok { $good.reserve-stock(:order-id('wrong')) }, 'ordinary saga methods retain native parameter types';
+    is $good.^find_method('compensate-reserve-stock').signature.params.grep(*.named).head.type,
+        Str, 'the compensator keeps its declared native signature';
+};
+
+done-testing;

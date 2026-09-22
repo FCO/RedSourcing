@@ -1,0 +1,110 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+
+my $tmp = tempdir.IO;
+my $database = $tmp.add('entities.db').Str;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :$database;
+schema(StoredEvent, StoredCommand).create;
+
+sub cli(*@args) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, |@args,
+        "--database=$database", :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub listed(Str $operation = 'list-entities', *@options) {
+    my %result = cli($operation, '--json', |@options);
+    die %result<err> if %result<code>;
+    from-json(%result<out>)
+}
+sub row(Str $type, Str $stream, UInt $version, Str $mro, %data, *%extra) {
+    StoredEvent.^create(:class($type), :$stream, :$version, :$mro, :data(%data), |%extra)
+}
+
+subtest 'an empty store has empty entity listings' => {
+    for <list-entities list-aggregates list-projections list-sagas> -> $operation {
+        is-deeply listed($operation), [], "$operation returns an empty JSON array";
+    }
+    is cli('list-entities')<out>, "(none)\n", 'empty text output is explicit';
+};
+
+# No domain classes are defined: discovering names must never import or replay them.
+my $long-stream = 'Unknown::Account: id = São Paulo/a & b ' ~ ('long-name-' x 12);
+row('Unknown::Account', $long-stream, 1, '|Entity|', %(id => 'a', balance => 10));
+row('Unknown::Deposited', $long-stream, 2, '|Event|', %(amount => 5));
+row('Unknown::Account', 'account/b', 1, '|Entity|', %(id => 'b', balance => 20));
+row('Unknown::Balances', 'balances/a', 1, '|Entity|', %(id => 'a', total => 10), :replay-cursor(0));
+row('Unknown::Workflow', 'Unknown::Workflow: id = a', 1, '|Entity|',
+    %(id => 'a', saga-state => %(status => 'running')));
+row('RedSourcing::Saga::StepSucceeded', 'Unknown::Workflow: id = a', 2,
+    '|RedSourcing::Saga::Control|Event|',
+    %(values => %(id => 'a', payment => 'paid'), state => %(status => 'completed'), cursor => 2));
+row('Unknown::Workflow', 'Unknown::Workflow: id = b', 1, '|Entity|',
+    %(id => 'b', saga-state => %(status => 'running')));
+row('Unknown::BareEvent', 'bare-stream', 1, '|Event|', %(note => 'not an entity'));
+StoredCommand.^create(:stream<commands-only>, :entity<Unknown::CommandTarget>,
+    :entity-ids{ :id<c> }, :method<process>, :data{});
+
+subtest 'listings distinguish persisted entity kinds and their state sources' => {
+    my @all = listed().List;
+    is @all.elems, 6, 'each entity stream appears once, including command-only targets';
+    is-deeply @all.map(*.<stream>).Array, @all.map(*.<stream>).sort.Array,
+        'ordering uses full stream names';
+    nok @all.first(*.<stream> eq 'bare-stream').defined, 'bare event streams are excluded';
+    my @aggregates = listed('list-aggregates').List;
+    is @aggregates.elems, 2, 'aggregate alias selects only aggregate snapshots';
+    is @aggregates.first(*.<stream> eq $long-stream)<data><balance>, 10,
+        'listing reports the snapshot without pretending to fold the later deposit';
+    is @aggregates.first(*.<stream> eq $long-stream)<head-version>, 2,
+        'metadata distinguishes the stream head from the snapshot version';
+    is listed('list-projections').head<cursor>, 0, 'projection checkpoints retain a zero cursor';
+    is listed('list-sagas').elems, 2, 'saga alias includes snapshot and control state';
+    my %completed = listed('list-sagas', '--status=completed').head;
+    is %completed<state-source>, 'control', 'saga status comes from the latest control';
+    is %completed<data><payment>, 'paid', 'control state is available in JSON';
+    is listed('list-entities', '--kind=entity').head<state-source>, 'unavailable',
+        'command-only targets are explicitly unclassified';
+};
+
+subtest 'filters combine before stable pagination and full names remain visible' => {
+    is listed('list-entities', '--type=Unknown::Account', '--kind=aggregate').elems, 2,
+        'kind and exact stored type filters combine';
+    is listed('list-aggregates', "--stream=$long-stream").head<stream>, $long-stream,
+        'exact stream filters preserve Unicode and punctuation';
+    is listed('list-sagas', '--status=running', '--type=Unknown::Workflow').head<stream>,
+        'Unknown::Workflow: id = b', 'status combines with type';
+    my @all = listed().List;
+    is-deeply listed('list-entities', '--offset=1', '--limit=2').map(*.<stream>).Array,
+        @all[1, 2].map(*.<stream>).Array, 'offset and limit select a stable page';
+    is listed('list-aggregates', '--offset=1', '--limit=1').head<stream>, 'account/b',
+        'pagination applies after filtering';
+    is-deeply listed('list-entities', '--type=Missing'), [], 'unmatched type returns an empty list';
+    is-deeply listed('list-entities', '--offset=100'), [], 'page past the end is empty';
+    is-deeply listed('list-entities', '--limit=0'), [], 'zero limit returns no records';
+    ok cli('list-aggregates')<out>.contains($long-stream), 'text names are not truncated';
+    for '--kind=bogus', '--offset=-1', '--limit=-1', '--unknown' -> $option {
+        isnt cli('list-entities', $option)<code>, 0, 'invalid options fail';
+    }
+};
+
+subtest 'configuration works without domain imports and inspection performs no writes' => {
+    my $config = $tmp.add('red-sourcing.rakuconf');
+    $config.spurt("use RedSourcing::CLI::Config; config \{ .database = 'entities.db'; .modules = <Missing::Domain> }");
+    for <list-entities list-aggregates list-projections list-sagas> -> $operation {
+        my $p = run $*EXECUTABLE.Str, "-I$lib", $script, $operation, '--json',
+            '-f', $config.Str, :cwd($tmp), :out, :err;
+        is $p.exitcode, 0, "$operation accepts configuration without importing its domain list";
+        $p.out.slurp(:close);
+        is $p.err.slurp(:close), '', 'successful discovery is quiet';
+        like cli($operation, '--help')<out>, /'--offset'/, 'help documents entity pagination';
+    }
+    is StoredEvent.^all.elems, 8, 'no events or checkpoints are written';
+    is StoredCommand.^all.elems, 1, 'no commands are submitted';
+    is StoredCommand.^all.head.state, StoredCommand::Pending, 'pending commands remain unexecuted';
+};
+
+done-testing;

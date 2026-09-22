@@ -1,0 +1,107 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use Cro::HTTP::Client;
+use RedSourcing::Web::Monitor;
+
+# A real standalone CLI, an independent database connection and no domain modules.
+my $tmp = tempdir.IO;
+my $database = $tmp.add('monitor.db').Str;
+my $lib = $*CWD.add('lib').Str;
+my $cli = $*CWD.add('bin/red-sourcing.raku').Str;
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :$database;
+schema(StoredEvent, StoredCommand).create;
+throws-like { run-monitor(:$database, :minutes(0)) }, X::AdHoc,
+    message => /'minutes must be between'/,
+    'direct monitor callers can still omit connection options';
+my $stream = 'Unloaded::Account: id = a1';
+StoredEvent.^create(:class<Unloaded::Account>, :mro('|Entity|'), :$stream,
+    :version(1), :data{ :id<a1>, :name<Initial> });
+my $port = 40000 + (^20000).pick;
+my $config = $tmp.add('monitor.rakuconf');
+$config.spurt("use RedSourcing::CLI::Config; config \{
+"
+    ~ ".database = 'monitor.db'; .modules = <Missing::Domain>;
+"
+    ~ ".connection = %(timeout => 1000);
+"
+    ~ ".monitor: \{ .host = '127.0.0.1'; .port = $port; .minutes = 2; .app-url = 'http://example.invalid/app' }
+}
+");
+my $started = Promise.new;
+my $stdout = '';
+my $stderr = '';
+my $proc = Proc::Async.new($*EXECUTABLE.Str, "-I$lib", $cli, 'web-monitor',
+    "-f=$config");
+$proc.stdout.tap(-> $chunk {
+    $stdout ~= $chunk;
+    $started.keep(True) if $stdout.contains('Store:') && $started.status == Planned;
+});
+$proc.stderr.tap(-> $chunk { $stderr ~= $chunk });
+my $finished = $proc.start;
+LEAVE {
+    if $finished.status == Planned {
+        $proc.kill(SIGINT);
+        await Promise.anyof($finished, Promise.in(10));
+        $proc.kill(SIGKILL) if $finished.status == Planned;
+    }
+}
+await Promise.anyof($started, $finished, Promise.in(30));
+is $started.status, Kept, 'standalone monitor uses configuration without importing the application';
+die "Monitor did not start: $stderr" unless $started.status == Kept;
+my $base = "http://127.0.0.1:$port";
+my $root = await Cro::HTTP::Client.get("$base/", :!follow);
+is $root.status, 303, 'root redirects to the monitor';
+my $overview = await Cro::HTTP::Client.get("$base/monitor");
+is $overview.status, 200, 'dashboard is served by the root CLI';
+my $html = await $overview.body-text;
+like $html, /'Unloaded::Account'/, 'dashboard shows persisted names without domain modules';
+like $html, /'href="http://example.invalid/app"'/, 'configured application URL reaches the monitor navigation';
+my $details = await Cro::HTTP::Client.get("$base/monitor/detail?view=event&name=1");
+is $details.status, 200, 'standalone monitor serves synchronized record details without domain modules';
+like await($details.body-text), /'Initial'/, 'detail page reads the payload through the independent connection';
+my $asset = await Cro::HTTP::Client.get("$base/assets/app.css");
+is $asset.status, 200, 'integrated resources are served';
+my $report = await Cro::HTTP::Client.get("$base/monitor/report");
+my %report = from-json(await($report.body-text));
+is %report<instances>.head<data><name>, 'Initial', 'independent connection reads the initial snapshot';
+is %report<metrics><series>.elems, 2, 'CLI forwards the requested metrics window';
+
+my $socket = await IO::Socket::Async.connect('127.0.0.1', $port);
+my $connected = Promise.new;
+my $changed = Promise.new;
+my $traffic = '';
+my $tap = $socket.Supply(:bin).tap(-> $chunk {
+    $traffic ~= $chunk.decode('utf-8');
+    $connected.keep(True) if $traffic.contains('data: connected') && $connected.status == Planned;
+    $changed.keep(True) if $traffic.contains('data: changed') && $changed.status == Planned;
+}, :quit(-> $ { }));
+LEAVE { $socket.close if $socket.defined; $tap.close if $tap.defined }
+await $socket.write("GET /monitor/live HTTP/1.1\r\nHost: localhost\r\n\r\n".encode('ascii'));
+await Promise.anyof($connected, Promise.in(10));
+is $connected.status, Kept, 'independent monitor supplies live invalidation';
+StoredEvent.^create(:class<Unloaded::Account>, :mro('|Entity|'), :$stream,
+    :version(2), :data{ :id<a1>, :name<Updated> });
+await Promise.anyof($changed, Promise.in(10));
+is $changed.status, Kept, 'a separate writer is detected by the polling loop';
+my $updated = await Cro::HTTP::Client.get("$base/monitor/report");
+is from-json(await($updated.body-text))<instances>.head<data><name>, 'Updated', 'report cache refreshes after the journal changes';
+my $cached = await Cro::HTTP::Client.get("$base/monitor/report");
+is from-json(await($cached.body-text))<instances>.head<data><name>, 'Updated', 'unchanged reports retain the latest cached state';
+$socket.close;
+$tap.close;
+$proc.kill(SIGINT);
+await Promise.anyof($finished, Promise.in(10));
+is $finished.status, Kept, 'monitor process stops promptly';
+if $*DISTRO.is-win {
+    skip 'Proc::Async.kill cannot deliver a catchable SIGINT on Windows', 2;
+} else {
+    is $finished.result.exitcode, 0, 'monitor exits cleanly';
+    is $finished.result.signal, 0, 'monitor handles SIGINT instead of being terminated by it';
+}
+is $stderr, '', 'live refresh and disconnect do not produce socket errors';
+is StoredEvent.^all.elems, 2, 'monitor writes no journal records';
+is StoredCommand.^all.elems, 0, 'monitor submits no commands';
+done-testing;

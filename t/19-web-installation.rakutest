@@ -1,0 +1,80 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $tmp = tempdir.IO;
+my $destination = $tmp.add('installed');
+my $repository = CompUnit::Repository::Installation.new(:prefix($destination));
+$repository.install(Distribution::Path.new($*CWD), :!precompile);
+my $consumer = q:to/RAKU/;
+    use Cro::HTTP::Request;
+    use RedSourcing::Web;
+    use RedSourcing::Web::Monitor;
+    use RedSourcing::Web::Operations;
+    use RedSourcing::CLI::Config;
+    use JSON::Fast;
+    my $source = Supplier.new;
+    my $responses = web-asset-routes().transformer($source.Supply).Channel;
+    my %seen;
+    for <app.css live.js vendor/htmx-4.0.0.min.js> -> $path {
+        $source.emit(Cro::HTTP::Request.new(:method<GET>, :target('/' ~ $path)));
+        my $response = $responses.receive;
+        die "Missing installed resource: $path" unless $response.status == 200;
+        my $body = $response.body-byte-stream.list.map(*.decode('utf-8')).join;
+        die "Empty installed resource: $path" unless $body.chars > 100;
+        %seen{$path} = $response.header('Content-Type');
+    }
+    $source.emit(Cro::HTTP::Request.new(:method<GET>, :target</../META6.json>));
+    die 'Unlisted files must not be served' unless $responses.receive.status == 404;
+    $source.done;
+    my $operations = RedSourcing::Web::Operations.new(:settings(Settings.new(
+        :driver<SQLite>, :database($*CWD.add('installed-console.db').Str))));
+    LEAVE $operations.close;
+    my %job = $operations.submit('init');
+    my $deadline = now + 20;
+    await Promise.in(.05) while $operations.job(%job<id>)<state> eq 'running' && now < $deadline;
+    die 'Installed console cannot initialize a store' unless $operations.job(%job<id>)<state> eq 'succeeded';
+    %job = $operations.submit('streams');
+    $deadline = now + 20;
+    await Promise.in(.05) while $operations.job(%job<id>)<state> eq 'running' && now < $deadline;
+    die 'Installed console cannot dispatch CLI operations' unless $operations.job(%job<id>)<state> eq 'succeeded';
+    say to-json(%seen, :!pretty);
+RAKU
+my $result = run $*EXECUTABLE.Str, "-Iinst#$destination", '-e', $consumer,
+    :cwd($tmp), :out, :err;
+my $out = $result.out.slurp(:close);
+my $err = $result.err.slurp(:close);
+is $result.exitcode, 0, 'monitor modules and assets work outside the source tree';
+is $err, '', 'installed asset serving has no errors';
+if $result.exitcode == 0 {
+    my %seen = from-json($out);
+    like %seen<app.css>, /'text/css'/, 'installed stylesheet has CSS MIME type';
+    like %seen<live.js>, /'application/javascript'/, 'installed live bridge has JavaScript MIME type';
+    like %seen<vendor/htmx-4.0.0.min.js>, /'application/javascript'/, 'installed HTMX has JavaScript MIME type';
+} else { diag $err }
+my $executable-suffix = $*DISTRO.is-win ?? '.exe' !! '';
+my $command = $destination.add('bin/red-sourcing-monitor' ~ $executable-suffix);
+ok $command.f, 'distribution installs red-sourcing-monitor executable';
+my $help = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing-monitor.raku').Str, '--help', :cwd($tmp),
+    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+my $usage = $help.out.slurp(:close) ~ $help.err.slurp(:close);
+like $usage, /'--driver'/, 'installed CLI exposes driver';
+like $usage, /'--database'/, 'installed CLI exposes database';
+nok $usage.contains('--config'), 'CLI requires no application module configuration';
+my $root-command = $destination.add('bin/red-sourcing' ~ $executable-suffix);
+ok $root-command.f, 'core installation provides the unified executable';
+my $root-help = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing.raku').Str, 'web-monitor', '--help', :cwd($tmp),
+    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+is $root-help.exitcode, 0, 'installed root CLI exposes web-monitor help';
+like $root-help.out.slurp(:close) ~ $root-help.err.slurp(:close), /'--minutes'/,
+    'unified monitor help exposes web options';
+my $missing = $tmp.add('missing-store.db');
+my $root-run = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing.raku').Str, 'web-monitor', "--database=$missing", :cwd($tmp),
+    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+isnt $root-run.exitcode, 0, 'installed unified CLI runs monitor validation';
+$root-run.out.slurp(:close);
+like $root-run.err.slurp(:close), /'Database does not exist'/,
+    'installed monitor loads and reports its own validation error';
+nok $missing.e, 'unified monitor never creates a missing store';
+nok $tmp.add('a.db').e, 'unified monitor never opens the core default store';
+done-testing;

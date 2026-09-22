@@ -1,0 +1,92 @@
+use Test;
+use JSON::Fast;
+use File::Temp;
+use App::Racoco::Paths;
+use App::Racoco::Report::Data;
+
+# Always measure a fresh test run; failed tests must also fail this check.
+my $cache = tempdir.IO;
+my $result = run 'racoco', '--fail-level=0', '--silent', "--cache-dir=$cache";
+die 'RaCoCo could not run the test suite' if $result.exitcode;
+
+my $paths = Paths.new(:root($*CWD), :lib<lib>, :racoco($cache));
+my $data = Data.read(:$paths);
+my $report-dir = $*CWD.add('.racoco');
+$report-dir.mkdir;
+$report-dir.add('report-data').mkdir;
+$paths.report-data-path.copy($report-dir.add('report.txt'));
+$paths.report-html-path.copy($report-dir.add('report.html'));
+for $paths.report-html-data-path.dir -> $file {
+    $file.copy($report-dir.add('report-data').add($file.basename)) if $file.f;
+}
+my %meta = from-json 'META6.json'.IO.slurp;
+my @parts = $data.get-all-parts;
+my @expected = %meta<provides>.values.unique.map({
+    .IO.absolute.IO.relative($*CWD.add('lib'))
+}).sort;
+is-deeply @parts.map(*.file-name).sort.Array, @expected.Array,
+    'every provided module is measured';
+
+my $raw-covered = [+] @parts.map(*.covered-amount);
+my $raw-total = [+] @parts.map(*.coverable-amount);
+my $covered = $raw-covered;
+my $total = $raw-total;
+# MoarVM annotates some declarations and optimized constants as coverable even
+# though executing their surrounding code produces no hit. Keep an explicit,
+# reviewed list rather than guessing from every unexecuted line in the report.
+my %exclusions = from-json 'xt/coverage-exclusions.json'.IO.slurp;
+my @excluded;
+for %exclusions.keys.sort -> $file {
+    my $part = $data.for(:file-name($file));
+    die "Missing coverage data for exclusion file $file" unless $part.defined;
+    my @source = $*CWD.add('lib').add($file).lines;
+    for %exclusions{$file}.List -> %entry {
+        die "Invalid coverage exclusion in $file" unless
+            %entry<source> ~~ Str && %entry<reason> ~~ Str && %entry<reason>.chars;
+        my @matches = @source.keys.grep({ @source[$_].trim eq %entry<source> });
+        die "Coverage exclusion must match exactly one source line in $file: {%entry<source>}"
+            unless @matches.elems == 1;
+        my $line = @matches.head + 1;
+        my $hits = $part.hit-times-of(:$line);
+        next unless $hits.defined;
+        # Exclusions address missing annotations only. If the VM starts recording
+        # a hit, leave that line in both the numerator and denominator.
+        next if $hits > 0;
+        --$total;
+        @excluded.push: %(file => $file, :$line, |%entry);
+    }
+}
+die 'The report contains no coverable lines' unless $total > 0;
+$report-dir.add('coverage-summary.json').spurt(to-json(%(
+    raw-covered-lines => $raw-covered,
+    raw-coverable-lines => $raw-total,
+    covered-lines => $covered,
+    coverable-lines => $total,
+    exclusions => @excluded.Array
+), :pretty) ~ "\n");
+diag "Raw RaCoCo: $raw-covered/$raw-total; excluded {@excluded.elems} non-executable annotations";
+my $baseline-file = 'coverage-baseline.json'.IO;
+if @*ARGS eqv ['--update-baseline'] {
+    die 'Cannot update the baseline with missing modules' if
+        @parts.map(*.file-name).sort.Array !eqv @expected.Array;
+    $baseline-file.spurt(to-json(%(
+        tool => 'App::RaCoCo 2.0.1',
+        scope => 'lib/',
+        covered-lines => $covered,
+        coverable-lines => $total
+    ), :pretty) ~ "\n");
+    pass 'coverage baseline updated';
+} else {
+    die 'Usage: raku -I. xt/coverage.rakutest [--update-baseline]' if @*ARGS;
+    my %baseline = from-json $baseline-file.slurp;
+    die 'Invalid coverage baseline' unless
+        %baseline<covered-lines> ~~ UInt && %baseline<coverable-lines> ~~ UInt
+        && %baseline<coverable-lines> > 0
+        && %baseline<covered-lines> <= %baseline<coverable-lines>;
+    # Compare exact fractions so a small decrease cannot hide in rounding.
+    ok $covered * %baseline<coverable-lines> >= %baseline<covered-lines> * $total,
+        'coverage has not decreased from the committed baseline';
+    diag "Current: {($covered / $total * 100).fmt('%.2f')}% ($covered/$total); "
+        ~ "baseline: {(%baseline<covered-lines> / %baseline<coverable-lines> * 100).fmt('%.2f')}%";
+}
+done-testing;

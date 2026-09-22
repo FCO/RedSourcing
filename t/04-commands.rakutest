@@ -1,0 +1,1141 @@
+use Test;
+use Red;
+use RedSourcing::StoredCommand;
+use RedSourcing;
+use RedSourcing::Traits;
+use RedSourcing::Event;
+use RedSourcing::Command;
+use RedSourcing::Flow;
+use Red::Driver::SQLite;
+
+class AccountChanged does Event {
+    has Int $.amount;
+    has Str $.label;
+}
+
+my %answer-calls;
+my %answer-started-at;
+my %answer-run-states;
+my %retry-calls;
+my $default-evaluations = 0;
+my $conflicts-left = 0;
+my $collide-calls = 0;
+my @conflict-balances;
+my @conflict-amounts;
+
+aggregate CommandAccount {
+    has Int $.tenant-id is entity-id;
+    has Int $.account-id is entity-id;
+    has Int $.balance is rw = 0;
+    method APPLY(AccountChanged $event) {
+        $!balance += $event.amount;
+    }
+
+    method get-balance is command { $!balance }
+
+    method identity is command {
+        %(tenant-id => $.tenant-id, account-id => $.account-id)
+    }
+
+    method answer(Int :$value = 7) is command {
+        ++%answer-calls{$.account-id};
+        %answer-started-at{$.account-id} = DateTime.now;
+        %answer-run-states{$.account-id} = $*COMMAND.state.Str;
+        $.account-id + $value
+    }
+
+    method preferences(Str :$label = 'guest', Int :$limit = 7, Bool :$enabled = True) is command {
+        %(:$label, :$limit, :$enabled)
+    }
+
+    method choose(Int :selection(:$value) = ++$default-evaluations) is command { $value }
+
+    method even-value(:b(:$a) where { $_ %% 2 } = 8) is command { $a + 10 }
+
+    method external-value(Int :input($value)!) is command { $value }
+
+    method payload(Str :$kind!) is command {
+        given $kind {
+            when 'zero' { 0 }
+            when 'false' { False }
+            when 'empty' { Nil }
+            when 'list' { [1, 2, 3] }
+            when 'map' { %(name => 'Ana', count => 2) }
+        }
+    }
+
+    method deposit(Int :$amount!, Str :$label = 'deposit') is command {
+        AccountChanged.emit(:stream($*COMMAND.stream),
+            :version(self.^version + 1), :$amount, :$label);
+        $!balance + $amount
+    }
+
+    method fail-after-event is command {
+        AccountChanged.emit(:stream($*COMMAND.stream),
+            :version(self.^version + 1), :amount(100), :label<failed>);
+        die 'intentional command failure';
+    }
+
+    method retry-after-event(Int :$amount = 7) is command {
+        AccountChanged.emit(:stream($*COMMAND.stream),
+            :version(self.^version + 1), :$amount, :label<retry>);
+        die 'first attempt failed' if ++%retry-calls{$.account-id} == 1;
+        $!balance + $amount
+    }
+
+    method contested-deposit(Int :input(:$amount) = ++$default-evaluations) is command {
+        @conflict-balances.push($!balance);
+        @conflict-amounts.push($amount);
+        self.account-changed(:$amount, :label<contested>);
+        if $conflicts-left-- > 0 {
+            AccountChanged.emit(:stream(self.^stream), :version(self.^version),
+                :amount(999), :label<collision>);
+        }
+        $!balance
+    }
+
+    method contested-withdraw(Int :$amount!) is command {
+        @conflict-balances.push($!balance);
+        die 'insufficient balance' if $!balance < $amount;
+        self.account-changed(:amount(-$amount), :label<withdraw>);
+        if $conflicts-left-- > 0 {
+            AccountChanged.emit(:stream(self.^stream), :version(self.^version),
+                :amount(999), :label<collision>);
+        }
+        $!balance
+    }
+
+    method collide is command {
+        $collide-calls++;
+        for 1, 2 -> $amount {
+            AccountChanged.emit(:stream($*COMMAND.stream),
+                :version(self.^version + 1), :$amount, :label<conflict>);
+        }
+        0
+    }
+}
+
+aggregate OtherCommandAccount {
+    has Int $.account-id is entity-id;
+    method APPLY($event) { die "Unexpected event {$event.^name}" }
+    method answer(Int :$value = 7) is command { $value }
+}
+
+aggregate HelperNameAccount {
+    has Int $.id is entity-id;
+    method APPLY(AccountChanged $event) { }
+    method create is command { 'domain creation' }
+    method ids-map is command { 'domain identity' }
+    method stream-name is command { 'domain stream' }
+    method list-commands is command { 'domain history' }
+    method get-cmd-class is command { 'domain registry' }
+    method version is command { 'domain version' }
+    method current-id is command { 'domain cursor' }
+    method stream is command { 'domain stream metadata' }
+    method with-ids is command { 'domain proxy creation' }
+}
+
+class ExplicitCommand does Command {
+    has Str $.name;
+    has Int $.count;
+    has Str $!secret = 'private';
+}
+
+# Interleave a competing append during replay, after the query has read its rows
+# but before emit-snapshot writes. No threads or timing assumptions are needed.
+my &snapshot-interleave = -> $ { };
+aggregate SnapshotAccount {
+    has Int $.account-id is entity-id;
+    has Int $.balance is rw = 0;
+    method APPLY(AccountChanged $event) {
+        $!balance += $event.amount;
+        snapshot-interleave($event);
+    }
+}
+
+sub fresh-store(:$create-account = True) {
+    red-defaults 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    account.^create if $create-account;
+}
+
+sub stored-command($row) {
+    StoredCommand.^all.grep(*.id == $row.id).head
+}
+
+sub account(Int $id = 42) {
+    CommandAccount.^with-ids(:tenant-id(3), :account-id($id))
+}
+
+# Simulate a committed change after the initial read and before BEGIN.
+# This is an injected interleaving, not a concurrent-connection test.
+my &command-interleave = -> { };
+my $begin-observer = Red::Driver::SQLite.^find_method('begin').wrap(-> |c {
+    command-interleave();
+    callsame
+});
+END $begin-observer.restore;
+
+# Simulate a competing transaction committing after a rejected attempt has
+# rolled back. This tests reloading without depending on thread timing.
+my &rollback-interleave = -> { };
+my $rollback-observer = Red::Driver::SQLite.^find_method('rollback').wrap(-> |c {
+    my $result = callsame;
+    rollback-interleave();
+    $result
+});
+END $rollback-observer.restore;
+
+# Install one observer before the first run; vary its callback between tests.
+my &timer-observer = -> Capture $c { False };
+my $timer-handle = Promise.^find_method('at').wrap(-> |c {
+    timer-observer(c) ?? Promise.kept(True) !! callsame
+});
+END $timer-handle.restore;
+
+sub interleave-command-update(&callback) {
+    my $once = True;
+    &command-interleave = -> {
+        if $once {
+            $once = False;
+            callback();
+        }
+    };
+}
+
+sub command-history {
+    fresh-store;
+    %answer-calls = ();
+    my $pending = account.answer(:value(10), :!sync);
+    $pending.next-run = DateTime.now.later(:hours(1));
+    $pending.^save;
+    account(99).^create;
+    my $processing = account(99).answer(:value(20), :!sync);
+    $processing.state = StoredCommand::State::Processing;
+    $processing.^save;
+    my $done = account.answer(:value(30), :!sync);
+    $done.run;
+    ($pending, $processing, $done)
+}
+
+subtest 'a proxy carries required, typed identity without reconstructing state' => {
+    fresh-store(:!create-account);
+    my $proxy = account;
+    is $proxy.tenant-id, 3, 'the proxy exposes the tenant ID';
+    is $proxy.account-id, 42, 'the proxy exposes the account ID';
+    is-deeply $proxy.^ids-map.Hash, %(tenant-id => 3, account-id => 42),
+        'all identity fields are available separately from command data';
+    is $proxy.^stream-name, 'CommandAccount: account-id = 42, tenant-id = 3',
+        'the stream uses the entity name and sorted identity fields';
+    nok $proxy.^can('balance'), 'the proxy does not expose reconstructed state';
+    is StoredCommand.^all.elems, 0, 'creating a proxy does not enqueue commands';
+    is StoredEvent.^all.elems, 0, 'creating a proxy does not create the entity';
+    throws-like { CommandAccount.^with-ids(:account-id(42)) }, X::Attribute::Required,
+        'all entity IDs are required';
+    throws-like { CommandAccount.^with-ids(:tenant-id(3), :account-id('wrong')) },
+        X::TypeCheck, 'entity IDs retain their declared type';
+};
+
+subtest 'entity creation writes a snapshot that can be restored' => {
+    fresh-store(:!create-account);
+    my $proxy = account;
+    my $row = $proxy.^create(:balance(15));
+    isa-ok $row, StoredEvent, 'create returns the stored snapshot';
+    is $row.class, 'CommandAccount', 'the snapshot stores the entity type itself';
+    is $row.stream, $proxy.^stream-name, 'the snapshot uses the proxy stream';
+    is $row.version, 1, 'the initial snapshot advances the initial version';
+    is-deeply $row.data.Hash, %(tenant-id => 3, account-id => 42, balance => 15),
+        'the payload contains domain state and identity without private metadata';
+    is StoredEvent.^all.elems, 1, 'creation stores exactly one snapshot';
+    my $entity = $row.COERCE;
+    isa-ok $entity, CommandAccount, 'the snapshot restores an entity instance';
+    is $entity.tenant-id, 3, 'the restored entity retains its tenant ID';
+    is $entity.account-id, 42, 'the restored entity retains its account ID';
+    is $entity.balance, 15, 'the snapshot retains initial domain state';
+    is $entity.^stream, $proxy.^stream-name, 'the restored entity retains the stream';
+    is $entity.^version, $row.version, 'the restored version comes from the stored row';
+    is $entity.^current-id, $row.id, 'the restored cursor points at the snapshot row';
+    is StoredCommand.^all.elems, 0, 'creation does not enqueue a command';
+};
+
+subtest 'initial state cannot override the proxy identity or stream' => {
+    fresh-store(:!create-account);
+    my $proxy = account;
+    my $row = $proxy.^create(:tenant-id(77), :account-id(99),
+        :stream<another-stream>, :balance(15));
+    is $row.stream, $proxy.^stream-name, 'the proxy stream takes precedence';
+    is-deeply $row.data.Hash, %(tenant-id => 3, account-id => 42, balance => 15),
+        'proxy IDs take precedence while domain state is accepted';
+    my $restored = $row.COERCE;
+    is-deeply $restored.^entity-id-map.Hash, $proxy.^ids-map.Hash,
+        'the restored identity agrees with the proxy';
+    is $restored.^stream, $proxy.^stream-name, 'restoration retains the proxy stream';
+    is-deeply $proxy.identity, %(tenant-id => 3, account-id => 42),
+        'subsequent command execution observes the protected identity';
+    is $proxy.get-balance, 15, 'subsequent execution observes the initial domain state';
+    is StoredEvent.^all.elems, 1, 'only the intended stream receives a snapshot';
+};
+
+subtest 'metaclass helpers remain separate from command method names' => {
+    fresh-store(:!create-account);
+    my $proxy = HelperNameAccount.^with-ids(:id(42));
+    $proxy.^create;
+    is-deeply $proxy.^ids-map.Hash, %(id => 42),
+        'the identity helper reads the entity IDs';
+    is $proxy.^stream-name, 'HelperNameAccount: id = 42',
+        'the stream helper uses the original entity name';
+    is $proxy.create, 'domain creation', 'create can be a domain command';
+    is StoredEvent.^all.elems, 1,
+        'the create command does not invoke the snapshot helper';
+    my $event = AccountChanged.emit(:stream($proxy.^stream-name),
+        :version(2), :amount(0), :label<metadata>);
+    is $proxy.ids-map, 'domain identity', 'ids-map can be a domain command';
+    is $proxy.stream-name, 'domain stream', 'stream-name can be a domain command';
+    is $proxy.list-commands, 'domain history', 'list-commands can be a domain command';
+    is $proxy.get-cmd-class, 'domain registry', 'get-cmd-class can be a domain command';
+    is $proxy.version, 'domain version', 'version can be a domain command';
+    is $proxy.current-id, 'domain cursor', 'current-id can be a domain command';
+    is $proxy.stream, 'domain stream metadata', 'stream can be a domain command';
+    is $proxy.with-ids, 'domain proxy creation', 'with-ids can be a domain command';
+    my @history = $proxy.^list-commands;
+    is-deeply @history.map(*.method).Array,
+        ['create', 'ids-map', 'stream-name', 'list-commands', 'get-cmd-class',
+         'version', 'current-id', 'stream', 'with-ids'],
+        'the history helper lists commands independently of the domain handler';
+    is @history.grep(*.state != StoredCommand::State::Done).elems, 0,
+        'each domain command completes normally';
+    is $proxy.^get-cmd-class('HelperNameAccount::GetCmdClass').^name,
+        'HelperNameAccount::GetCmdClass',
+        'the registry helper resolves a command that shares its name';
+    my $entity = StoredEvent.list-events(:row, :stream($proxy.^stream-name)).head.COERCE;
+    $entity.^apply-new-events-of-stream;
+    is $entity.^version, 2, 'metadata helpers still track replay with a version handler';
+    is $entity.^current-id, $event.id, 'the cursor helper still tracks replay';
+    is $entity.^stream, $proxy.^stream-name, 'the stream helper keeps the stored identity';
+    is $entity.^with-ids(:id(99)).id, 99,
+        'the HOW can create a proxy independently of the with-ids handler';
+};
+
+subtest 'projection metadata identifies domain identity independently of state' => {
+    fresh-store(:!create-account);
+    my $entity = account.^create(:balance(15)).COERCE;
+    is-deeply CommandAccount.^entity-id-names.sort.Array,
+        ['account-id', 'tenant-id'], 'only marked attributes define the identity';
+    is-deeply $entity.^entity-id-map.Hash, %(tenant-id => 3, account-id => 42),
+        'identity extraction reads the actual instance values';
+    my @ids = CommandAccount.^entity-id-attrs;
+    ok @ids.all.is-entity-id, 'identity attributes expose their marker';
+    ok CommandAccount.^commands<answer>.is-command, 'handlers expose their command marker';
+};
+
+subtest 'direct entity construction is blocked while snapshot restoration works' => {
+    fresh-store(:!create-account);
+    throws-like { CommandAccount.new(:tenant-id(3), :account-id(42)) }, X::AdHoc,
+        'direct construction gives the caller an explicit rejection',
+        :message(/'Please do not construct'/);
+    is StoredEvent.^all.elems, 0, 'rejected construction writes no snapshot';
+    my $proxy = account;
+    my $row = $proxy.^create(:balance(15));
+    my $entity = $row.COERCE;
+    isa-ok $entity, CommandAccount, 'restoration bypasses the blocked new method';
+    is $entity.balance, 15, 'restoration retains the domain state';
+    is $entity.^stream, $row.stream, 'TWEAK restores stream from stored metadata';
+    is $entity.^version, $row.version, 'TWEAK restores version from stored metadata';
+    is $entity.^current-id, $row.id, 'TWEAK restores cursor from stored metadata';
+    is $proxy.deposit(:amount(2)), 17, 'an event-emitting command uses the restored entity';
+    is $proxy.get-balance, 17, 'the following command replays the emitted event';
+    is $proxy.^list-commands.grep(*.state != StoredCommand::State::Done).elems,
+        0, 'both commands complete after restoration';
+};
+
+subtest 'entity metadata accessors are writable without becoming domain payload' => {
+    fresh-store;
+    my $row = StoredEvent.list-events(:row, :stream(account.^stream-name)).head;
+    my $entity = $row.COERCE;
+    is $entity.^version, 1, 'the initial metadata version is defined';
+    is $entity.^current-id, $row.id, 'the initial cursor is defined';
+    $entity.^version = 10;
+    $entity.^current-id = 20;
+    is $entity.^version, 10, 'version assignment reaches the private attribute';
+    is $entity.^current-id, 20, 'cursor assignment reaches the private attribute';
+    is $entity.^stream, $row.stream, 'stream remains available through the HOW';
+    is-deeply $entity.^data.Hash, %(tenant-id => 3, account-id => 42, balance => 0),
+        'metadata changes do not enter the domain payload';
+    my $other = $row.COERCE;
+    is $other.^version, 1, 'another instance retains its own metadata version';
+    is $other.^current-id, $row.id, 'another instance retains its own cursor';
+    is StoredEvent.^all.head.version, 1, 'assignments do not alter the stored row';
+};
+
+subtest 'processing commands are left for their current executor' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:!sync);
+    my $stale = stored-command($row);
+    $row.state = StoredCommand::State::Processing;
+    $row.^save;
+    nok $row.run.defined, 'another executor receives no result while processing';
+    is (%answer-calls{42} // 0), 0, 'the handler is not executed';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Processing', 'the stored state is preserved';
+    nok $stored.result.defined, 'no completion is recorded';
+    nok $stored.error.defined, 'the processing state is not recorded as an error';
+    nok $stale.run.defined, 'a stale pending instance also sees the stored Processing state';
+    is $stale.state.Str, 'Processing', 'refresh updates the stale instance before execution';
+    is (%answer-calls{42} // 0), 0, 'the stale instance does not execute the handler';
+};
+
+subtest 'snapshot conflicts replay the competing append before retrying' => {
+    fresh-store(:!create-account);
+    my $proxy = SnapshotAccount.^with-ids(:account-id(42));
+    my $first = $proxy.^create;
+    AccountChanged.emit(:stream($first.stream), :version(2), :amount(5), :label<initial>);
+    my $remaining = 1;
+    &snapshot-interleave = -> $event {
+        # This hook represents another writer, outside the handler's scope.
+        my $*REDSOURCING-PHASE = 'EXTERNAL';
+        if $remaining-- > 0 {
+            AccountChanged.emit(:stream($first.stream),
+                :version($event.StoredEvent.version + 1), :amount(7), :label<competing>);
+        }
+    };
+    LEAVE &snapshot-interleave = -> $ { };
+    my $entity = $first.COERCE;
+    my $checkpoint = $entity.^emit-snapshot;
+    is $checkpoint.version, 4, 'the retry writes after the competing version';
+    is $entity.balance, 12, 'the retry applies both appends exactly once';
+    is $entity.^current-id, $checkpoint.id, 'the cursor advances to the successful checkpoint';
+    is $checkpoint.COERCE.balance, 12, 'the stored checkpoint contains the refreshed state';
+    is StoredEvent.^all.elems, 4, 'the rejected insert leaves no extra row';
+};
+
+subtest 'snapshot conflicts stop after the bounded retry limit' => {
+    fresh-store(:!create-account);
+    my $first = SnapshotAccount.^with-ids(:account-id(42)).^create;
+    AccountChanged.emit(:stream($first.stream), :version(2), :amount(1), :label<initial>);
+    my $collisions = 0;
+    &snapshot-interleave = -> $event {
+        # This hook represents another writer, outside the handler's scope.
+        my $*REDSOURCING-PHASE = 'EXTERNAL';
+        ++$collisions;
+        AccountChanged.emit(:stream($first.stream),
+            :version($event.StoredEvent.version + 1), :amount(1), :label<competing>);
+    };
+    LEAVE &snapshot-interleave = -> $ { };
+    my $entity = $first.COERCE;
+    throws-like { $entity.^emit-snapshot }, X::Red::Driver::Mapped::Unique,
+        'exhausting retries propagates the last database conflict';
+    is $collisions, 5, 'the snapshot makes at most five attempts';
+    is StoredEvent.list-events(:row, :stream($first.stream), :types[SnapshotAccount]).elems,
+        1, 'failed attempts leave only the initial snapshot';
+    is StoredEvent.^all.elems, 7, 'all competing appends remain in history';
+};
+
+subtest 'deferred calls persist metadata without executing the handler' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:value(12), :!sync);
+    isa-ok $row, StoredCommand, 'a deferred call returns its stored command';
+    is (%answer-calls{42} // 0), 0, 'the handler has not run';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Pending', 'the command is pending in the database';
+    is $stored.stream, account.^stream-name, 'the command targets the proxy stream';
+    is $stored.entity, 'CommandAccount', 'the entity type is recorded';
+    is $stored.method, 'answer', 'the original handler name is recorded';
+    is $stored.class, 'CommandAccount::Answer', 'the generated class has an entity namespace';
+    is-deeply $stored.entity-ids.Hash, %(tenant-id => 3, account-id => 42),
+        'the executor can reconstruct the entity identity';
+    is-deeply $stored.data.Hash, %(value => 12),
+        'execution options and identity are excluded from the payload';
+    isa-ok $stored.next-run, DateTime, 'a new command has a persisted execution time';
+    nok $stored.result.defined, 'there is no result before execution';
+    nok $stored.error.defined, 'there is no initial error';
+};
+
+subtest 'synchronous calls execute and persist their result' => {
+    fresh-store;
+    is-deeply account.identity, %(tenant-id => 3, account-id => 42),
+        'a command without parameters executes on an entity with its IDs';
+    my $row = StoredCommand.^all.head;
+    is $row.state.Str, 'Done', 'completion is persisted';
+    is-deeply $row.result, %(tenant-id => 3, account-id => 42),
+        'the structured result survives reloading';
+    is-deeply $row.data.Hash, %(), 'a command without parameters has an empty payload';
+};
+
+subtest 'completed commands return their saved result without executing again' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:value(12), :!sync);
+    is $row.run, 54, 'the executor receives both the payload and identity';
+    is $row.run, 54, 'a second call returns the saved result';
+    is stored-command($row).run, 54, 'a reloaded completed command returns the result';
+    is %answer-calls{42}, 1, 'the handler executed only once';
+    is stored-command($row).tries, 1, 'reading a completed result adds no attempt';
+    is stored-command($row).state.Str, 'Done', 'reexecution keeps the completed state';
+    is stored-command($row).result, 54, 'the result is persisted on the original record';
+    is-deeply stored-command($row).data.Hash, %(value => 12), 'the persisted payload is preserved';
+    is StoredCommand.^all.elems, 1, 'execution does not create another command';
+};
+
+subtest 'an old pending instance reads a result completed by another instance' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:value(12), :!sync);
+    my $stale = stored-command($row);
+    is $row.run, 54, 'the first instance executes the command';
+    is $stale.state.Str, 'Pending', 'the other instance still holds its old state';
+    is $stale.run, 54, 'the other instance receives the saved result';
+    is $stale.state.Str, 'Done', 'the old instance refreshes its state';
+    is $stale.result, 54, 'the old instance refreshes its result';
+    is %answer-calls{42}, 1, 'the old instance does not execute the handler again';
+};
+
+subtest 'future commands are skipped without wait using the current stored schedule' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:!sync);
+    my $stale = stored-command($row);
+    $row.next-run = DateTime.now.later(:hours(1));
+    $row.^save;
+    nok $stale.run.defined, 'the default run does not execute a future command';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Pending', 'the command remains pending';
+    is $stored.tries, 0, 'skipping a future command adds no attempt';
+    is (%answer-calls{42} // 0), 0, 'the handler is not called';
+    nok $stored.error.defined, 'skipping is not recorded as an error';
+    is StoredEvent.^all.elems, 1, 'skipping leaves only the initial snapshot';
+};
+
+subtest 'wait executes a future command once after its scheduled time' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:value(12), :!sync);
+    $row.next-run = DateTime.now.later(:seconds(0.2));
+    $row.^save;
+    is $row.run(:wait), 54, 'wait returns the handler result';
+    ok %answer-started-at{42} >= $row.next-run, 'the handler starts at or after next-run';
+    is %answer-run-states{42}, 'Processing', 'the handler sees its in-transaction Processing state';
+    is %answer-calls{42}, 1, 'the handler executes exactly once';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Done', 'execution completes the command';
+    is $stored.tries, 1, 'completion persists one handler attempt';
+    is $row.run(:wait), 54, 'wait also returns an already saved result';
+    is stored-command($row).tries, 1, 'reading the result again adds no attempt';
+};
+
+subtest 'completed and processing commands do not wait for a future schedule' => {
+    fresh-store;
+    %answer-calls = ();
+    my $done = account.answer(:!sync);
+    $done.run;
+    $done.next-run = DateTime.now.later(:hours(1));
+    $done.^save;
+    my $busy = account.answer(:!sync);
+    my $stale = stored-command($busy);
+    $busy.state = StoredCommand::State::Processing;
+    $busy.next-run = DateTime.now.later(:hours(1));
+    $busy.^save;
+
+    # Observe timer requests without risking an hour-long regression test.
+    my @waits;
+    &timer-observer = -> Capture $c {
+        @waits.push: $c;
+        True
+    };
+    LEAVE &timer-observer = -> Capture $c { False };
+    is $done.run(:wait), 49, 'Done returns its saved result despite a future next-run';
+    nok $stale.run(:wait).defined, 'a stale pending copy respects the stored Processing state';
+    is @waits.elems, 0, 'neither terminal check requests a timer';
+    is stored-command($busy).state.Str, 'Processing', 'the processing command is preserved';
+    is stored-command($busy).tries, 0, 'another executor does not add an attempt';
+    is %answer-calls{42}, 1, 'only the already completed command ran its handler';
+};
+
+subtest 'rescheduling between checks leaves the command pending without wait' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:!sync);
+    interleave-command-update {
+        my $other = stored-command($row);
+        $other.next-run = DateTime.now.later(:hours(1));
+        $other.^save;
+    };
+    LEAVE &command-interleave = -> { };
+    nok $row.run.defined, 'the updated future schedule prevents execution';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Pending', 'the rescheduled command remains pending';
+    ok $stored.next-run > DateTime.now, 'the new schedule is preserved';
+    is $stored.tries, 0, 'rechecking the schedule adds no attempt';
+    is (%answer-calls{42} // 0), 0, 'the handler is not called prematurely';
+    nok $stored.error.defined, 'rescheduling is not an execution error';
+};
+
+subtest 'rescheduling with wait releases the transaction before waiting again' => {
+    fresh-store;
+    %answer-calls = ();
+    my $row = account.answer(:!sync);
+    my $scheduled;
+    interleave-command-update {
+        my $other = stored-command($row);
+        $scheduled = DateTime.now.later(:seconds(0.2));
+        $other.next-run = $scheduled;
+        $other.^save;
+    };
+    LEAVE &command-interleave = -> { };
+    my @transaction-waits;
+    &timer-observer = -> Capture $c {
+        my $in-transaction = False;
+        try { $in-transaction = so $*RED-TRANSACTION-RUNNING }
+        @transaction-waits.push: $in-transaction;
+        False
+    };
+    LEAVE &timer-observer = -> Capture $c { False };
+    is $row.run(:wait), 49, 'wait receives the result after rescheduling';
+    ok $scheduled.defined, 'the interleaving changed the schedule';
+    ok %answer-started-at{42} >= $scheduled, 'the handler respects the new execution time';
+    ok @transaction-waits.elems > 0, 'the call requested a timer';
+    is-deeply @transaction-waits.Array, [False xx @transaction-waits.elems],
+        'all waiting occurs outside a transaction';
+    is %answer-calls{42}, 1, 'rescheduling does not invoke the handler twice';
+    is stored-command($row).state.Str, 'Done', 'the command completes after waiting';
+    is stored-command($row).tries, 1, 'waiting and rechecking do not inflate the attempt count';
+};
+
+subtest 'the locked read respects state changes after the initial read' => {
+    for StoredCommand::State::Done, StoredCommand::State::Processing -> $state {
+        fresh-store;
+        %answer-calls = ();
+        my $row = account.answer(:!sync);
+        interleave-command-update {
+            my $other = stored-command($row);
+            $other.state = $state;
+            $other.result = 777 if $state == StoredCommand::State::Done;
+            $other.^save;
+        };
+        LEAVE &command-interleave = -> { };
+        my $result = $row.run;
+        if $state == StoredCommand::State::Done {
+            is $result, 777, 'the locked read returns completion by another executor';
+        } else {
+            nok $result.defined, 'the locked read leaves Processing for its executor';
+        }
+        is stored-command($row).state, $state, "the stored $state state is preserved";
+        is stored-command($row).tries, 0, "observing $state adds no attempt";
+        is (%answer-calls{42} // 0), 0, "observing $state does not call the handler";
+    }
+};
+
+subtest 'command history returns stored records without executing or scheduling them' => {
+    fresh-store(:!create-account);
+    is StoredCommand.list-commands.elems, 0, 'an empty store has an empty history';
+    my ($pending, $processing, $done) = command-history;
+    my @rows = StoredCommand.list-commands;
+    is-deeply @rows.map(*.id).Array, [$pending.id, $processing.id, $done.id],
+        'history contains all commands in ascending ID order';
+    isa-ok $_, StoredCommand, 'history returns stored command records' for @rows;
+    is-deeply @rows.map(*.state.Str).Array, ['Pending', 'Processing', 'Done'],
+        'history includes all execution states';
+    ok @rows.head.next-run > DateTime.now, 'history includes commands scheduled for the future';
+    is-deeply @rows.head.data.Hash, %(value => 10), 'the stored payload is accessible';
+    is @rows.tail.result, 72, 'the stored result is accessible';
+    is (%answer-calls{42} // 0), 1, 'listing does not execute the pending handler';
+    is (%answer-calls{99} // 0), 0, 'listing does not execute the processing handler';
+    is StoredCommand.^all.elems, 3, 'listing creates no additional commands';
+    is StoredEvent.^all.elems, 2, 'listing creates no events or snapshots';
+};
+
+subtest 'command history filters compose and the ID cursor is exclusive' => {
+    my ($pending, $processing, $done) = command-history;
+    is-deeply StoredCommand.list-commands(:from-id(0)).map(*.id).Array,
+        [$pending.id, $processing.id, $done.id], 'a zero cursor includes the whole history';
+    is-deeply StoredCommand.list-commands(:from-id($pending.id)).map(*.id).Array,
+        [$processing.id, $done.id], 'the cursor excludes its boundary command';
+    is StoredCommand.list-commands(:from-id($done.id)).elems, 0,
+        'the last ID produces an empty next page';
+    is-deeply StoredCommand.list-commands(:stream(account.^stream-name)).map(*.id).Array,
+        [$pending.id, $done.id], 'the stream filter excludes another identity';
+    for ($pending, $processing, $done) -> $row {
+        is-deeply StoredCommand.list-commands(:state($row.state)).map(*.id).Array,
+            [$row.id], "the {$row.state} filter selects its stored state";
+    }
+    is-deeply StoredCommand.list-commands(:stream(account.^stream-name),
+        :state(StoredCommand::State::Done), :from-id($pending.id)).map(*.id).Array,
+        [$done.id], 'stream, state and cursor filters apply together';
+    is StoredCommand.list-commands(:stream<missing-stream>).elems, 0,
+        'an unknown stream has an empty history';
+};
+
+subtest 'the proxy keeps command history scoped to its own stream' => {
+    my ($pending, $processing, $done) = command-history;
+    is-deeply account.^list-commands.map(*.id).Array, [$pending.id, $done.id],
+        'the proxy automatically selects its stream';
+    is-deeply account(99).^list-commands.map(*.id).Array, [$processing.id],
+        'another proxy selects its own identity';
+    is-deeply account.^list-commands(:from-id($pending.id),
+        :state(StoredCommand::State::Done)).map(*.id).Array, [$done.id],
+        'the proxy forwards the supported history filters';
+    is-deeply account.^list-commands(:stream(account(99).^stream-name)).map(*.id).Array,
+        [$pending.id, $done.id], 'a caller-supplied stream cannot override the proxy identity';
+};
+
+subtest 'literal defaults are stored for later execution' => {
+    fresh-store;
+    my $first = account.answer(:!sync);
+    my $explicit = account.answer(:value(12), :!sync);
+    is stored-command($first).data<value>, 7, 'the literal default is persisted';
+    is stored-command($explicit).data<value>, 12, 'an explicit value overrides the default';
+    is stored-command($first).run, 49, 'later execution receives the persisted default';
+    is $explicit.run, 54, 'an explicit value reaches the handler';
+};
+
+subtest 'each command parameter retains its own default initializer' => {
+    fresh-store;
+    my $row = account.preferences(:!sync);
+    is-deeply stored-command($row).data.Hash, %(label => 'guest', limit => 7, enabled => True),
+        'multiple parameter defaults are evaluated into their own attributes';
+    is-deeply $row.run.Hash, %(label => 'guest', limit => 7, enabled => True),
+        'deferred execution receives the persisted defaults';
+    is-deeply account.preferences(:label('Ana'), :limit(0), :!enabled).Hash,
+        %(label => 'Ana', limit => 0, enabled => False),
+        'explicit values, including zero and False, bypass defaults';
+};
+
+subtest 'ignored extra named arguments behave like the original handler' => {
+    fresh-store;
+    my $entity = StoredEvent.^all.head.COERCE;
+    is $entity.even-value(:a(4), :unused(99)), 14,
+        'the original method accepts and ignores an extra named argument';
+    is account.even-value(:a(4), :unused(99)), 14,
+        'the synchronous proxy keeps that behavior';
+    my $row = account.even-value(:a(4), :unused(99), :!sync);
+    is-deeply stored-command($row).data.Hash, %(a => 4),
+        'ignored arguments are not included in the command payload';
+    is stored-command($row).run, 14, 'deferred execution keeps that behavior too';
+};
+
+subtest 'named aliases persist the same payload and execute the same handler' => {
+    fresh-store;
+    for <a b> -> $name {
+        my %arguments = $name => 4;
+        my $row = account.even-value(|%arguments, :!sync);
+        is stored-command($row).state.Str, 'Pending', "$name can be submitted for later execution";
+        is-deeply stored-command($row).data.Hash, %(a => 4),
+            "$name persists the explicit value under the canonical name";
+        is stored-command($row).run, 14, "$name reaches the handler after reloading";
+        is account.even-value(|%arguments), 14, "$name also works synchronously";
+    }
+    my $default = account.even-value(:!sync);
+    is-deeply stored-command($default).data.Hash, %(a => 8),
+        'omitting both aliases persists the literal default';
+    is stored-command($default).run, 18, 'later execution receives the persisted default';
+};
+
+subtest 'where constraints reject both aliases before persistence' => {
+    fresh-store;
+    for <a b> -> $name {
+        for True, False -> $sync {
+            my %arguments = $name => 3;
+            throws-like { account.even-value(|%arguments, :$sync) }, X::AdHoc,
+                "$name is validated with sync=$sync",
+                :message(/'does not match the signature'/);
+        }
+    }
+    is StoredCommand.^all.elems, 0, 'rejected values leave no pending commands';
+    is StoredEvent.^all.elems, 1, 'rejected values leave only the initial snapshot';
+};
+
+subtest 'an external parameter name can differ from its handler variable' => {
+    fresh-store;
+    my $row = account.external-value(:input(12), :!sync);
+    is-deeply stored-command($row).data.Hash, %(input => 12),
+        'the payload uses the external name rather than the local variable';
+    is stored-command($row).run, 12, 'the handler binds the persisted external name';
+    is account.external-value(:input(14)), 14, 'the external name also works synchronously';
+    throws-like { account.external-value(:!sync) }, X::Attribute::Required,
+        'a required external parameter cannot be omitted';
+    is StoredCommand.^all.elems, 2, 'the rejected call does not enqueue a command';
+};
+
+subtest 'generated command classes retain their typed parameters' => {
+    fresh-store;
+    my $command-class = account.^get-cmd-class('CommandAccount::Answer');
+    is $command-class.^name, 'CommandAccount::Answer', 'the registry returns the generated type';
+    is $command-class.new.value, 7, 'direct construction retains the literal default';
+    is $command-class.new(:value(12)).value, 12, 'direct construction accepts an explicit value';
+    throws-like { $command-class.new(:value('wrong')) }, X::TypeCheck,
+        'the generated command retains its argument type';
+    ok CommandAccount.^proxy.^get-cmd-class('CommandAccount::Answer') === $command-class,
+        'lookup through the proxy type returns the same generated type';
+    ok account(99).^get-cmd-class('CommandAccount::Answer') === $command-class,
+        'different identities share the entity command type';
+    my $other-proxy = OtherCommandAccount.^with-ids(:account-id(42));
+    my $other-class = $other-proxy.^get-cmd-class('OtherCommandAccount::Answer');
+    is $other-class.^name, 'OtherCommandAccount::Answer',
+        'another entity resolves its own command with the same method name';
+    nok $other-class === $command-class,
+        'different entities retain distinct command types';
+};
+
+subtest 'calculated defaults are evaluated once per submitted command' => {
+    fresh-store;
+    $default-evaluations = 0;
+    my $first;
+    lives-ok { $first = account.choose(:!sync) }, 'a calculated default can construct a command';
+    if $first.defined {
+        my $second = account.choose(:!sync);
+        my $explicit = account.choose(:value(99), :!sync);
+        my $alias = account.choose(:selection(100), :!sync);
+        is $default-evaluations, 2, 'only omitted arguments evaluate the default';
+        is stored-command($first).data<value>, 1, 'the first evaluated default is persisted';
+        is stored-command($second).data<value>, 2, 'each new command evaluates its default';
+        is stored-command($explicit).data<value>, 99, 'explicit values override defaults';
+        is-deeply stored-command($alias).data.Hash, %(value => 100),
+            'an explicit alias bypasses the calculated default and persists its canonical name';
+        is stored-command($first).run, 1, 'later execution uses the persisted default';
+        is $second.run, 2, 'another command retains its own default';
+        is $explicit.run, 99, 'explicit values reach the handler';
+        is stored-command($alias).run, 100, 'an explicit alias reaches the handler after reloading';
+        is $default-evaluations, 2, 'execution does not evaluate defaults again';
+    }
+};
+
+subtest 'missing or mistyped required arguments do not enqueue commands' => {
+    fresh-store;
+    throws-like { account.deposit(:!sync) }, X::Attribute::Required,
+        'a required command argument cannot be omitted';
+    throws-like { account.deposit(:amount('wrong'), :!sync) }, X::TypeCheck,
+        'a required command argument retains its nominal type';
+    is StoredCommand.^all.elems, 0, 'invalid construction leaves no pending commands';
+    is StoredEvent.^all.elems, 1, 'invalid construction leaves only the initial snapshot';
+};
+
+subtest 'identically named commands retain distinct entity classes' => {
+    fresh-store;
+    my $first = account.answer(:!sync);
+    my $other = OtherCommandAccount.^with-ids(:account-id(42));
+    $other.^create;
+    my $second = $other.answer(:!sync);
+    is $first.class, 'CommandAccount::Answer', 'the first command identifies its entity';
+    is $second.class, 'OtherCommandAccount::Answer', 'the second has a different namespace';
+    is $first.run, 49, 'the first handler receives its entity identity';
+    is $second.run, 7, 'the second handler executes independently';
+};
+
+subtest 'JSON results include false, zero, collections and no result' => {
+    fresh-store;
+    for ('zero' => 0), ('false' => False), ('list' => [1, 2, 3]),
+        ('map' => %(name => 'Ana', count => 2)) -> $case {
+        my $row = account.payload(:kind($case.key), :!sync);
+        is-deeply $row.run, $case.value, "returns {$case.key}";
+        my $stored = stored-command($row);
+        is-deeply $stored.result, $case.value, "persists {$case.key}";
+        is $stored.state.Str, 'Done', "{$case.key} is a successful result";
+    }
+    my $empty = account.payload(:kind<empty>, :!sync);
+    nok $empty.run.defined, 'Nil is represented as an undefined result';
+    my $stored = stored-command($empty);
+    nok $stored.result.defined, 'the empty result survives reloading';
+    is $stored.state.Str, 'Done', 'an empty result still completes the command';
+    nok $stored.error.defined, 'an empty result is not treated as a failure';
+    nok $stored.run.defined, 'a completed empty result can be read again';
+    is stored-command($empty).state.Str, 'Done', 'reading it again keeps Done';
+    nok account.payload(:kind<empty>).defined, 'a synchronous handler may also return Nil';
+    my $synchronous = StoredCommand.^all.sort(*.id).tail;
+    is $synchronous.state.Str, 'Done', 'the synchronous empty result completes successfully';
+    nok $synchronous.error.defined, 'the synchronous empty result has no error';
+};
+
+subtest 'execution restores its own snapshot before appending events' => {
+    fresh-store(:!create-account);
+    my $proxy = account;
+    $proxy.^create(:balance(15));
+    account(99).^create(:balance(1000));
+    is $proxy.deposit(:amount(7)), 22, 'validation and execution see the restored balance';
+    my @events = StoredEvent.list-events(:stream($proxy.^stream-name));
+    is @events.elems, 2, 'the handler appended one event after the snapshot';
+    is @events.tail.amount, 7, 'the new event contains the command payload';
+    is @events.tail.label, 'deposit', 'multiple named parameters include their default';
+    is @events.tail.StoredEvent.version, 2, 'the handler uses the snapshot version';
+    is StoredEvent.list-events(:stream(account(99).^stream-name)).elems, 1,
+        'another entity stream is unaffected';
+    my $row = StoredCommand.^all.head;
+    is $row.state.Str, 'Done', 'command completion is persisted with its event';
+    is $row.result, 22, 'the result remains available after reloading';
+};
+
+subtest 'command execution folds all events after the latest snapshot' => {
+    fresh-store;
+    my $proxy = account;
+    AccountChanged.emit(:stream($proxy.^stream-name), :version(2), :amount(5), :label<seed>);
+    AccountChanged.emit(:stream($proxy.^stream-name), :version(3), :amount(10), :label<seed>);
+    account(99).^create;
+    AccountChanged.emit(:stream(account(99).^stream-name), :version(2), :amount(1000), :label<other>);
+    is $proxy.get-balance, 15, 'the command sees subsequent events from its own stream';
+    is StoredCommand.^all.head.state.Str, 'Done', 'a read-only command completes';
+};
+
+subtest 'applying events and emitting snapshots keeps state and cursors current' => {
+    fresh-store;
+    my $proxy = account;
+    my $entity = StoredEvent.list-events(:stream($proxy.^stream-name)).head;
+    my $first = AccountChanged.emit(:stream($proxy.^stream-name),
+        :version(2), :amount(5), :label<seed>);
+    $entity.^apply-new-events-of-stream;
+    is $entity.balance, 5, 'APPLY receives the reconstructed domain event';
+    is $entity.^version, $first.version, 'the entity tracks the applied version';
+    is $entity.^current-id, $first.id, 'the entity tracks the applied row ID';
+    $entity.^apply-new-events-of-stream;
+    is $entity.balance, 5, 'updating again does not reapply an old event';
+    my $snapshot = $entity.^emit-snapshot;
+    is $snapshot.class, 'CommandAccount', 'a later snapshot still stores the entity';
+    is $snapshot.version, 3, 'the snapshot advances the current version';
+    is $entity.^current-id, $snapshot.id, 'emitting a snapshot advances the live cursor';
+    my $restored = $snapshot.COERCE;
+    is $restored.balance, 5, 'the later snapshot retains the folded state';
+    is $restored.^current-id, $snapshot.id, 'restoration takes the cursor from the stored row';
+    $entity.^apply-new-events-of-stream;
+    is $entity.balance, 5, 'the entity does not try to apply its own snapshot';
+    my $last = AccountChanged.emit(:stream($proxy.^stream-name),
+        :version(4), :amount(7), :label<after-snapshot>);
+    is $proxy.get-balance, 12, 'command replay starts at the latest snapshot and applies new events once';
+    $entity.^apply-new-events-of-stream;
+    is $entity.balance, 12, 'incremental replay applies only the event after the snapshot';
+    is $entity.^current-id, $last.id, 'the incremental cursor advances to the last event';
+};
+
+subtest 'another instance can publish a checkpoint without replaying it as a domain event' => {
+    fresh-store;
+    my $proxy = account;
+    my $initial = StoredEvent.list-events(:row, :stream($proxy.^stream-name)).head;
+    my $reader = $initial.COERCE;
+    my $writer = $initial.COERCE;
+    AccountChanged.emit(:stream($proxy.^stream-name), :version(2), :amount(5), :label<seed>);
+    $writer.^apply-new-events-of-stream;
+    my $checkpoint = $writer.^emit-snapshot;
+
+    lives-ok { $reader.^apply-new-events-of-stream }, 'incremental replay can cross another instance\'s snapshot';
+    is $reader.balance, 5, 'the domain event is applied once and the checkpoint adds no state';
+    is $reader.^version, $checkpoint.version, 'the checkpoint advances the reader version';
+    is $reader.^current-id, $checkpoint.id, 'the checkpoint advances the reader cursor';
+    lives-ok { $reader.^apply-model($checkpoint) }, 'a snapshot row can also be handled directly';
+    is $reader.balance, 5, 'handling the checkpoint directly does not invoke APPLY';
+    $reader.^apply-new-events-of-stream;
+    is $reader.balance, 5, 'another update does not apply the old event again';
+
+    account(99).^create(:balance(1000));
+    my $last = AccountChanged.emit(:stream($proxy.^stream-name),
+        :version(4), :amount(7), :label<after-checkpoint>);
+    $reader.^apply-new-events-of-stream;
+    is $reader.balance, 12, 'events after the checkpoint continue to update the reader';
+    is $reader.^version, $last.version, 'the reader tracks the later event version';
+    is $reader.^current-id, $last.id, 'the reader tracks the later event ID';
+
+    my @history = StoredEvent.list-events(:row, :stream($proxy.^stream-name));
+    is @history.grep(*.class eq 'CommandAccount').elems, 2,
+        'the stored stream retains both snapshots';
+    my @replay = StoredEvent.list-events(:row, :stream($proxy.^stream-name),
+        :from-snapshot-of-type(CommandAccount));
+    is-deeply @replay.map(*.class).Array, ['CommandAccount', 'AccountChanged'],
+        'snapshot replay returns one snapshot first and only its subsequent events';
+    is @replay.head.id, $checkpoint.id, 'replay starts at the latest snapshot in this stream';
+    is @replay.tail.id, $last.id, 'replay includes the event after that snapshot';
+    my $restored = @replay.shift.COERCE;
+    $restored.^apply-model($_) for @replay;
+    is $restored.balance, $reader.balance, 'snapshot replay and incremental replay agree';
+    is $proxy.get-balance, 12, 'command execution uses the same row-based replay';
+};
+
+subtest 'handler failure rolls back events and becomes terminal' => {
+    fresh-store;
+    my $row = account.fail-after-event(:!sync);
+    my $scheduled = $row.next-run;
+    throws-like { $row.run }, X::AdHoc, :message('intentional command failure'),
+        'execution propagates the original handler error';
+    is StoredEvent.^all.elems, 1, 'the emitted event rolls back';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Failed', 'failure is terminal';
+    is $stored.error, 'intentional command failure', 'the error is persisted';
+    nok $stored.result.defined, 'failure has no successful result';
+    is $stored.next-run, $scheduled, 'failure does not schedule another execution';
+    is $stored.tries, 1, 'the failed invocation survives rollback';
+    dies-ok { $row.run }, 're-running a failed record reports its saved error';
+    is stored-command($row).tries, 1, 'the failed handler is not invoked again';
+};
+
+subtest 'synchronous failure persists a terminal error before propagation' => {
+    fresh-store;
+    throws-like { account.fail-after-event }, X::AdHoc,
+        :message('intentional command failure'), 'the caller receives the handler error';
+    my $stored = StoredCommand.^all.head;
+    is $stored.state.Str, 'Failed', 'the synchronous failure is terminal';
+    is $stored.error, 'intentional command failure', 'the error is saved';
+    is $stored.tries, 1, 'one invocation is counted';
+    nok $stored.result.defined, 'no successful result is recorded';
+    is StoredEvent.^all.elems, 1, 'the emitted event rolls back';
+};
+
+subtest 'an explicit new submission can succeed after a failed command' => {
+    fresh-store;
+    %retry-calls = ();
+    my $first = account.retry-after-event(:!sync);
+    dies-ok { $first.run }, 'the first submission fails';
+    is stored-command($first).state.Str, 'Failed', 'the failed record stays terminal';
+    my $second = account.retry-after-event(:!sync);
+    is $second.run, 7, 'the new submission succeeds';
+    isnt $first.id, $second.id, 'attempts have separate command records';
+    is stored-command($second).tries, 1, 'the new record counts its own invocation';
+    nok stored-command($second).error.defined, 'success has no saved error';
+    is stored-command($first).error, 'first attempt failed', 'previous history is retained';
+    is StoredEvent.^all.elems, 2, 'only the successful submission commits its event';
+    is account.get-balance, 7, 'replay sees the successful event once';
+    is $second.run, 7, 'completed results remain reusable';
+    is %retry-calls{42}, 2, 'saved-result reuse does not execute again';
+};
+
+subtest 'optimistic conflicts reload state and retry the same command atomically' => {
+    fresh-store;
+    enable-flow-tracing;
+    $conflicts-left = 1;
+    @conflict-balances = (); @conflict-amounts = ();
+    my $once = True;
+    &rollback-interleave = -> {
+        if $once {
+            $once = False;
+            my $*RED-TRANSACTION-RUNNING = False;
+            my $*COMMAND = Any;
+            AccountChanged.emit(:stream(account.^stream-name),
+                :version(2), :amount(3), :label<competing>);
+        }
+    };
+    LEAVE &rollback-interleave = -> { };
+    my $row = account.contested-deposit(:input(7), :!sync);
+    my $schedule = $row.next-run;
+    is $row.run, 10, 'the same run returns success after revalidating updated state';
+    is-deeply @conflict-balances, [0, 3], 'a fresh entity replaces the rolled-back provisional state';
+    is-deeply @conflict-amounts, [7, 7], 'normalized arguments are retained';
+    is StoredCommand.^all.elems, 1, 'technical retries reuse the original command record';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Done', 'the conflict is not recorded as a command failure';
+    is $stored.tries, 2, 'both handler invocations are counted';
+    nok $stored.error.defined, 'a successful retry has no failure message';
+    is $stored.next-run, $schedule, 'technical retries do not reschedule the command';
+    is-deeply StoredEvent.^all.sort(*.version).map(*.version).Array, [1, 2, 3],
+        'rollback preserves the competitor and commits just one command event';
+    is account.^load.balance, 10, 'replay includes the competing and command events once';
+    my @links = flow-links(:source-kind<command>, :source($row.id.Str), :target-kind<event>);
+    is @links.elems, 1, 'rolled-back emission and consumption telemetry leaves no duplicate link';
+    is StoredEvent.^all.grep(*.id == @links.head<target>.UInt).head.version, 3,
+        'the surviving link identifies only the successful command emission';
+    is $row.run, 10, 'completed result reuse does not repeat the handler';
+    is stored-command($row).tries, 2, 'saved-result reads add no attempt';
+};
+
+subtest 'optimistic retries preserve submission defaults' => {
+    fresh-store;
+    $default-evaluations = 0;
+    $conflicts-left = 2; @conflict-balances = (); @conflict-amounts = ();
+    my $row = account.contested-deposit(:!sync);
+    is $row.run, 1, 'the normalized default succeeds after two conflicts';
+    is-deeply @conflict-amounts, [1, 1, 1], 'retry never evaluates the default again';
+    is $default-evaluations, 1, 'the default belongs to submission';
+    is stored-command($row).tries, 3, 'all provisional invocations are counted';
+    is account.^load.balance, 1, 'rolled-back provisional state does not accumulate';
+};
+
+subtest 'a retry revalidates business rules against the competing committed state' => {
+    fresh-store(:!create-account);
+    account.^create(:balance(10));
+    $conflicts-left = 1; @conflict-balances = ();
+    my $once = True;
+    &rollback-interleave = -> {
+        if $once {
+            $once = False;
+            my $*RED-TRANSACTION-RUNNING = False;
+            my $*COMMAND = Any;
+            AccountChanged.emit(:stream(account.^stream-name),
+                :version(2), :amount(-5), :label<competing>);
+        }
+    };
+    LEAVE &rollback-interleave = -> { };
+    my $row = account.contested-withdraw(:amount(7), :!sync);
+    throws-like { $row.run }, X::AdHoc, :message('insufficient balance'),
+        'fresh validation rejects the command after another withdrawal commits';
+    is-deeply @conflict-balances, [10, 5], 'the retry uses current domain state';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Failed', 'the business rejection is a genuine terminal failure';
+    is $stored.error, 'insufficient balance', 'only the business error is retained';
+    is $stored.tries, 2, 'the conflict and rejecting invocation are counted';
+    is StoredEvent.^all.elems, 2, 'only the snapshot and competing append survive';
+    is account.^load.balance, 5, 'no rejected withdrawal changes the aggregate';
+};
+
+subtest 'persistent optimistic conflicts stay pending after the immediate retry limit' => {
+    fresh-store;
+    $collide-calls = 0;
+    my $row = account.collide(:!sync);
+    my $scheduled = $row.next-run;
+    throws-like { $row.run }, RedSourcing::X::OptimisticLockFailed,
+        :stream(account.^stream-name), :version(2), :event-class<AccountChanged>,
+        'persistent conflict is reported to the executor without marking failure';
+    is $collide-calls, 5, 'immediate retries are bounded for an always-conflicting handler';
+    is StoredEvent.^all.elems, 1, 'every provisional batch rolls back';
+    my $stored = stored-command($row);
+    is $stored.state.Str, 'Pending', 'another worker pass may still execute the record';
+    nok $stored.error.defined, 'technical contention is not saved as a business error';
+    nok $stored.result.defined, 'no provisional result survives';
+    is $stored.tries, 5, 'rolled-back handler invocations remain observable';
+    is $stored.next-run, $scheduled, 'contention does not change the execution schedule';
+
+    fresh-store;
+    $conflicts-left = 5; @conflict-balances = (); @conflict-amounts = ();
+    $row = account.contested-deposit(:input(4), :!sync);
+    throws-like { $row.run }, RedSourcing::X::OptimisticLockFailed;
+    is stored-command($row).state.Str, 'Pending', 'an exhausted transient conflict stays eligible';
+    is $row.run, 4, 'a later pass resumes the same command when contention stops';
+    is stored-command($row).tries, 6, 'attempt accounting continues across executor passes';
+    is StoredCommand.^all.elems, 1, 'resuming does not submit a replacement command';
+};
+
+subtest 'optimistic conflicts inside an outer transaction propagate to its owner' => {
+    fresh-store;
+    $collide-calls = 0;
+    my $row = account.collide(:!sync);
+    throws-like {
+        red-do :transaction, { $row.run; True }
+    }, RedSourcing::X::OptimisticLockFailed;
+    is $collide-calls, 1, 'a nested run does not retry inside a failed transaction without savepoints';
+    is StoredEvent.^all.elems, 1, 'the outer transaction rolls back the entire batch';
+    is stored-command($row).state.Str, 'Pending', 'the owner may restart without a terminal command failure';
+    nok stored-command($row).error.defined, 'the nested conflict is not saved as a business error';
+};
+
+subtest 'explicit command emission preserves metadata and public payloads' => {
+    fresh-store;
+    my %metadata = entity => 'CommandAccount', entity-ids => %(tenant-id => 3, account-id => 42),
+        method => 'identity', stream => account.^stream-name;
+    my $row = ExplicitCommand.new(:name<Ana>, :count(2)).emit(|%metadata);
+    is-deeply stored-command($row).data.Hash, %(name => 'Ana', count => 2),
+        'instance emission excludes private attributes and the stored-record reference';
+    my $fields = ExplicitCommand.emit(|%metadata, :name<Bia>, :count(3));
+    is-deeply stored-command($fields).data.Hash, %(name => 'Bia', count => 3),
+        'class emission accepts individual payload fields';
+    my $data = ExplicitCommand.emit(|%metadata, :data(%(name => 'Cia', count => 4)));
+    is-deeply stored-command($data).data.Hash, %(name => 'Cia', count => 4),
+        'class emission also accepts an explicit data map';
+    is stored-command($data).entity, 'CommandAccount', 'the entity is preserved';
+    is-deeply stored-command($data).entity-ids.Hash, %metadata<entity-ids>,
+        'the identity map is preserved';
+    my $reference = ExplicitCommand.new(:name<Ana>, :count(2), :StoredCommand($row));
+    ok $reference.StoredCommand === $row, 'the command can retain its associated record';
+    nok Command.new.StoredCommand.defined, 'the standalone command has no stored record';
+    dies-ok { ExplicitCommand.emit },
+        'emission requires entity, identity, handler and stream metadata';
+    throws-like { ExplicitCommand.new(:name<Ana>, :count(2)).emit(|%metadata, :count(9)) },
+        X::Multi::NoMatch, 'instance emission rejects payload overrides';
+    throws-like { ExplicitCommand.emit(|%metadata, :data(%(name => 'Ana')), :count(9)) },
+        X::Multi::NoMatch, 'explicit data cannot be mixed with individual payload fields';
+    is StoredCommand.^all.elems, 3, 'rejected calls do not persist extra commands';
+};
+
+done-testing;

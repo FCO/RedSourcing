@@ -1,0 +1,83 @@
+use Test;
+use RedSourcing;
+
+my $*RED-DB = database 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+
+class EntryPointMovement does Event {
+    has Int $.client-id is required;
+    has Int $.amount is required;
+}
+
+class EntryPointCommand does Command {
+    has Int $.amount is required;
+}
+
+aggregate EntryPointAccount {
+    has Int $.id is entity-id;
+    has Int $.balance = 0;
+
+    method APPLY(EntryPointMovement $event) is entity-id-map(:client-id<id>) {
+        $!balance += $event.amount;
+    }
+
+    method add(Int :$amount!) is command {
+        self.entry-point-movement(:$amount);
+        $!balance
+    }
+}
+
+projection EntryPointBalance {
+    has Int $.client-id is entity-id;
+    has Int $.balance = 0;
+
+    method APPLY(EntryPointMovement $_ where { .client-id eqv $!client-id }) {
+        $!balance += .amount;
+    }
+
+    method total { $!balance }
+}
+
+subtest 'one import supports synchronous and deferred commands and mapped event emission' => {
+    is StoredEvent.^name, 'RedSourcing::StoredEvent', 'the event storage type belongs to the library namespace';
+    is StoredCommand.^name, 'RedSourcing::StoredCommand', 'the command storage type belongs to the library namespace';
+    ok StoredEvent === RedSourcing::StoredEvent, 'the short event name aliases the canonical type';
+    ok StoredCommand === RedSourcing::StoredCommand, 'the short command name aliases the canonical type';
+    is StoredEvent.^table, 'red_sourcing_event', 'events use the renamed table';
+    is StoredCommand.^table, 'red_sourcing_command', 'commands use the renamed table';
+    my $account = EntryPointAccount.^with-ids(:id(7));
+    $account.^create;
+    is $account.add(:amount(3)), 3, 'the entry point exposes entity-id and command traits';
+    my $pending = $account.add(:amount(2), :!sync);
+    isa-ok $pending, StoredCommand, 'the stored command type is available';
+    is $pending.state, StoredCommand::State::Pending, 'the command enum remains accessible';
+    is $pending.run, 5, 'deferred execution works';
+    is $pending.run, 5, 'completed commands reuse the saved result';
+    my $manual = EntryPointCommand.new(:amount(4)).emit(
+        :entity('EntryPointAccount'), :entity-ids(%(id => 7)),
+        :method<add>, :stream($account.^stream-name),
+    );
+    is $manual.run, 9, 'the Command role can emit a record for a handler';
+    is StoredEvent.list-events(:types[EntryPointMovement]).head.client-id, 7,
+        'the mapping trait populates the event identity';
+};
+
+subtest 'one import exposes rules and preserves SQL and native operator dispatch' => {
+    EntryPointMovement.new(:client-id(8), :amount(100)).emit(:stream<another>, :version(1));
+    my $proxy = EntryPointBalance.^with-ids(:client-id(7));
+    is $proxy.^load.total, 9, 'signature predicates filter foreign streams in SQL';
+    my $projection = $proxy.^load;
+    my @rules = rules-from-func($projection, $projection.^find_method('APPLY'));
+    is StoredEvent.list-events(|@rules).elems, 3, 'the rule helper is exported';
+    ok resolve-class('EntryPointAccount') === EntryPointAccount, 'type resolution is exported';
+    $projection.^emit-snapshot;
+    is $proxy.^load.total, 9, 'the projection restores its checkpoint';
+    is StoredEvent.^all.grep(*.data<client-id> eqv 8).elems, 1,
+        'Red JSON equality still translates to SQL';
+    ok %(a => [1, 2]) eqv %(a => [1, 2]), 'native equivalence still works';
+    throws-like {
+        EntryPointMovement.emit(:client-id(8), :amount(100), :stream<another>, :version(1));
+    }, RedSourcing::X::OptimisticLockFailed, 'storage exceptions remain accessible';
+};
+
+done-testing;

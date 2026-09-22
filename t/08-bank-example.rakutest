@@ -1,0 +1,181 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/bank').Str;
+use Red;
+use RedSourcing;
+use RedSourcing::StoredCommand;
+use RedSourcing::Utils;
+use Account;
+use Balance;
+use MonthlyStatement;
+use BankTotals;
+use BankEvents;
+
+my $*RED-DB;
+sub account(Int $id) { Account.^with-ids(:client-id($id)) }
+sub fresh-bank {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    account(1).^create;
+    account(2).^create;
+}
+sub funded-bank {
+    fresh-bank;
+    account(1).deposit(:amount(100.00), :timestamp<2026-09-30T12:00:00Z>);
+    account(2).deposit(:amount(20.00), :timestamp<2026-09-30T12:00:00Z>);
+}
+sub statement(Int $id) {
+    MonthlyStatement.^with-ids(:client-id($id))
+}
+
+subtest 'transfers update both aggregates and projections without counting credits twice' => {
+    funded-bank;
+    my %result = account(1).transfer(:to-client(2), :amount(25.50),
+        :timestamp<2026-10-05T12:00:00Z>);
+    is %result<remaining>, 74.50, 'the caller receives the remaining source balance';
+    is account(1).^load.amount, 74.50, 'the source stream records its debit';
+    is account(2).^load.amount, 45.50, 'the destination stream records its credit';
+    is account(1).^load.^version, 3, 'the debit follows the source stream version';
+    is account(2).^load.^version, 3, 'the credit follows the destination stream version';
+    my @transfers = StoredEvent.list-events(:types[Transaction]);
+    my @credits = StoredEvent.list-events(:types[TransferReceived]);
+    is @transfers.elems, 1, 'there is one canonical transfer';
+    is @credits.elems, 1, 'there is one recipient credit';
+    is @credits.head.transaction-id, %result<transaction-id>, 'the credit references the canonical row';
+    isa-ok @transfers.head.timestamp, DateTime, 'stored timestamp strings reconstruct as DateTime';
+    is @transfers.head.period, 202610, 'events derive their numeric period from the timestamp';
+    nok @transfers.head.StoredEvent.data<period>:exists, 'the derived period is not stored in the payload';
+    is Balance.^with-ids(:client-id(1)).^load.amount, 74.50, 'the source balance projection agrees';
+    is Balance.^with-ids(:client-id(2)).^load.amount, 45.50, 'the recipient balance projection agrees';
+    my $monthly = statement(1).^load;
+    is $monthly.balance-by-month{202609}, 100.00, 'September retains its closing balance';
+    is $monthly.balance-by-month{202610}, 74.50, 'October closing balance includes the debit';
+    is $monthly.transactions-by-month{202610}.elems, 1, 'October has its own list of entries';
+    is $monthly.transactions-by-month{202610}.head<direction>, 'outgoing', 'the source entry is a debit';
+    is $monthly.transactions-by-month{202610}.head<total>, 74.50, 'the entry records the balance after the debit';
+    is statement(2).^load.transactions-by-month{202610}.head<direction>, 'incoming', 'the recipient entry is a credit';
+    is statement(1).^load.amount, 74.50, 'the loaded projection exposes its query methods';
+    is statement(1).^load.amount-on-month(:period(202610)), 74.50, 'the monthly query accepts a named period';
+    my $totals = BankTotals.^with-ids.^load;
+    is $totals.deposited, 120.00, 'transfers preserve total funded money';
+    is $totals.transferred, 25.50, 'the bank projection counts transfer volume once';
+    is $totals.transfers, 1, 'the recipient credit does not become a second transfer';
+};
+
+subtest 'invalid transfers preserve balances and do not emit financial events' => {
+    funded-bank;
+    my $before = StoredEvent.^all.elems;
+    throws-like { account(1).transfer(:to-client(2), :amount(1000.00)) }, X::AdHoc,
+        message => 'Insufficient funds in account 1', 'insufficient funds are rejected';
+    throws-like { account(1).transfer(:to-client(999), :amount(1.00)) }, X::AdHoc,
+        message => 'Target account 999 does not exist', 'a missing recipient is rejected';
+    throws-like { account(1).transfer(:to-client(1), :amount(1.00)) }, X::AdHoc,
+        message => 'Cannot transfer to the same account', 'a self-transfer is rejected';
+    is StoredEvent.^all.elems, $before, 'failed commands write no events';
+    is account(1).^load.amount, 100.00, 'the sender balance is unchanged';
+    is account(2).^load.amount, 20.00, 'the recipient balance is unchanged';
+    my @failed = account(1).^list-commands(:state(StoredCommand::State::Failed));
+    is @failed.elems, 3, 'execution failures remain recorded as terminal failed commands';
+    ok @failed.all.error.defined, 'the rejection reasons are persisted';
+    my $command-count = StoredCommand.^all.elems;
+    for 0.0, -1.0, 0.001 -> $amount {
+        dies-ok { account(1).transfer(:to-client(2), :$amount) },
+            'nonpositive amounts and fractional cents fail before persistence';
+    }
+    is StoredCommand.^all.elems, $command-count, 'invalid payloads do not create command records';
+};
+
+subtest 'a recipient append failure rolls back the sender append' => {
+    funded-bank;
+    my $before = StoredEvent.^all.elems;
+    my $pending = account(1).transfer(:to-client(2), :amount(5.00), :!sync);
+    {
+        $*RED-DB.prepare(q:to/SQL/).execute;
+            CREATE TRIGGER reject_receipt BEFORE INSERT ON red_sourcing_event
+            WHEN NEW.class = 'BankEvents::TransferReceived'
+            BEGIN
+                SELECT RAISE(ABORT, 'recipient write failed');
+            END
+            SQL
+        LEAVE $*RED-DB.prepare('DROP TRIGGER reject_receipt').execute;
+        throws-like { $pending.run }, Exception, message => /'recipient write failed'/,
+            'a destination insert failure propagates';
+    }
+    is StoredEvent.^all.elems, $before, 'the already-written source debit rolls back';
+    is account(1).^load.amount, 100.00, 'the sender retains its funds';
+    is account(2).^load.amount, 20.00, 'the recipient retains its balance';
+    is account(1).transfer(:to-client(2), :amount(5.00))<remaining>, 95.00,
+        'an explicit new submission can succeed after the failed attempt';
+    is account(2).^load.amount, 25.00, 'the successful retry credits the destination once';
+};
+
+subtest 'monthly checkpoints restore all periods and replay later events once' => {
+    funded-bank;
+    account(1).transfer(:to-client(2), :amount(25.50), :timestamp<2026-10-05T12:00:00Z>);
+    my $projection = statement(1).^load;
+    my $snapshot = $projection.^emit-snapshot;
+    my $pending = account(2).transfer(:to-client(1), :amount(5.25),
+        :timestamp<2026-10-06T12:00:00Z>, :!sync);
+    is account(1).^load.amount, 74.50, 'a deferred command does not move money yet';
+    $pending.run;
+    $pending.run;
+    account(1).deposit(:amount(10.00), :timestamp<2026-10-07T12:00:00Z>);
+    account(1).transfer(:to-client(2), :amount(2.00), :timestamp<2026-11-01T12:00:00Z>);
+    my $restored = statement(1).^load;
+    is $restored.balance-by-month{202609}, 100.00, 'September closing balance survives the checkpoint';
+    is $restored.balance-by-month{202610}, 89.75, 'October includes the later credit and deposit';
+    is $restored.balance-by-month{202611}, 87.75, 'November starts from the October balance';
+    is $restored.balance, 87.75, 'the same projection also tracks the current balance';
+    is-deeply $restored.transactions-by-month{202610}.map(*.<direction>).Array,
+        ['outgoing', 'incoming', 'deposit'],
+        'checkpoint restoration and repeated execution do not duplicate entries';
+    is-deeply $restored.transactions-by-month{202610}.map(*.<total>).Array,
+        [74.50, 79.75, 89.75], 'each entry records its running balance';
+    is $restored.transactions-by-month{202609}.elems, 1, 'checkpoint entries remain in September';
+    is $restored.transactions-by-month{202611}.elems, 1, 'new periods receive their own entry lists';
+    ok $restored.^current-id > $snapshot.replay-cursor, 'the checkpoint cursor advances to new applicable events';
+    ok $restored.balance-by-month.keys.all ~~ UInt, 'JSON snapshot keys reconstruct as UInt';
+    ok $restored.transactions-by-month.keys.all ~~ UInt, 'entry-list keys also reconstruct as UInt';
+    my $query = statement(1).^load;
+    is $query.amount-on-month(:period(202610)), 89.75, 'a read method accepts its period argument';
+    is $query.amount-on-month(:period(202610)), 89.75, 'repeated reads preserve derived state';
+    is statement(1).^load.amount, 87.75, 'the current query includes all periods';
+    nok statement(1).^load.amount-on-month(:period(202612)).defined,
+        'a period with no events has no stored closing balance';
+    my $empty = statement(999).^load;
+    is $empty.balance, 0.00, 'a client with no history starts at zero';
+    is $empty.balance-by-month.elems, 0, 'a client without events has no monthly balances';
+    is $empty.transactions-by-month.elems, 0, 'a client without events has no monthly entries';
+};
+
+subtest 'Rat balances survive decimal arithmetic, full transfers and snapshot restoration' => {
+    fresh-bank;
+    account(1).deposit(:amount(0.10));
+    account(1).deposit(:amount(0.20));
+    is-deeply account(1).^load.amount, 0.30, 'decimal sums remain exact Rat values';
+    account(1).transfer(:to-client(2), :amount(0.30));
+    is-deeply account(1).^load.amount, 0.0, 'the complete available balance can be transferred';
+    is-deeply account(2).^load.amount, 0.30, 'the recipient receives the exact rational amount';
+    my $snapshot = account(2).^load.^emit-snapshot;
+    isa-ok $snapshot.COERCE.amount, Rat, 'account checkpoints reconstruct Rat balances';
+    my $balance = Balance.^with-ids(:client-id(2)).^load;
+    my $checkpoint = $balance.^emit-snapshot;
+    is-deeply $checkpoint.COERCE.balance, 0.30, 'projection checkpoints also reconstruct exact Rat balances';
+    my $monthly = statement(2).^load;
+    my $period = StoredEvent.list-events(:types[Transaction]).head.period;
+    my $monthly-checkpoint = $monthly.^emit-snapshot;
+    is-deeply $monthly-checkpoint.COERCE.balance-by-month{$period}, 0.30,
+        'monthly checkpoint values reconstruct as exact Rat balances';
+    is $monthly-checkpoint.COERCE.transactions-by-month{$period}.elems, 1,
+        'a one-entry month reconstructs as a list';
+};
+
+subtest 'stored type resolution supports unit types, module members and missing types' => {
+    ok resolve-class('Account') === Account, 'unit aggregate types resolve outside their importing scope';
+    ok resolve-class('BankEvents::Transaction') === Transaction, 'classes exported by a parent module resolve';
+    throws-like { resolve-class('BankExampleMissingType') }, X::CompUnit::UnsatisfiedDependency,
+        'an unknown class reports its missing dependency';
+    throws-like { resolve-class('BankEvents::MissingType') }, X::CompUnit::UnsatisfiedDependency,
+        'a loaded parent module cannot substitute for a missing class';
+};
+
+done-testing;

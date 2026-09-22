@@ -1,0 +1,63 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Inspector;
+use RedSourcing::Web::Metrics;
+use RedSourcing::Web::Charts;
+
+red-defaults 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $now = DateTime.new('2026-10-11T12:05:20Z');
+my @instances = %(stream => 'account/a', type => 'Account', kind => 'aggregate'),
+    %(stream => 'Saga: id = a', type => 'Saga', kind => 'saga');
+sub emit-row(Str $class, Str $stream, UInt $version, Str $mro, %data, Int $seconds) {
+    StoredEvent.^create(:$class, :$stream, :$version, :$mro, :data(%data), :created($now.earlier(:$seconds)))
+}
+emit-row('Account', 'account/a', 1, '|Entity|', %(amount => 0), 300);
+emit-row('Deposit', 'account/a', 2, '|Event|', %(amount => 1), 80);
+emit-row('Account', 'account/a', 3, '|Entity|', %(amount => 1), 60);
+emit-row('Deposit', 'account/a', 4, '|Event|', %(amount => 1), 5);
+sub state(UInt $attempts, Str $status) {
+    %(status => 'running', actions => [%(id => 'action/1', attempts => $attempts, :$status).item],
+        timers => {}, compensations => [])
+}
+emit-row('RedSourcing::Saga::StateChanged', 'Saga: id = a', 1, '|RedSourcing::Saga::Control|',
+    %(state => state(1, 'running'), values => {}, cursor => 2), 80);
+emit-row('RedSourcing::Saga::StateChanged', 'Saga: id = a', 2, '|RedSourcing::Saga::Control|',
+    %(state => state(1, 'retry'), values => {}, cursor => 2), 75);
+emit-row('RedSourcing::Saga::StateChanged', 'Saga: id = a', 3, '|RedSourcing::Saga::Control|',
+    %(state => state(2, 'running'), values => {}, cursor => 2), 40);
+emit-row('RedSourcing::Saga::StepFailed', 'Saga: id = a', 4, '|RedSourcing::Saga::Control|',
+    %(state => state(2, 'blocked'), values => {}, cursor => 2, action-id => 'action/1'), 30);
+emit-row('Saga', 'Saga: id = a', 5, '|Entity|', %(saga-state => state(2, 'blocked')), 20);
+StoredCommand.^create(:stream<account/a>, :entity<Account>, :entity-ids{ :id<a> },
+    :method<deposit>, :class<Deposit>, :state(StoredCommand::Failed), :tries(1), :error<Rejected>, :data{});
+StoredCommand.^create(:stream<account/a>, :entity<Account>, :entity-ids{ :id<a> },
+    :method<deposit>, :class<Deposit>, :state(StoredCommand::Pending), :data{});
+StoredCommand.^create(:stream<account/a>, :entity<Account>, :entity-ids{ :id<a> },
+    :method<deposit>, :class<Deposit>, :state(StoredCommand::Processing), :tries(3), :data{});
+my %m = store-metrics(:@instances, :minutes(3), :$now);
+is %m<series>.elems, 3, 'minute buckets include idle minutes';
+is %m<totals><events>, 2, 'domain events exclude snapshots and controls';
+is %m<totals><snapshots>, 3, 'snapshot total covers full history';
+is ([+] %m<series>.map(*.<snapshots>)), 2, 'window excludes old snapshots';
+is ([+] %m<series>.map(*.<retries>)), 1, 'retry transition is counted once despite later controls and snapshot';
+is %m<totals><retries>, 3, 'saga retry and command additional attempts are counted once';
+is %m<totals><failures>, 1, 'failed commands are counted separately from saga outcomes';
+is %m<totals><saga-failures>, 1, 'final saga failure is counted';
+is %m<totals><pending>, 1, 'pending backlog';
+is %m<totals><processing>, 1, 'processing backlog';
+is %m<totals><blocked>, 1, 'blocked saga actions';
+is %m<mean-events-per-entity>, 1, 'average domain events per identified owning stream';
+my %account = %m<entities>.first(*.<stream> eq 'account/a');
+is %account<events-since-snapshot>, 1, 'own-stream snapshot gap';
+is %account<snapshots-per-minute>, 1/3, 'per-entity snapshot frequency uses the selected window';
+is %account<failure-percent>, 100/3, 'failure rate denominator is submitted commands';
+my $html = metrics-view(%m, :sort<failures>);
+ok $html.contains('role="img"'), 'graphs expose accessible SVGs';
+ok $html.contains('Saga retries / minute'), 'retry chart exists';
+ok $html.contains('Failures by entity'), 'entity failure chart exists';
+ok $html.contains('Snapshots / minute'), 'snapshot chart exists';
+ok $html.contains('snapshot-only history'), 'timing limits are disclosed';
+dies-ok { store-metrics(:minutes(0)) }, 'zero-minute window rejected';
+dies-ok { store-metrics(:minutes(1441)) }, 'unbounded window rejected';
+done-testing;

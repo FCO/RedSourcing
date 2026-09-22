@@ -1,0 +1,239 @@
+use Test;
+use File::Temp;
+use lib $?FILE.IO.parent.parent.add('examples/shopping-cart').Str;
+use RedSourcing;
+use Cart;
+use CartEvents;
+use CartReminder;
+
+my $*RED-DB;
+sub cart(Str $id = 'ana') { Cart.^with-ids(:cart-id($id)) }
+sub reminder(Str $id = 'ana') { AbandonedCartReminder.^with-ids(:cart-id($id)) }
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    register-cart-reminder-email;
+    for <ana bob> -> $id {
+        cart($id).^create;
+        reminder($id).^create(:email("$id\@example.test"));
+    }
+}
+sub add(Str $id = 'ana') { cart($id).add-item(:product-id<coffee>, :name<Coffee>, :unit-price(12.50)) }
+sub date(Numeric $epoch) {
+    my $reference = now;
+    DateTime.new($reference + ($epoch - $reference.Num))
+}
+sub deadline($workflow) { $workflow.^state<timers><abandoned-cart><due> }
+sub emails { StoredEvent.list-events(:types[ReminderEmailSent]).Array }
+
+subtest 'one reminder fires at 24 hours and survives checkpoint restoration without another email' => {
+    fresh;
+    add;
+    my $workflow = reminder().^advance;
+    my $due = deadline($workflow);
+    cmp-ok abs($due - ($workflow.last-activity + 86400)), '<', 0.001,
+        'deadline is anchored to emission time';
+    is $workflow.item-count, 1, 'saga tracks cart contents';
+    $workflow.^emit-snapshot;
+    is reminder().^load.email, 'ana@example.test', 'snapshot retains the recipient';
+    is deadline(reminder().^load), $due, 'snapshot retains the absolute deadline';
+    reminder().^check-timeouts(:now(date($due - 1)));
+    is emails().elems, 0, 'no email before the day has elapsed';
+    $workflow = reminder().^advance(:now(date($due + 1)));
+    is emails().elems, 1, 'email is simulated at the deadline';
+    is emails().head.email, 'ana@example.test', 'the reminder uses the configured recipient';
+    ok $workflow.reminded, 'service success is applied to persisted saga state';
+    is $workflow.^status, 'completed', 'a sent reminder ends the workflow';
+    is $workflow.^state<compensations>.elems, 0, 'a sent email has no compensation';
+    $workflow.^emit-snapshot;
+    reminder().^advance(:now(date($due + 86400)));
+    is emails().elems, 1, 'later controller passes and snapshots do not repeat delivery';
+    is reminder().^load.message-id, emails().head.message-id, 'the delivery result survives replay';
+};
+subtest 'activity replaces the deadline and unchanged quantities do not reset it' => {
+    fresh;
+    add;
+    my $workflow = reminder().^advance;
+    my $before = $workflow.activity-id;
+    my $original = deadline($workflow);
+    cart().set-quantity(:product-id<coffee>, :quantity(1));
+    $workflow = reminder().^advance;
+    is $workflow.activity-id, $before, 'a command without an event is not new activity';
+    is deadline($workflow), $original, 'a no-op retains the existing deadline';
+    cart().set-quantity(:product-id<coffee>, :quantity(3));
+    $workflow = reminder().^advance;
+    cmp-ok $workflow.activity-id, '>', $before, 'a quantity change records a new activity identity';
+    is $workflow.item-count, 3, 'quantity changes update the reminder state';
+    cmp-ok deadline($workflow), '>', $original, 'new activity replaces the deadline';
+    is $workflow.^state<timers>.elems, 1, 'there is only one named timer';
+};
+subtest 'empty and checked-out carts never receive reminders, including a late first controller pass' => {
+    fresh;
+    is reminder().^advance.^state<timers>.elems, 0, 'a never-used cart has no timer';
+    add;
+    my $workflow = reminder().^advance;
+    my $due = deadline($workflow);
+    cart().remove-item(:product-id<coffee>);
+    $workflow = reminder().^advance(:now(date($due + 1)));
+    is $workflow.item-count, 0, 'removing the last item empties the saga view';
+    is $workflow.^state<timers>.elems, 0, 'emptying the cart cancels the timer';
+    is emails().elems, 0, 'an already expired reminder is still cancelled before delivery';
+    add;
+    $workflow = reminder().^advance;
+    cart().checkout;
+    $workflow = reminder().^advance(:now(date(deadline($workflow) + 1)));
+    ok $workflow.checked-out, 'checkout is applied before checking the deadline';
+    is $workflow.^status, 'completed', 'checkout closes an idle reminder workflow';
+    is emails().elems, 0, 'checkout prevents delivery';
+    add('bob');
+    cart('bob').checkout;
+    reminder('bob').^advance(:now(date($due + 86400)));
+    is emails().elems, 0, 'first catch-up consumes checkout before an overdue timer';
+};
+subtest 'a late controller uses journal time and each saga filters its own cart' => {
+    fresh;
+    add;
+    my $last = StoredEvent.list-events(:types[ItemAdded]).head;
+    my $late = $last.emitted-at.later(:seconds(86401));
+    my $bob = reminder('bob').^advance(:now($late));
+    is $bob.item-count, 0, 'another cart does not consume the addition';
+    is $bob.^state<timers>.elems, 0, 'another cart gets no timeout';
+    my $ana = reminder().^advance(:now($late));
+    is emails().elems, 1, 'an already abandoned cart is reminded on the first controller pass';
+    ok $ana.reminded, 'late delivery completes normally';
+    add('bob');
+    $bob = reminder('bob').^advance;
+    reminder('bob').^advance(:now(date(deadline($bob) + 1)));
+    is-deeply emails().map(*.cart-id).sort.Array, ['ana', 'bob'], 'cart reminders are isolated';
+};
+subtest 'queued work is revalidated when checkout or new activity happens before delivery' => {
+    fresh;
+    add;
+    my $workflow = reminder().^advance;
+    my $due = deadline($workflow);
+    $workflow = reminder().^advance(:now(date($due + 1)), :limit(0));
+    is $workflow.^state<actions>.head<status>, 'pending', 'the timeout durably queues delivery';
+    is emails().elems, 0, 'queuing does not deliver';
+    cart().checkout;
+    # Use the next controller tick: repeated floating Instant -> DateTime
+    # conversions can straddle the newly queued action's due time by a fraction
+    # of a microsecond. This scenario tests stale-work validation, not that edge.
+    $workflow = reminder().^advance(:now(date($due + 2)));
+    is emails().elems, 0, 'delivery adapter suppresses a queued email after checkout';
+    is $workflow.^state<actions>.head<attempts>, 1, 'queued delivery was actually checked by the adapter';
+    is $workflow.^status, 'completed', 'the skipped action settles the closed workflow';
+    nok $workflow.^state<actions>.head<result><sent>, 'skipped delivery is explicit in the saved result';
+
+    add('bob');
+    my $bob = reminder('bob').^advance;
+    my $old-id = $bob.activity-id;
+    my $bob-due = deadline($bob);
+    reminder('bob').^advance(:now(date($bob-due + 2)), :limit(0));
+    add('bob');
+    $bob = reminder('bob').^advance(:now(date($bob-due + 3)));
+    is emails().elems, 0, 'new activity invalidates the previously queued reminder';
+    cmp-ok $bob.activity-id, '>', $old-id, 'latest activity is retained';
+    is $bob.^state<actions>.head<status>, 'done', 'stale delivery is settled rather than retried forever';
+    is $bob.^state<timers>.elems, 1, 'skipped stale work schedules the current inactivity window';
+    reminder('bob').^advance(:now(date(deadline($bob) + 1)));
+    is emails().elems, 1, 'the new inactivity window sends its own reminder';
+};
+subtest 'retry state persists and a provider receipt prevents duplicate delivery after lost acknowledgement' => {
+    fresh;
+    my &adapter = RedSourcing::Saga::service-adapter('cart-reminder-email');
+    my @keys;
+    register-service 'cart-reminder-email', sub (Str $operation, Capture $arguments, Str :$idempotency-key!) {
+        @keys.push($idempotency-key);
+        my $result = adapter($operation, $arguments, :$idempotency-key);
+        die Uncertain.new(:message('Provider accepted email but acknowledgement was lost')) if @keys.elems == 1;
+        $result
+    };
+    add;
+    my $workflow = reminder().^advance;
+    my $due = deadline($workflow);
+    $workflow = reminder().^advance(:now(date($due + 1)));
+    is emails().elems, 1, 'the simulated provider already accepted delivery';
+    is $workflow.^state<actions>.head<status>, 'retry', 'lost acknowledgement records a retry';
+    $workflow.^emit-snapshot;
+    reminder().^advance(:now(date($due + 299)));
+    is @keys.elems, 1, 'the controller does not run retries early';
+    $workflow = reminder().^advance(:now(date($due + 302)));
+    is @keys.elems, 2, 'the delayed retry executes after restoration';
+    is @keys[0], @keys[1], 'both attempts use the same idempotency key';
+    is emails().elems, 1, 'provider receipt prevents a second email';
+    ok $workflow.reminded, 'retry acknowledges the existing delivery';
+    is $workflow.^status, 'completed', 'successful acknowledgement closes the workflow';
+};
+subtest 'exhausted definite failures abort without pretending that an email can be undone' => {
+    fresh;
+    my $attempts = 0;
+    register-service 'cart-reminder-email', sub (|) {
+        ++$attempts;
+        die Retryable.new(:message('Demo email provider is unavailable'));
+    };
+    add;
+    my $workflow = reminder().^advance;
+    my $due = deadline($workflow);
+    reminder().^advance(:now(date($due + 1)));
+    reminder().^advance(:now(date($due + 302)));
+    $workflow = reminder().^advance(:now(date($due + 604)));
+    is $attempts, 3, 'the policy allows three total attempts';
+    is $workflow.^status, 'compensated', 'terminal definite failure aborts the workflow';
+    is $workflow.^state<compensations>.elems, 0, 'emails never create an inverse operation';
+    is emails().elems, 0, 'definite failed attempts send no email';
+};
+subtest 'a new controller process acknowledges durable delivery after the last snapshot' => {
+    my $repo = $?FILE.IO.parent.parent;
+    my $tmp = tempdir.IO;
+    my $database = $tmp.add('reminders.db');
+    my $setup = q:to/CODE/;
+        use RedSourcing;
+        use Cart;
+        use CartReminder;
+        red-defaults 'SQLite', :database(@*ARGS[0]);
+        my $proxy = AbandonedCartReminder.^with-ids(:cart-id<restart>);
+        CODE
+    my $first-code = $setup ~ q:to/CODE/;
+        schema(StoredEvent, StoredCommand).create;
+        my $cart = Cart.^with-ids(:cart-id<restart>);
+        $cart.^create;
+        $proxy.^create(:email<restart@example.test>);
+        $cart.add-item(:product-id<mug>, :name<Mug>, :unit-price(8.90));
+        $proxy.^advance.^emit-snapshot;
+        my &provider = RedSourcing::Saga::service-adapter('cart-reminder-email');
+        register-service 'cart-reminder-email', sub (|arguments) {
+            provider(|arguments);
+            die Uncertain.new(:message('Acknowledgement lost before restart'));
+        };
+        my $workflow = $proxy.^advance(:now(DateTime.now.later(:days(2))));
+        say $workflow.^state<actions>.head<status>;
+        say StoredEvent.list-events(:types[ReminderEmailSent]).elems;
+        CODE
+    my $second-code = $setup ~ q:to/CODE/;
+        say $proxy.^load.^state<actions>.head<status>;
+        say StoredEvent.list-events(:types[ReminderEmailSent]).elems;
+        my $workflow = $proxy.^advance(:now(DateTime.now.later(:days(3))));
+        say $workflow.^status;
+        say StoredEvent.list-events(:types[ReminderEmailSent]).elems;
+        CODE
+    for [$first-code, "retry\n1\n"], [$second-code, "retry\n1\ncompleted\n1\n"] -> @case {
+        my $process = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('examples/shopping-cart')}",
+            '-e', @case[0], $database.Str, :cwd($tmp), :out, :err;
+        is $process.exitcode, 0, 'controller process completes';
+        is $process.err.slurp(:close), '', 'controller has no unexpected diagnostics';
+        is $process.out.slurp(:close), @case[1], 'persisted retry and provider receipt recover without duplicate email';
+    }
+};
+
+subtest 'the documented demo exercises the reminder without sleeping for a day' => {
+    my $repo = $?FILE.IO.parent.parent;
+    my $result = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('examples/shopping-cart')}",
+        $repo.add('examples/shopping-cart/main.raku').Str, :out, :err;
+    is $result.exitcode, 0, 'demo runs';
+    my $out = $result.out.slurp(:close);
+    is $result.err.slurp(:close), '', 'demo is quiet apart from its normal output';
+    like $out, /'Sales: 2 orders, 5 units, revenue 37.75'/, 'existing cart demo is preserved';
+    like $out, /'Simulated email to carol@example.test'/, 'the new demo includes the reminder';
+    like $out, /'Emails after another controller pass: 1'/, 'the new demo shows one-time delivery';
+};
+done-testing;

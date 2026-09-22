@@ -1,0 +1,86 @@
+name: redsourcing-real-estate
+x-store: &store
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGDATABASE: hearth
+  PGUSER: estate
+  PGPASSWORD: ${POSTGRES_PASSWORD:-estate-example}
+# Installed framework changes rebuild the shared image; mounted example
+# changes restart long-running processes without re-running one-shot demos.
+x-runtime: &runtime
+  image: redsourcing:local
+  build:
+    context: ../..
+  develop:
+    watch:
+      - action: restart
+        path: .
+        ignore:
+          - "**/.precomp/"
+          - ".precomp/"
+          - "*.db"
+          - "*.db-*"
+          - "compose.yaml"
+          - "README.md"
+      - action: rebuild
+        path: ../../lib
+        ignore: ["**/.precomp/", ".precomp/"]
+      - action: rebuild
+        path: ../../resources
+      - action: rebuild
+        path: ../../bin
+      - action: rebuild
+        path: ../../META6.json
+      - action: rebuild
+        path: ../../Dockerfile
+      - action: rebuild
+        path: ../../.dockerignore
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: hearth
+      POSTGRES_USER: estate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-estate-example}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql
+  app:
+    <<: *runtime
+    entrypoint: ["raku", "-Ilib", "main.raku"]
+    command: ["--host=0.0.0.0", "--port=3000"]
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment: *store
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    init: true
+  monitor:
+    <<: *runtime
+    command: ["web-monitor", "--host=0.0.0.0", "--port=3001", "--app-url=http://127.0.0.1:${APP_PORT:-3000}/"]
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment: *store
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MONITOR_PORT:-3001}:3001"
+    init: true
+volumes:
+  postgres-data:

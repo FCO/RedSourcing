@@ -1,0 +1,282 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/food-delivery').Str;
+use RedSourcing;
+use Restaurant;
+use DeliveryOrder;
+use DeliveryEvents;
+use CustomerOrders;
+use RestaurantBoard;
+use DeliveryTotals;
+
+my $*RED-DB;
+sub restaurant(Str $id = 'green-kitchen') { Restaurant.^with-ids(:restaurant-id($id)) }
+sub order(Str $id = 'order-1001') { DeliveryOrder.^with-ids(:order-id($id)) }
+sub customer(Str $id = 'ana') { CustomerOrders.^with-ids(:customer-id($id)) }
+sub board(Str $id = 'green-kitchen') { RestaurantBoard.^with-ids(:restaurant-id($id)) }
+sub fresh-service {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    restaurant().^create(:name('Green Kitchen'));
+    restaurant().set-menu-item(:item-id<bowl>, :name('Rice bowl'), :unit-price(12.50));
+    restaurant().set-menu-item(:item-id<juice>, :name('Orange juice'), :unit-price(3.25));
+    restaurant().open-for-orders;
+    order().^create;
+}
+sub place(Str $id = 'order-1001', Str $customer-id = 'ana', Str $restaurant-id = 'green-kitchen') {
+    order($id).place-order(:$restaurant-id, :$customer-id,
+        :address('10 Market Street'), :items{ bowl => 2, juice => 1 })
+}
+sub ready(Str $id = 'order-1001') {
+    order($id).accept;
+    order($id).mark-ready;
+}
+sub complete(Str $id = 'order-1001') {
+    ready($id);
+    order($id).assign-courier(:courier-id<sam>);
+    order($id).pick-up(:courier-id<sam>);
+    order($id).deliver(:courier-id<sam>);
+}
+
+subtest 'restaurant commands restore the menu and enforce valid prices' => {
+    fresh-service;
+    my $count = StoredCommand.^all.elems;
+    for 0.0, -1.0, 0.001 -> $unit-price {
+        dies-ok { restaurant().set-menu-item(:item-id<x>, :name<X>, :$unit-price) },
+            'prices must be positive whole cents';
+    }
+    dies-ok { restaurant().set-menu-item(:item-id(''), :name<X>, :unit-price(1.00)) },
+        'menu item IDs cannot be empty';
+    is StoredCommand.^all.elems, $count, 'argument constraints run before persistence';
+    restaurant().^load.^emit-snapshot;
+    restaurant().set-menu-item(:item-id<juice>, :name('Fresh juice'), :unit-price(3.50));
+    my $loaded = restaurant().^load;
+    is $loaded.name, 'Green Kitchen', 'creation stores the restaurant name';
+    is $loaded.menu<juice><name>, 'Fresh juice', 'the menu replays updates after a snapshot';
+    is-deeply $loaded.menu<juice><unit-price>, 3.50, 'menu prices remain exact decimals';
+    nok restaurant().close-for-orders, 'the restaurant can stop accepting new orders';
+    nok restaurant().^load.open, 'closing is persisted';
+    restaurant('empty').^create(:name('Empty Kitchen'));
+    throws-like { restaurant('empty').open-for-orders }, X::AdHoc,
+        message => /'no available menu items'/, 'an empty restaurant cannot open';
+    restaurant('empty').set-menu-item(:item-id<meal>, :name<Meal>, :unit-price(1.00), :!available);
+    dies-ok { restaurant('empty').open-for-orders }, 'an unavailable menu cannot open';
+    nok restaurant('empty').^load.open, 'restaurant streams remain independent';
+};
+
+subtest 'placing an order records authoritative prices and customer-specific views' => {
+    fresh-service;
+    my %receipt = place;
+    is %receipt<status>, 'placed', 'the caller receives the applied state';
+    is-deeply %receipt<subtotal>, 28.25, 'the menu supplies exact line prices';
+    is-deeply %receipt<delivery-fee>, 2.50, 'the receipt includes the delivery fee';
+    is-deeply %receipt<total>, 30.75, 'the receipt includes food and delivery';
+    is-deeply %receipt<items>.map(*.<item-id>).Array, ['bowl', 'juice'],
+        'receipt lines have stable item order';
+    is %receipt<items>[0]<quantity>, 2, 'line quantities are retained';
+    my $event = StoredEvent.list-events(:types[OrderPlaced]).head;
+    is $event.order-id, 'order-1001', 'the generated emitter fills the entity ID';
+    is $event.items.elems, 2, 'the persisted event contains a flat array of lines';
+    is $event.items[0]<name>, 'Rice bowl', 'event coercion preserves nested line data';
+    is $event.StoredEvent.stream, order().^stream-name, 'the event stays in the order stream';
+    restaurant().set-menu-item(:item-id<bowl>, :name('New bowl'), :unit-price(99.00));
+    is order().^load.items[0]<name>, 'Rice bowl', 'later menu edits do not rewrite the receipt';
+    is order().^load.total, 30.75, 'the agreed price does not change';
+    is customer().^load.tracking(:order-id<order-1001>)<total>, 30.75,
+        'the customer projection reconstructs the receipt';
+    is customer().^load.orders-list.elems, 1, 'the customer can list their orders';
+    is customer('bob').^load.orders-list.elems, 0, 'another customer has no matching orders';
+    dies-ok { customer('bob').^load.tracking(:order-id<order-1001>) },
+        'tracking does not return another customer\'s order';
+    is board().^load.active-orders.head<order-id>, 'order-1001', 'the kitchen board finds its order';
+    is board('other-kitchen').^load.active-orders.elems, 0, 'another restaurant board remains empty';
+};
+
+subtest 'invalid orders append no business events' => {
+    fresh-service;
+    my $commands = StoredCommand.^all.elems;
+    dies-ok { order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address(''), :items{bowl => 1}) }, 'an address is required';
+    dies-ok { order().place-order(:restaurant-id<green-kitchen>, :customer-id(''),
+        :address<A>, :items{bowl => 1}) }, 'a customer identity is required';
+    dies-ok { order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{}) }, 'an order needs at least one line';
+    is StoredCommand.^all.elems, $commands, 'invalid outer arguments are not enqueued';
+    my $events = StoredEvent.^all.elems;
+    for 0, -1, 1.5, 'two' -> $quantity {
+        throws-like { order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+            :address<A>, :items{bowl => $quantity}) }, X::AdHoc,
+            message => /'positive integer'/, 'each line needs a positive integer quantity';
+    }
+    throws-like { order().place-order(:restaurant-id<missing>, :customer-id<ana>,
+        :address<A>, :items{bowl => 1}) }, X::AdHoc,
+        message => /'does not exist'/, 'the restaurant must have an initial snapshot';
+    throws-like { order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{missing => 1}) }, X::AdHoc,
+        message => /'not on the menu'/, 'unknown items are rejected';
+    is StoredEvent.^all.elems, $events, 'invalid orders emit no event';
+    restaurant().set-menu-item(:item-id<bowl>, :name('Rice bowl'), :unit-price(12.50), :!available);
+    $events = StoredEvent.^all.elems;
+    throws-like { place }, X::AdHoc, message => /'unavailable'/, 'unavailable meals are rejected';
+    is StoredEvent.^all.elems, $events, 'unavailable meals emit no order';
+    restaurant().close-for-orders;
+    $events = StoredEvent.^all.elems;
+    throws-like { place }, X::AdHoc, message => /'is closed'/, 'closed restaurants reject orders';
+    is StoredEvent.^all.elems, $events, 'a closed restaurant emits no order';
+    is order().^load.status, 'new', 'failed placement preserves the initial order state';
+    my @failed = order().^list-commands(:state(StoredCommand::State::Failed));
+    is @failed.elems, 8, 'execution-time failures become terminal failed commands';
+    ok @failed.all.error.defined, 'the command history records rejection reasons';
+};
+
+subtest 'the lifecycle enforces state transitions and courier identity' => {
+    fresh-service;
+    place;
+    my $events = StoredEvent.^all.elems;
+    dies-ok { place }, 'an order cannot be placed twice';
+    dies-ok { order().mark-ready }, 'preparation cannot finish before acceptance';
+    dies-ok { order().assign-courier(:courier-id<sam>) }, 'assignment waits for readiness';
+    dies-ok { order().deliver(:courier-id<sam>) }, 'delivery cannot skip pickup';
+    is StoredEvent.^all.elems, $events, 'invalid transitions emit no events';
+    is order().accept, 'accepted', 'the restaurant accepts the order';
+    is order().mark-ready, 'ready', 'the kitchen marks it ready';
+    dies-ok { order().cancel(:reason('Too late')) }, 'cancellation closes after preparation';
+    is order().assign-courier(:courier-id<sam>), 'assigned', 'a courier is assigned';
+    $events = StoredEvent.^all.elems;
+    throws-like { order().pick-up(:courier-id<other>) }, X::AdHoc,
+        message => /'not assigned'/, 'only the assigned courier can pick up';
+    is StoredEvent.^all.elems, $events, 'a wrong courier appends nothing';
+    is order().pick-up(:courier-id<sam>), 'picked-up', 'the assigned courier picks up';
+    throws-like { order().deliver(:courier-id<other>) }, X::AdHoc,
+        message => /'not assigned'/, 'only the assigned courier can deliver';
+    is order().deliver(:courier-id<sam>), 'delivered', 'delivery completes';
+    is customer().^load.tracking(:order-id<order-1001>)<courier-id>, 'sam',
+        'customer tracking retains the courier';
+    is customer().^load.tracking(:order-id<order-1001>)<status>, 'delivered',
+        'customer tracking observes the final event';
+    is board().^load.active-orders.elems, 0, 'delivered orders leave the active kitchen board';
+    $events = StoredEvent.^all.elems;
+    dies-ok { order().deliver(:courier-id<sam>) }, 'a new delivery command cannot complete twice';
+    dies-ok { order().cancel(:reason('Too late')) }, 'delivery is terminal';
+    is StoredEvent.^all.elems, $events, 'terminal orders remain unchanged';
+};
+
+subtest 'cancellation is allowed before readiness and counted across order streams' => {
+    fresh-service;
+    place;
+    is order().cancel(:reason('Changed plans')), 'cancelled', 'a placed order can be cancelled';
+    order('order-1002').^create;
+    place('order-1002', 'bob');
+    order('order-1002').accept;
+    order('order-1002').cancel(:reason('Kitchen cannot fulfil the order'));
+    is order().^load.cancellation-reason, 'Changed plans', 'aggregate replay retains the reason';
+    is customer().^load.tracking(:order-id<order-1001>)<cancellation-reason>, 'Changed plans',
+        'the customer projection displays the reason';
+    is customer().^load.orders-list.elems, 1, 'customer selection spans streams without leaking orders';
+    is customer('bob').^load.orders-list.head<order-id>, 'order-1002', 'the second customer selects their stream';
+    is board().^load.active-orders.elems, 0, 'cancelled orders leave the kitchen board';
+    is-deeply DeliveryTotals.^with-ids.^load.report,
+        ${:placed(2), :delivered(0), :cancelled(2), :delivered-value(0.0), :active(0)},
+        'global totals count cancellations without counting sales';
+    dies-ok { order().accept }, 'a cancelled order cannot return to preparation';
+};
+
+subtest 'deferred placement resolves execution-time prices and completed commands reuse results' => {
+    fresh-service;
+    my $pending = order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{bowl => 1}, :!sync);
+    is $pending.state, StoredCommand::State::Pending, 'submission persists the command';
+    is order().^load.status, 'new', 'submission alone does not place the order';
+    restaurant().set-menu-item(:item-id<bowl>, :name('Updated bowl'), :unit-price(14.00));
+    my %receipt = $pending.run;
+    is-deeply %receipt<total>, 16.50, 'execution uses the current menu';
+    is %receipt<items>[0]<name>, 'Updated bowl', 'execution also resolves the current item name';
+    my $events = StoredEvent.^all.elems;
+    my %again = $pending.run;
+    is-deeply %again, %receipt, 're-running a completed command returns its saved receipt';
+    is StoredEvent.^all.elems, $events, 'saved-result reuse emits no second placement';
+    complete;
+    is DeliveryTotals.^with-ids.^load.report<delivered-value>, 16.50, 'totals use the accepted receipt';
+
+    order('retry').^create;
+    my $retry = order('retry').place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{juice => 1}, :!sync);
+    restaurant().close-for-orders;
+    dies-ok { $retry.run }, 'a deferred order revalidates whether the restaurant is open';
+    is order('retry').^load.status, 'new', 'a failed attempt leaves no partial placement';
+    restaurant().open-for-orders;
+    is order('retry').place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{juice => 1})<total>, 5.75,
+        'a new submission permits a later valid attempt';
+};
+
+subtest 'aggregate and projection checkpoints restore state and consume later events once' => {
+    fresh-service;
+    place;
+    ready;
+    order().assign-courier(:courier-id<sam>);
+    restaurant().^load.^emit-snapshot;
+    order().^load.^emit-snapshot;
+    customer().^load.^emit-snapshot;
+    board().^load.^emit-snapshot;
+    my $totals = DeliveryTotals.^with-ids;
+    $totals.^load.^emit-snapshot;
+    my $restored = order().^load;
+    is $restored.status, 'assigned', 'the aggregate restores its lifecycle';
+    is $restored.courier-id, 'sam', 'the aggregate restores its courier';
+    is $restored.items.elems, 2, 'the aggregate restores a flat receipt array';
+    is $restored.items[1]<quantity>, 1, 'nested receipt fields survive the checkpoint';
+    order().pick-up(:courier-id<sam>);
+    my $pending = order().deliver(:courier-id<sam>, :!sync);
+    is $pending.run, 'delivered', 'delivery runs after the checkpoint';
+    my $events = StoredEvent.^all.elems;
+    is $pending.run, 'delivered', 'completed delivery reuses its result';
+    is StoredEvent.^all.elems, $events, 'completed delivery is not appended twice';
+    order('order-1002').^create;
+    place('order-1002', 'bob');
+    order('order-1002').cancel(:reason('Changed plans'));
+    is customer().^load.tracking(:order-id<order-1001>)<status>, 'delivered',
+        'a customer checkpoint consumes later matching events';
+    is customer().^load.orders-list.elems, 1, 'restoration does not consume another customer';
+    is board().^load.active-orders.elems, 0, 'a board checkpoint resumes across order streams';
+    my %report = $totals.^load.report;
+    is-deeply %report, %(:placed(2), :delivered(1), :cancelled(1),
+        :delivered-value(30.75), :active(0)), 'totals restore their cursor and add later events once';
+    my $loaded = $totals.^load;
+    $loaded.^replay;
+    is $loaded.delivered, 1, 'repeated replay does not recount delivery';
+    $loaded.^emit-snapshot;
+    is $totals.^load.delivered-value, 30.75, 'totals ignore aggregate and projection snapshots';
+};
+
+subtest 'decimal menu amounts remain exact through snapshots and delivery' => {
+    fresh-service;
+    restaurant().set-menu-item(:item-id<a>, :name<A>, :unit-price(0.10));
+    restaurant().set-menu-item(:item-id<b>, :name<B>, :unit-price(0.20));
+    restaurant().^load.^emit-snapshot;
+    my %receipt = order().place-order(:restaurant-id<green-kitchen>, :customer-id<ana>,
+        :address<A>, :items{a => 1, b => 1});
+    is-deeply %receipt<subtotal>, 0.30, 'decimal addition remains rational';
+    is-deeply %receipt<total>, 2.80, 'the fixed fee remains rational';
+    order().^load.^emit-snapshot;
+    is-deeply order().^load.total, 2.80, 'a checkpoint preserves the exact total';
+    complete;
+    is-deeply DeliveryTotals.^with-ids.^load.report<delivered-value>, 2.80,
+        'delivery projections preserve the exact amount';
+};
+
+subtest 'the runnable tutorial demo completes its delivery and cancellation flows' => {
+    my $root = $?FILE.IO.parent.parent;
+    my $result = run $*EXECUTABLE.Str, '-I' ~ $root.add('lib'),
+        '-I' ~ $root.add('examples/food-delivery'),
+        $root.add('examples/food-delivery/main.raku').Str, :out, :err;
+    my $out = $result.out.slurp(:close);
+    my $err = $result.err.slurp(:close);
+    is $result.exitcode, 0, 'the documented entry point runs';
+    is $err, '', 'the demo emits no unexpected diagnostics';
+    like $out, /'Order order-1001: placed, total 30.75'/, 'the demo prints the priced receipt';
+    like $out, /'Tracking after checkpoint: delivered'/, 'the demo restores customer tracking';
+    like $out, /'Totals: 2 placed, 1 delivered, 1 cancelled, delivered value 30.75'/,
+        'the demo reports both final outcomes';
+};
+
+done-testing;

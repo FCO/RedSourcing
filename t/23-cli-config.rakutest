@@ -1,0 +1,194 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing::CLI::Config;
+
+my $repo = $*CWD;
+my $lib = $repo.add('lib').Str;
+my $cli = $repo.add('bin/red-sourcing.raku').Str;
+my $tmp = tempdir.IO;
+my $project = $tmp.add('project');
+my $child = $project.add('nested/deeper');
+$child.mkdir(:parents);
+my $application = $project.add("app libraries/O'Brien");
+$application.mkdir(:parents);
+$application.add('ConfigApp.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module ConfigApp;
+    aggregate Counter is export {
+        has Int $.id is entity-id;
+        method APPLY { }
+        method answer(Int :$value = 1) is command { $.id + $value }
+    }
+    MODULE
+my $extra = $tmp.add('extra modules');
+$extra.mkdir;
+$extra.add('ExtraApp.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module ExtraApp;
+    aggregate Other is export {
+        has Str $.id is entity-id;
+        method APPLY { }
+        method answer is command { 900 }
+    }
+    MODULE
+my $file = $project.add('red-sourcing.rakuconf');
+sub write-config(IO::Path $path, Str $body) {
+    $path.spurt("use RedSourcing::CLI::Config;\nconfig \{\n$body\n}\n");
+}
+sub cli(IO::Path $cwd, *@args) {
+    @args.push('--json') if @args.first(* eq any(<command types inspect stats describe create load snapshot run-command work advance resolve-action update>)).defined
+        && '--json' ne any(@args);
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $cli, |@args, :$cwd, :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub decoded(%result) {
+    die "CLI failed: {%result<err>}" if %result<code>;
+    from-json(%result<out>)
+}
+
+subtest 'defaults and help need no configuration file' => {
+    is-deeply store-connection-options('Pg', 'selected', :connection{:dbname<old>, :host<localhost>, :port(5433)}),
+        %(dbname => 'selected', host => 'localhost', port => 5433),
+        'PostgreSQL maps the selected database to dbname, overriding connection defaults';
+    is-deeply store-connection-options('SQLite', ':memory:', :connection{:timeout(1000)}),
+        %(database => ':memory:', timeout => 1000), 'SQLite keeps its database constructor option';
+    my %loaded = load-cli-config([], :directory($tmp));
+    isa-ok %loaded<settings>, Settings;
+    nok %loaded<directory>.defined, 'absent file has no base directory';
+    nok %loaded<settings>.driver.defined, 'driver keeps the CLI fallback';
+    nok %loaded<settings>.database.defined, 'database keeps the CLI fallback';
+    nok %loaded<settings>.debug, 'debug defaults to false';
+    nok %loaded<settings>.worker.watch, 'worker watch defaults to false';
+    is-deeply %loaded<settings>.includes.Array, [], 'include paths default to an empty list';
+    is-deeply %loaded<settings>.modules.Array, [], 'modules default to an empty list';
+    is cli($tmp, 'init')<code>, 0, 'CLI still initializes its default store';
+    ok $tmp.add('a.db').f, 'default store stays relative to cwd without a config';
+};
+write-config($file, ".driver = 'SQLite';\n.database = 'configured.db';\n.includes = [{ $application.relative($project).Str.raku }];\n.modules = <ConfigApp>;\n.worker: \{ .limit = 1; .interval = 2 }");
+subtest 'nearest ancestor file supplies the store and app imports' => {
+    is find-config($child).Str, $file.Str, 'discovery walks multiple parents';
+    my %result = cli($child, 'init');
+    is %result<code>, 0, 'CLI uses discovered configuration';
+    is %result<err>, '', 'successful bootstrap is quiet';
+    ok $project.add('configured.db').f, 'configured relative database resolves against the config directory';
+    nok $child.add('a.db').e, 'nested invocation does not open the default store';
+    decoded(cli($child, 'create', 'Counter', '--ids={"id":7}'));
+    is decoded(cli($child, 'command', 'Counter', 'answer', '--ids={"id":7}', '--data={"value":5}')), 12,
+        'configured imports work with quote-containing paths';
+    is decoded(cli($child, 'describe', 'Counter'))<entity>, 'ConfigApp::Counter', 'schema discovery also uses configured imports';
+    for ^2 { decoded(cli($child, 'command', 'Counter', 'answer', '--ids={"id":7}', '--async')) }
+    is decoded(cli($child, 'work'))<processed>.elems, 1, 'worker uses configured pass limit';
+    my $original = $file.slurp;
+    $file.spurt($original.subst('.interval = 2', '.interval = 2; .watch = True'));
+    is decoded(cli($child, 'work', '--limit=5', '--interval=0.1', '--/watch'))<processed>.elems, 1,
+        'explicit worker options override configured defaults';
+    $file.spurt($original);
+};
+subtest 'local file wins without merging parent settings' => {
+    my $local = $child.add('red-sourcing.rakuconf');
+    write-config($local, ".database = 'local.db';");
+    is find-config($child).Str, $local.Str, 'local configuration is selected first';
+    my %loaded = load-cli-config([], :directory($child));
+    is-deeply %loaded<settings>.modules.Array, [], 'parent module list is not inherited';
+    is cli($child, 'init')<code>, 0, 'local file applies to the CLI';
+    ok $child.add('local.db').f, 'local database path has its own base';
+    $local.unlink;
+};
+subtest 'explicit files work before and after the subcommand and override discovery' => {
+    my $explicit = $tmp.add('custom config.rakuconf');
+    write-config($explicit, ".database = 'explicit.db';");
+    for ['-f', $explicit.Str, 'init'], ['init', "-f=$explicit"],
+        ['--file', $explicit.Str, 'init'], ['init', "--file=$explicit"],
+        ['init', '-f', $explicit.relative($child).Str] -> @args {
+        is cli($child, |@args)<code>, 0, 'explicit file syntax is accepted';
+    }
+    ok $tmp.add('explicit.db').f, 'explicit configuration resolves its database against its own directory';
+    nok $child.add('explicit.db').e, 'explicit file replaces the discovered config';
+    my %result = cli($child, '-f', $explicit.Str, 'init', '--driver=SQLite', '--database=override.db');
+    is %result<code>, 0, 'CLI driver and database take precedence';
+    ok $child.add('override.db').f, 'explicit database remains relative to invocation cwd';
+    is %result<err>, '', 'overridden execution stays quiet';
+};
+subtest 'CLI imports append to configured imports and duplicate modules are harmless' => {
+    my %description = decoded(cli($child, 'describe', 'Other', "-I=$extra", '-M=ExtraApp', '-M=ConfigApp'));
+    is %description<entity>, 'ExtraApp::Other', 'additional CLI path and module are imported';
+    is decoded(cli($child, 'describe', 'Counter', "-I=$application", '-M=ConfigApp'))<entity>, 'ConfigApp::Counter',
+        'repeated configured path and module are deduplicated';
+    my %loaded = load-cli-config(['-f', $file.Str]);
+    is-deeply %loaded<settings>.includes.Array, [$application.Str], 'configured include path is normalized once';
+};
+subtest 'database-only operations do not import configured domain modules' => {
+    my $isolated = $tmp.add('inspect.rakuconf');
+    write-config($isolated, ".database = { $project.add('configured.db').Str.raku };\n.modules = <Nonexistent::Domain>;\n.connection = %(timeout => 5000);");
+    for ['types'], ['inspect'], ['stats', '--minutes=1'], ['list-commands', '--json'], ['list-events', '--json'], ['init'] -> @args {
+        is cli($child, |@args, "-f=$isolated")<code>, 0, 'database-only operation ignores the domain import list';
+    }
+    my $monitor = $tmp.add('monitor.rakuconf');
+    write-config($monitor, ".database = 'missing.db';\n.modules = <Nonexistent::Domain>;\n.monitor: \{ .host = '127.0.0.1'; .port = 4321; .minutes = 0; .app-url = 'http://localhost:3000/' }");
+    my %invalid-window = cli($child, 'web-monitor', "-f=$monitor");
+    like %invalid-window<err>, /'minutes must be between'/, 'monitor uses configured options without importing the application';
+    my %missing = cli($child, 'web-monitor', "-f=$monitor", '--minutes=1');
+    like %missing<err>, /'Database does not exist'/, 'explicit monitor option overrides the config';
+    nok $tmp.add('missing.db').e, 'configured monitor does not create a missing database';
+    my $alias = run $*EXECUTABLE.Str, "-I$lib", $repo.add('bin/red-sourcing-monitor').Str,
+        "-f=$monitor", :cwd($child), :out, :err;
+    isnt $alias.exitcode, 0, 'standalone alias validates configured monitor options';
+    is $alias.out.slurp(:close), '', 'alias does not start for an invalid window';
+    like $alias.err.slurp(:close), /'minutes must be between'/, 'standalone alias uses the same configuration loader';
+
+};
+subtest 'debug and connection options preserve explicit CLI precedence' => {
+    my $debug = $tmp.add('debug.rakuconf');
+    write-config($debug, ".database = { $project.add('configured.db').Str.raku };\n.debug = True;\n.connection = %(timeout => 1000);");
+    my %logged = cli($child, 'list-commands', '--json', "-f=$debug");
+    is %logged<code>, 0, 'configured connection options reach the Red driver';
+    ok %logged<err>.chars > 0, 'configured debug enables SQL diagnostics';
+    my %quiet = cli($child, 'list-commands', '--json', "-f=$debug", '--/debug');
+    is %quiet<code>, 0, 'explicit negated debug is accepted';
+    is %quiet<err>, '', 'explicit false overrides configured true';
+};
+subtest 'bad files fail before opening a default or configured database' => {
+    for ['-f'], ['--file'], ['-f='], ['--file='], ['-f', '--database=unexpected.db'],
+        ['-f=missing.conf'], ["-f=$file", "--file=$file"] -> @options {
+        my %invalid = cli($child, 'init', |@options);
+        isnt %invalid<code>, 0, 'missing/empty/duplicate file option is rejected';
+        is %invalid<out>, '', 'invalid bootstrap has no success output';
+    }
+    my $invalid = $tmp.add('invalid.rakuconf');
+    $invalid.spurt('this is invalid Raku syntax !!!');
+    isnt cli($child, 'init', "-f=$invalid")<code>, 0, 'syntax errors propagate';
+    $invalid.spurt('42');
+    like cli($child, 'init', "-f=$invalid")<err>, /'must return a RedSourcing config block'/,
+        'a valid Raku expression must still return the expected config';
+    for ".connection = %(database => 'wrong.db');", ".driver = 42;", ".includes = [42];", '.unknown = 1;' -> $body {
+        write-config($invalid, $body);
+        isnt cli($child, 'init', "-f=$invalid")<code>, 0, 'invalid schema values fail';
+    }
+    my $directory = $child.add('red-sourcing.rakuconf');
+    $directory.mkdir;
+    like cli($child, 'init')<err>, /'Configuration path is not a file'/, 'a config directory is an error rather than silently using a parent';
+    $directory.rmdir;
+    nok $child.add('a.db').e, 'bootstrap errors never create a default store';
+};
+subtest 'help does not execute either an explicit or discovered configuration' => {
+    my $local = $child.add('red-sourcing.rakuconf');
+    $local.spurt('die "Configuration must not run during help"');
+    for ['--help'], ['command', '--help'], ['web-monitor', '--help', "-f=$local"] -> @args {
+        my %help = cli($child, |@args);
+        is %help<code>, 0, 'help works despite a broken config';
+        is %help<err>, '', 'help has no configuration diagnostics';
+        like %help<out>, /'--file'/, 'configuration file alias appears in help';
+    }
+    $local.unlink;
+};
+subtest 'path rules preserve special SQLite names and non-file databases' => {
+    is config-database('SQLite', ':memory:', $project), ':memory:', 'in-memory store is unchanged';
+    is config-database('SQLite', 'file:shared?mode=memory', $project), 'file:shared?mode=memory', 'SQLite URI is unchanged';
+    is config-database('Pg', 'accounting', $project), 'accounting', 'server database is not made into a file path';
+    is config-database('SQLite', 'explicit.db', $project, :explicit), 'explicit.db', 'explicit relative path is not rebased';
+    is config-database('SQLite', 'default.db', IO::Path), 'default.db', 'no discovered configuration keeps cwd semantics';
+    is config-database('SQLite', $project.add('absolute.db').Str, $child), $project.add('absolute.db').Str, 'absolute database is unchanged';
+};
+
+done-testing;

@@ -1,0 +1,6 @@
+{
+  "tool": "App::RaCoCo 2.0.1",
+  "covered-lines": 89,
+  "scope": "lib/",
+  "coverable-lines": 92
+}

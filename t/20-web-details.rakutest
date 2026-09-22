@@ -1,0 +1,72 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Inspector;
+use RedSourcing::Web;
+use RedSourcing::Web::HTML;
+use Cro::HTTP::Request;
+use Cro::HTTP::Router;
+
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+# No application modules or definitions for these stored class names.
+my $type = 'Unknown::VeryLongAccountName';
+my $stream = $type ~ ': id = São Paulo/a & b "<x>"';
+my $snapshot = StoredEvent.^create(:class($type), :$stream, :version(1),
+    :mro('|Entity|'), :data{ balance => 10 });
+my $command = StoredCommand.^create(:$stream, :entity($type), :entity-ids{ id => 'a' },
+    :class($type ~ '::Deposit'), :method<deposit>, :data{ amount => 5 });
+for 2..65 -> $version {
+    StoredEvent.^create(:class<Unknown::Deposited>, :$stream, :$version,
+        :mro('|Event|'), :data{ amount => 1 });
+}
+my $inspector = RedSourcing::Inspector.new(:stored-only);
+my $source = Supplier.new;
+my $routes = route { include monitor => inspector-routes($inspector,
+    :updates(-> { supply { emit "event: refresh\ndata: connected\n\n" } })); };
+my $responses = $routes.transformer($source.Supply).Channel;
+sub request(Str $target) {
+    my $request = Cro::HTTP::Request.new(:method<GET>, :$target);
+    $request.append-header('Host', 'localhost');
+    $source.emit($request);
+    $responses.receive
+}
+sub body($response) { $response.body-byte-stream.list.map(*.decode('utf-8')).join }
+my $before = StoredEvent.^all.elems;
+my $overview = body(request('/monitor'));
+ok $overview.contains('title="' ~ escape-html($type) ~ '"'), 'short entity names expose complete names on hover';
+ok $overview.contains('title="' ~ escape-html($stream) ~ '"'), 'stream tooltips escape quotes and markup';
+ok $overview.contains(escape-html(detail-url('stream', $stream))), 'stream links safely encode Unicode, separators and reserved characters';
+ok $overview.contains(escape-html(detail-url('type', $type))), 'catalog links point to type details';
+ok $overview.contains('aria-label="' ~ escape-html($type) ~ '"'), 'links expose complete accessible names';
+nok $overview.contains('<x>'), 'stored names cannot inject markup';
+ok $overview.contains('<a href="' ~ escape-html(detail-url('stream', $stream))), 'SVG entity chart labels and bars link to their stream';
+my $stream-page = request(detail-url('stream', $stream));
+is $stream-page.status, 200, 'encoded stream URL resolves';
+my $stream-html = body($stream-page);
+ok $stream-html.contains(escape-html($stream)), 'stream detail shows the full name';
+ok $stream-html.contains('Persisted state'), 'stream detail shows checkpoint state';
+ok $stream-html.contains('&quot;balance&quot;: 10'), 'detail preserves snapshot state rather than inventing a replay';
+ok $stream-html.contains('detail-fragment?'), 'detail page refreshes itself on live updates';
+nok $stream-html.contains('hx-get="/monitor/fragment'), 'related records do not refresh into the unfiltered overview';
+for 'type' => $type, 'type' => 'Unknown::Deposited', 'type' => $type ~ '::Deposit',
+    'event' => $snapshot.id.Str, 'command' => $command.id.Str -> $item {
+    my $response = request(detail-url($item.key, $item.value));
+    is $response.status, 200, "{$item.key} detail resolves for {$item.value}";
+    ok body($response).contains('Record details'), 'detail includes stored metadata';
+}
+my $old-event = body(request(detail-url('event', $snapshot.id)));
+ok $old-event.contains('&quot;balance&quot;: 10'), 'event older than the overview limit is still accessible by ID';
+my $fragment = body(request(detail-url('stream', $stream).subst('/detail?', '/detail-fragment?')));
+nok $fragment.contains('<!doctype'), 'live detail fragment contains no duplicate document';
+ok $fragment.contains('id="monitor-detail"'), 'live fragment has a stable replacement target';
+for 'stream' => 'missing', 'type' => 'missing', 'event' => '99999',
+    'command' => '99999', 'event' => '0', 'event' => '-1', 'event' => 'abc', 'invalid' => $stream -> $item {
+    my $response = request(detail-url($item.key, $item.value));
+    is $response.status, 404, "missing or invalid {$item.key} record returns 404";
+    ok body($response).contains('No matching persisted record'), 'missing detail offers a useful message';
+}
+is StoredEvent.^all.elems, $before, 'detail navigation writes no snapshots or control events';
+is StoredCommand.^all.grep(*.state == StoredCommand::Pending).elems, 1, 'detail navigation runs no commands';
+$source.done;
+done-testing;

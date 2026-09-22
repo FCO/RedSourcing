@@ -1,0 +1,336 @@
+use Test;
+use Red;
+use RedFactory;
+use RedSourcing;
+use RedSourcing::Event;
+use RedSourcing::Traits;
+use RedSourcing::StoredCommand;
+use Metamodel::RedSourcing::AggregateHOW;
+use Metamodel::RedSourcing::ProjectionHOW;
+
+my $*RED-DB = factory-db;
+StoredEvent.^create-table;
+
+class ReplayMovement does Event {
+    has Str $.name;
+    has Str $.month;
+    has Int $.from-client;
+    has Int $.to-client;
+    has Int $.amount;
+}
+class ReplayOther does Event { has Str $.name; }
+
+aggregate ReplayAggregate {
+    has Int $.id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(ReplayMovement $event) { $!amount += $event.amount }
+}
+
+projection ReplayProjection {
+    has Int $.client-id;
+    has Str $.month;
+    has Int $.amount = 0;
+    has @.seen;
+    multi method APPLY(ReplayMovement $_ where {
+        .month eq $!month && .from-client == $!client-id
+    }) {
+        $!amount -= .amount;
+        @!seen.push: .name;
+    }
+    multi method APPLY(ReplayMovement $_ where {
+        .month eq $!month && .to-client == $!client-id
+    }) {
+        $!amount += .amount;
+        @!seen.push: .name;
+    }
+}
+
+sub movement(Str $stream, UInt $version, Str $name, Int $from, Int $to, Int $amount,
+    Str :$month = '2026-10') {
+    ReplayMovement.emit(:$stream, :$version, :$name, :from-client($from),
+        :to-client($to), :$amount, :$month)
+}
+
+subtest 'aggregates replay their stream and projections replay matching rows from all streams' => {
+    my $proxy = ReplayAggregate.^with-ids(:id(1));
+    my $snapshot = $proxy.^create;
+    my $aggregate = $snapshot.COERCE;
+    my $projection = ReplayProjection.bless(:client-id(42), :month<2026-10>,
+        :stream<projection-state>);
+
+    my $outgoing = movement($snapshot.stream, 2, 'outgoing', 42, 7, 5);
+    movement('another-client', 90, 'wrong-client', 8, 9, 100);
+    my $incoming = movement('incoming-stream', 40, 'incoming', 7, 42, 12);
+    movement('another-month', 80, 'wrong-month', 42, 7, 100, :month<2026-11>);
+    ReplayOther.emit(:stream<another-type>, :version(500), :name<wrong-type>);
+    my $local = movement('projection-state', 70, 'local', 7, 42, 3);
+
+    $aggregate.^apply-new-events-of-stream;
+    is $aggregate.amount, 5, 'aggregate consumes only its own stream';
+    is $aggregate.^version, 2, 'aggregate version follows its own stream';
+    is $aggregate.^current-id, $outgoing.id, 'aggregate cursor excludes other streams';
+
+    $projection.^apply-new-applyable-events;
+    is $projection.amount, 10, 'projection applies matching incoming and outgoing movements';
+    is-deeply $projection.seen.Array, ['outgoing', 'incoming', 'local'],
+        'matching rows from multiple streams are applied in global ID order';
+    is $projection.^current-id, $local.id, 'projection advances its global cursor';
+    is $projection.^version, 0, 'source stream versions do not become the projection version';
+    is $projection.^stream, 'projection-state', 'replay retains the projection stream identity';
+    $projection.^apply-new-applyable-events;
+    is-deeply $projection.seen.Array, ['outgoing', 'incoming', 'local'],
+        'repeating replay does not apply old matching rows again';
+
+    my $next = movement('later-stream', 1, 'later', 7, 42, 2);
+    $projection.^apply-new-applyable-events;
+    is $projection.amount, 12, 'a later append from a new stream is consumed';
+    is $projection.^current-id, $next.id, 'the global cursor advances despite a smaller source version';
+    $aggregate.^apply-new-events-of-stream;
+    is $aggregate.amount, 5, 'the later foreign append is still excluded from aggregate replay';
+};
+
+subtest 'projections use their own identity constraints and leave empty replays unchanged' => {
+    my $projection = ReplayProjection.bless(:client-id(42), :month<2026-11>,
+        :stream<november-projection>);
+    $projection.^apply-new-applyable-events;
+    is $projection.amount, -100, 'the receiver selects its own month';
+    is-deeply $projection.seen.Array, ['wrong-month'], 'only its applicable history is folded';
+
+    my $empty = ReplayProjection.bless(:client-id(999), :month<2026-10>,
+        :stream<empty-projection>, :amount(17));
+    $empty.^apply-new-applyable-events;
+    is $empty.amount, 17, 'no matches leave domain state unchanged';
+    is $empty.^current-id, 0, 'no matches leave the cursor unchanged';
+    is $empty.^version, 0, 'no matches leave the version unchanged';
+};
+
+my $fail = True;
+projection EmptyReplayProjection {
+    has Int $.id;
+    proto method APPLY(|) {*}
+}
+
+subtest 'a projection without APPLY candidates consumes no rows' => {
+    my $projection = EmptyReplayProjection.bless(:id(1), :stream<no-rules>);
+    lives-ok { $projection.^apply-new-applyable-events }, 'empty rules do not fall back to unfiltered history';
+    is $projection.^current-id, 0, 'no candidates leave the cursor unchanged';
+    is $projection.^version, 0, 'no candidates leave the version unchanged';
+};
+
+projection FailingReplayProjection {
+    has Int $.client-id;
+    has Int $.amount = 0;
+    has @.seen;
+    method APPLY(ReplayMovement $_ where { .to-client == $!client-id }) {
+        die 'replay failed' if .name eq 'failure' && $fail;
+        $!amount += .amount;
+        @!seen.push: .name;
+    }
+}
+
+subtest 'projection replay advances the cursor only after successful APPLY' => {
+    my $projection = FailingReplayProjection.bless(:client-id(1000), :stream<failure-state>);
+    my $first = movement('failure-source-a', 8, 'success', 7, 1000, 3);
+    my $second = movement('failure-source-b', 20, 'failure', 7, 1000, 4);
+    throws-like { $projection.^apply-new-applyable-events }, X::AdHoc,
+        message => 'replay failed', 'handler errors propagate';
+    is $projection.^current-id, $first.id, 'the failed event is not acknowledged';
+    is $projection.amount, 3, 'state contains the successfully applied prefix';
+    $fail = False;
+    $projection.^apply-new-applyable-events;
+    is $projection.amount, 7, 'retry resumes at the failed event';
+    is-deeply $projection.seen.Array, ['success', 'failure'], 'the successful prefix is not repeated';
+    is $projection.^current-id, $second.id, 'successful retry acknowledges the event';
+    is $projection.^version, 0, 'failure and retry preserve the projection version';
+};
+
+my &checkpoint-interleave = -> { };
+projection CheckpointProjection {
+    has Int $.client-id is entity-id;
+    has Str $.month is entity-id;
+    has Int $.amount = 0;
+    has @.seen;
+    method APPLY(ReplayMovement $_ where {
+        .month eq $!month && .to-client == $!client-id
+    }) {
+        $!amount += .amount;
+        @!seen.push: .name;
+        checkpoint-interleave();
+    }
+    method total { $!amount }
+}
+projection OtherCheckpoint {
+    has Int $.client-id;
+    proto method APPLY(|) {*}
+}
+projection BroadCheckpointProjection {
+    has Int $.id is entity-id;
+    has Int $.count = 0;
+    method APPLY($event) { $!count++ }
+}
+
+sub fresh-replay-store {
+    $*RED-DB = factory-db;
+    schema(StoredEvent, StoredCommand).create;
+}
+sub checkpoint-proxy(Int $id = 42) {
+    CheckpointProjection.^with-ids(:client-id($id), :month<2026-10>)
+}
+
+subtest 'declarations select concrete metaclasses and share identity helpers' => {
+    isa-ok ReplayAggregate.HOW, Metamodel::RedSourcing::AggregateHOW,
+        'aggregate uses AggregateHOW';
+    isa-ok ReplayProjection.HOW, Metamodel::RedSourcing::ProjectionHOW,
+        'projection uses ProjectionHOW';
+    isa-ok ReplayAggregate.HOW, Metamodel::RedSourcing::EntityHOW,
+        'AggregateHOW extends the shared EntityHOW';
+    isa-ok ReplayProjection.HOW, Metamodel::RedSourcing::EntityHOW,
+        'ProjectionHOW extends the shared EntityHOW';
+    is-deeply checkpoint-proxy.^ids-map.Hash,
+        %(client-id => 42, month => '2026-10'),
+        'projections share proxy identity helpers';
+};
+
+subtest 'aggregate initial loading requires and restores its latest own snapshot' => {
+    fresh-replay-store;
+    my $proxy = ReplayAggregate.^with-ids(:id(1));
+    throws-like { $proxy.^load }, X::AdHoc,
+        message => "No snapshot for ReplayAggregate in '{$proxy.^stream-name}'",
+        'an aggregate cannot be loaded without its initial snapshot';
+    my $first = $proxy.^create(:amount(10));
+    movement($first.stream, 2, 'first', 7, 42, 3);
+    my $loaded = $proxy.^load;
+    is $loaded.amount, 13, 'loading folds the events following the initial snapshot';
+    my $snapshot = $loaded.^emit-snapshot;
+    movement($first.stream, 4, 'second', 7, 42, 5);
+    ReplayAggregate.^with-ids(:id(2)).^create(:amount(1000));
+    my $restored = $proxy.^load(:amount(900));
+    is $restored.amount, 18, 'the latest own snapshot is restored before replay';
+    is $restored.^version, 4, 'stream replay restores the aggregate version';
+    is $restored.^stream, $first.stream, 'another identity cannot replace its state';
+    nok $snapshot.replay-cursor.defined, 'aggregate snapshots retain the existing row-ID cursor policy';
+};
+
+subtest 'projection loading starts without a snapshot and later restores type and identity' => {
+    fresh-replay-store;
+    my $proxy = checkpoint-proxy;
+    my $first = movement('projection-source-a', 80, 'first', 7, 42, 5);
+    movement('irrelevant-source', 1, 'wrong-client', 7, 99, 100);
+    my $projection = $proxy.^load(:amount(10), :client-id(99), :stream<wrong>);
+    is $projection.amount, 15, 'without a snapshot initial state is folded with applicable history';
+    is $projection.client-id, 42, 'proxy IDs take precedence over load arguments';
+    is $projection.^stream, $proxy.^stream-name, 'proxy stream takes precedence over load arguments';
+    is $projection.^current-id, $first.id, 'rules are bound to the initialized entity';
+    is $projection.^version, 0, 'source versions do not become checkpoint versions';
+    my $snapshot = $projection.^emit-snapshot;
+    is $snapshot.version, 1, 'the first projection checkpoint has its own version';
+    is $snapshot.replay-cursor, $first.id, 'the consumed cursor is stored separately';
+    is $projection.^current-id, $first.id, 'publication retains the consumed cursor';
+    is $snapshot.COERCE.^current-id, $first.id, 'coercion restores the consumed cursor';
+    is-deeply $snapshot.data.Hash,
+        %(client-id => 42, month => '2026-10', amount => 15, seen => ['first']),
+        'cursor metadata does not alter the domain payload';
+    my $later = movement('projection-source-b', 1, 'later', 7, 42, 2);
+    checkpoint-proxy(99).^create(:amount(1000));
+    my $other = OtherCheckpoint.bless(:client-id(42), :stream($proxy.^stream-name));
+    $other.^version = 1;
+    $other.^emit-snapshot;
+    my $restored = $proxy.^load(:amount(900));
+    is $restored.amount, 17, 'loading ignores initial state once a matching snapshot exists';
+    is-deeply $restored.seen.Array, ['first', 'later'], 'only events after the saved cursor are reapplied';
+    is $restored.^current-id, $later.id, 'checkpoints of other types and identities do not replace the cursor';
+    is $restored.^version, 1, 'restored version belongs to its own checkpoint';
+    $restored.^apply-new-applyable-events;
+    is $restored.amount, 17, 'incremental replay remains independent of initial loading';
+};
+
+subtest 'projection checkpoints preserve an empty cursor and broad APPLY excludes snapshots' => {
+    fresh-replay-store;
+    ReplayAggregate.^with-ids(:id(1)).^create;
+    my $empty = checkpoint-proxy.^create(:amount(7));
+    is $empty.replay-cursor, 0, 'an empty projection persists cursor zero';
+    is $empty.COERCE.^current-id, 0, 'zero does not fall back to the checkpoint row ID';
+    my $restored = checkpoint-proxy.^load;
+    is $restored.amount, 7, 'loading an empty checkpoint preserves its state';
+    is $restored.^current-id, 0, 'loading leaves the empty cursor unchanged';
+    my $event = ReplayOther.emit(:stream<domain-source>, :version(1), :name<domain>);
+    my $proxy = BroadCheckpointProjection.^with-ids(:id(1));
+    my $broad = $proxy.^load;
+    is $broad.count, 1, 'broad APPLY consumes domain events and excludes aggregate and projection snapshots';
+    my $snapshot = $broad.^emit-snapshot;
+    $broad.^apply-new-applyable-events;
+    is $broad.count, 1, 'incremental replay does not apply its own checkpoint';
+    is $broad.^current-id, $event.id, 'skipping checkpoints does not advance the consumed cursor';
+    is $proxy.^load.count, 1, 'broad APPLY also excludes checkpoints after restoration';
+};
+
+subtest 'an append between replay and checkpoint publication is not skipped on restoration' => {
+    fresh-replay-store;
+    my $projection = checkpoint-proxy.^load;
+    my $first = movement('before-checkpoint', 1, 'first', 7, 42, 3);
+    my $interleaved;
+    &checkpoint-interleave = -> {
+        # Simulate an independent writer rather than an APPLY side effect.
+        my $*REDSOURCING-PHASE = 'EXTERNAL';
+        unless $interleaved {
+            $interleaved = movement('during-checkpoint', 1, 'interleaved', 7, 42, 4);
+        }
+    };
+    LEAVE &checkpoint-interleave = -> { };
+    my $snapshot = $projection.^emit-snapshot;
+    ok $first.id < $interleaved.id < $snapshot.id, 'a matching event was appended before the checkpoint row';
+    is $snapshot.data<amount>, 3, 'the snapshot records the state actually folded';
+    is $snapshot.replay-cursor, $first.id, 'the snapshot records its actual consumed boundary';
+    my $restored = checkpoint-proxy.^load;
+    is $restored.amount, 7, 'restoration consumes the event before the checkpoint row';
+    is-deeply $restored.seen.Array, ['first', 'interleaved'], 'each event is applied once';
+    is $restored.^current-id, $interleaved.id, 'the cursor follows consumed events instead of the snapshot row';
+};
+
+subtest 'stale projection checkpoints require reload before retrying' => {
+    fresh-replay-store;
+    my $first = checkpoint-proxy.^load;
+    my $stale = checkpoint-proxy.^load;
+    $first.^emit-snapshot;
+    throws-like { $stale.^emit-snapshot }, X::Red::Driver::Mapped::Unique,
+        'a competing writer cannot overwrite the newer checkpoint';
+    is $stale.^version, 0, 'failed publication does not advance the checkpoint version';
+    is StoredEvent.^all.elems, 1, 'failed publication leaves no checkpoint row';
+    my $reloaded = checkpoint-proxy.^load;
+    movement('next-checkpoint-source', 1, 'next', 7, 42, 5);
+    is $reloaded.^emit-snapshot.version, 2, 'reload allows publication of the next checkpoint';
+    movement('after-latest-checkpoint', 1, 'after-latest', 7, 42, 7);
+    my $latest = checkpoint-proxy.^load;
+    is $latest.^version, 2, 'initial loading chooses the latest snapshot of its own type and stream';
+    is $latest.amount, 12, 'restoration folds only events following the latest consumed cursor';
+    is-deeply $latest.seen.Array, ['next', 'after-latest'], 'latest-checkpoint replay does not duplicate prior state';
+};
+
+subtest 'projection loading rejects snapshots without a consumed cursor' => {
+    fresh-replay-store;
+    my $proxy = checkpoint-proxy;
+    StoredEvent.^create(
+        :class<CheckpointProjection>, :mro('|CheckpointProjection|Entity|'),
+        :stream($proxy.^stream-name), :version(1),
+        :data(%(client-id => 42, month => '2026-10', amount => 0, seen => [])),
+    );
+    throws-like { $proxy.^load }, X::AdHoc,
+        message => "Projection snapshot for CheckpointProjection in '{$proxy.^stream-name}' has no replay-cursor",
+        'aggregate-style snapshots cannot silently skip projection events';
+};
+
+subtest 'ordinary projection queries use cross-stream replay without creating commands' => {
+    fresh-replay-store;
+    my $proxy = checkpoint-proxy;
+    movement('query-source-a', 20, 'first', 7, 42, 5);
+    is $proxy.^load.total, 5, 'loading a projection needs no initial snapshot';
+    movement('query-source-b', 1, 'second', 7, 42, 3);
+    is $proxy.^load.total, 8, 'reloading consumes newer source events';
+    my $projection = $proxy.^load;
+    $projection.^emit-snapshot;
+    movement('query-source-c', 1, 'third', 7, 42, 2);
+    is $proxy.^load.total, 10, 'loading restores a checkpoint and consumes newer matching events';
+    is $proxy.^list-commands.elems, 0, 'projection queries do not persist commands';
+};
+
+done-testing;

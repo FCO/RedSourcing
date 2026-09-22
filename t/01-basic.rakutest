@@ -1,0 +1,248 @@
+use Test;
+use Red;
+use RedFactory;
+use RedSourcing;
+use RedSourcing::Event;
+
+class UserRegistered does Event {
+	has Str $.name;
+	has Str $.email;
+}
+
+class OrderPlaced does Event {
+	has UInt $.qty;
+}
+
+factory "rse", :model(StoredEvent), {
+	.class   = "UserRegistered";
+	.mro     = "|UserRegistered|Any|Mu|Event|";
+	.stream  = "users";
+	.version = 0;
+	.data    = %(name => "Jane", email => "jane@example.com");
+}
+
+my $*RED-DB = factory-db;
+
+UserRegistered.new(:name<Jane>, :email<jane@example.com>).emit: :stream<users>,  :version(0);
+UserRegistered.emit: :stream<users>,  :version(1), :name<John>, :email<john@example.com>;
+UserRegistered.emit: :stream<orders>, :version(0), :name<Order1>, :email<order@example.com>;
+OrderPlaced.emit: :stream<orders>, :version(1), :qty(10);
+
+my @users = StoredEvent.list-events(:types[UserRegistered], :stream<users>);
+is @users.elems, 2, "stream filter returns only the users-stream events";
+
+my @all = StoredEvent.list-events(:types[UserRegistered]);
+is @all.elems, 3, "type filter returns all UserRegistered events";
+
+my @both-types = StoredEvent.list-events(:types[UserRegistered, OrderPlaced]);
+is @both-types.elems, 4, "types filter accepts multiple event classes";
+is @both-types.grep(* ~~ UserRegistered).elems, 3, "multiple types include all UserRegistered events";
+is @both-types.grep(* ~~ OrderPlaced).elems, 1, "multiple types include all OrderPlaced events";
+
+my @from-zero = StoredEvent.list-events(:types[UserRegistered], :from-id(0));
+is @from-zero.elems, 3, "from-id 0 is honored (not treated as falsy)";
+
+my @past = StoredEvent.list-events(:types[UserRegistered], :after(DateTime.now.earlier(:hours(1))));
+is @past.elems, 3, "after a past instant returns all events";
+
+my @future = StoredEvent.list-events(:types[UserRegistered], :after(DateTime.now.later(:hours(1))));
+is @future.elems, 0, "after a future instant returns no events";
+
+my @streams = do for StoredEvent.streams { $_ };
+is @streams.sort.join(","), "orders,users", "streams are listed";
+
+my $first = @users.sort(*.StoredEvent.version).head;
+isa-ok $first, UserRegistered, "list-events coerces to the domain class";
+is $first.name, "Jane", "coerced object exposes its accessor values";
+isa-ok $first.StoredEvent, StoredEvent, "coerced object keeps a reference to its record";
+is $first.StoredEvent.version, 0, "record reference points to the right row";
+unlike $first.gist, /StoredEvent/, "default gist omits the hidden record reference";
+
+my @after-first = StoredEvent.list-events(:types[UserRegistered], :from-id($first.StoredEvent.id));
+is @after-first.elems, 2, "from-id returns matching events with greater ids";
+is @after-first.grep(*.StoredEvent.id == $first.StoredEvent.id).elems, 0,
+	"from-id excludes the event at the boundary";
+
+throws-like {
+	UserRegistered.emit: :stream<users>, :version(0), :name<Dup>, :email<dup@example.com>;
+}, RedSourcing::X::OptimisticLockFailed, message => /'Optimistic lock failed'/,
+"duplicate (stream, version) throws OptimisticLockFailed";
+
+my @jane = StoredEvent.list-events: (UserRegistered) => %(name => "Jane");
+is @jane.elems, 1, "value rule matches a single field";
+is @jane.head.name, "Jane", "value rule matches the right event";
+
+my @jane-email = StoredEvent.list-events: (UserRegistered) => %(name => "Jane", email => "jane@example.com");
+is @jane-email.elems, 1, "value rule matches multiple fields";
+
+my @nonmatching-jane = StoredEvent.list-events:
+	(UserRegistered) => %(name => "Jane", email => "other@example.com");
+is @nonmatching-jane.elems, 0, "all values in a Hash rule must match";
+
+my @orders = StoredEvent.list-events: (OrderPlaced) => %(qty => 10);
+is @orders.elems, 1, "value rule filters by event type and data";
+isa-ok @orders.head, OrderPlaced, "value rule coerces to the matched type";
+
+my @john = StoredEvent.list-events: (UserRegistered) => -> $e { $e.name eq "John" };
+is @john.elems, 1, "code rule in a pair filters events";
+is @john.head.name, "John", "code rule matches the right event";
+
+my @either = StoredEvent.list-events:
+	(UserRegistered) => %(name => "Jane"),
+	(OrderPlaced) => %(qty => 10);
+is @either.elems, 2, "several rules are combined with OR";
+is @either.map(*.^name).sort.join(","), "OrderPlaced,UserRegistered",
+	"the OR matches events of different types";
+
+my @latest-user-event = StoredEvent.list-events: :from-snapshot-of-type(UserRegistered);
+is @latest-user-event.elems, 2, "an unfiltered replay includes the latest snapshot and subsequent events";
+is @latest-user-event.head.name, "Order1", "from-snapshot-of-type selects the latest matching snapshot";
+isa-ok @latest-user-event.tail, OrderPlaced, "an unfiltered replay includes subsequent event types";
+
+throws-like {
+	StoredEvent.list-events(:from-id(1), :from-snapshot-of-type(UserRegistered));
+}, X::AdHoc, message => /'from-id and from-snapshot-of-type are incompatible'/,
+	"from-id cannot be combined with from-snapshot-of-type";
+
+my &loaders = StoredEvent.map-list-events:
+	(UserRegistered) => %(name => -> $p { $p<name> }),
+	:data(%(name => "Jane"));
+my @mapped = &loaders();
+is @mapped.elems, 1, "map-list-events maps projection value to event field";
+is @mapped.head.name, "Jane", "map-list-events matches the mapped value";
+
+class UsersByName {
+	has $.name;
+}
+my $proj = UsersByName.new(name => "Jane");
+my &loaders2 = StoredEvent.map-list-events:
+	(UserRegistered) => %(name => -> $p { $p.name }),
+	:data($proj);
+my @mapped2 = &loaders2();
+is @mapped2.elems, 1, "map-list-events maps class projection attribute";
+is @mapped2.head.name, "Jane", "class projection matches the mapped value";
+
+my &make-loader = StoredEvent.map-list-events:
+	(UserRegistered) => %(name => -> $p { $p.name });
+
+my @from-jane = &make-loader(UsersByName.new(name => "Jane"))();
+is @from-jane.elems, 1, "map-list-events without data returns a factory";
+is @from-jane.head.name, "Jane", "factory loader filters by the projection";
+
+my @from-john = &make-loader(UsersByName.new(name => "John"))();
+is @from-john.head.name, "John", "the same factory works for other projections";
+
+my &make-lookup = StoredEvent.map-list-events:
+	(UserRegistered) => %(name => "name");
+
+is &make-lookup(%(name => "Jane"))().elems, 1, "plain mapping value reads an Associative key";
+is &make-lookup(UsersByName.new(name => "John"))().head.name, "John",
+	"plain mapping value reads an accessor method";
+
+subtest "snapshot boundaries respect streams and retain requested filters" => {
+    my @users-snapshot = StoredEvent.list-events:
+        :stream<users>, :from-snapshot-of-type(UserRegistered);
+    is @users-snapshot.elems, 1, "another stream cannot move the snapshot boundary";
+    is @users-snapshot.head.name, "John", "uses the latest snapshot in the requested stream";
+
+    my @replay = StoredEvent.list-events:
+        :stream<orders>, :from-snapshot-of-type(UserRegistered), :types[OrderPlaced];
+    is @replay.map(*.^name).join(","), "UserRegistered,OrderPlaced",
+        "includes the snapshot and subsequent requested event types";
+
+    my @rules-replay = StoredEvent.list-events:
+        :stream<orders>, :from-snapshot-of-type(UserRegistered),
+        (OrderPlaced) => %(qty => 10);
+    is @rules-replay.elems, 2, "explicit rules are retained with the snapshot";
+
+    my @no-snapshot = StoredEvent.list-events:
+        :stream<users>, :from-snapshot-of-type(OrderPlaced), :types[UserRegistered];
+    is @no-snapshot.elems, 2, "without a snapshot in this stream, reads the full filtered history";
+
+    class MissingSnapshot does Event { }
+    is StoredEvent.list-events(:from-snapshot-of-type(MissingSnapshot), :types[OrderPlaced]).elems,
+        1, "a missing snapshot type preserves the original type filter";
+};
+
+subtest "hash rules read data keys even when they collide with methods" => {
+    class MethodNames does Event {
+        has Str $.json;
+        has Str $.gist;
+    }
+    MethodNames.emit(:stream<method-names>, :version(0), :json<payload>, :gist<label>);
+    for %(json => "payload"), %(gist => "label"), %(json => "payload", gist => "label") -> %rule {
+        my @events = StoredEvent.list-events((MethodNames) => %rule);
+        is @events.elems, 1, "matches data keys {%rule.keys.sort.join(', ')}";
+        isa-ok @events.head, MethodNames, "returns the domain event";
+    }
+    is StoredEvent.list-events((MethodNames) => %(json => "different")).elems, 0,
+        "nonmatching values remain excluded";
+};
+
+subtest "event data cannot override storage arguments" => {
+    class StorageNames does Event {
+        has Str $.stream;
+        has UInt $.version;
+        has %.data;
+    }
+    my $event = StorageNames.new(:stream<payload-stream>, :version(99), :data(%(nested => "value")));
+    my $row = $event.emit(:stream<destination>, :version(0));
+    is $row.stream, "destination", "uses the requested destination stream";
+    is $row.version, 0, "uses the requested optimistic locking version";
+    my @events = StoredEvent.list-events(:stream<destination>, :types[StorageNames]);
+    is @events.elems, 1, "event is persisted in the destination stream";
+    is @events.head.stream, "payload-stream", "preserves the payload stream field";
+    is @events.head.version, 99, "preserves the payload version field";
+    is-deeply @events.head.data, %(nested => "value"), "preserves a payload field named data";
+    my $explicit = StorageNames.emit(:stream<destination>, :version(1),
+        :data(%(stream => "payload-stream", version => 99, data => %(nested => "value"))));
+    is-deeply $explicit.data.Hash, $row.data.Hash,
+        "explicit class emission preserves the same payload without adding a wrapper";
+};
+
+subtest "storage emit coexists with native supply emission" => {
+    class SupplyEvent does Event {
+        has Str $.name;
+        method notifications {
+            supply {
+                emit self;
+                self.emit;
+            }
+        }
+    }
+    my $event = SupplyEvent.new(:name<notification>);
+    my @notifications;
+    $event.notifications.tap(-> $value { @notifications.push: $value });
+    is @notifications.elems, 2, "both bare emit and native method emit still work";
+    ok @notifications[0] === $event, "bare emit delivers the original instance";
+    ok @notifications[1] === $event, "method emit delivers the original instance";
+
+    my @rows;
+    supply {
+        emit $event.emit(:stream<supply-storage>, :version(0));
+        emit SupplyEvent.emit(:stream<supply-storage>, :version(1), :name<class-event>);
+    }.tap(-> $row { @rows.push: $row });
+    is @rows.elems, 2, "storage emission can be used inside a supply";
+    isa-ok @rows[0], StoredEvent, "instance emit returns the stored row";
+    isa-ok @rows[1], StoredEvent, "class emit returns the stored row";
+    is StoredEvent.list-events(:stream<supply-storage>, :types[SupplyEvent]).elems, 2,
+        "both events were persisted";
+
+    throws-like { $event.emit(:stream<missing-version>) }, X::Multi::NoMatch,
+        "incomplete storage arguments do not fall back to native emission";
+};
+
+subtest "emit rejects arguments that would otherwise be discarded" => {
+    class StrictEvent does Event { has Str $.name; }
+    throws-like {
+        StrictEvent.new(:name<original>).emit(:stream<invalid-arguments>, :version(0), :name<ignored>);
+    }, X::Multi::NoMatch, "instance emission rejects payload overrides";
+    throws-like {
+        StrictEvent.emit(:stream<invalid-arguments>, :version(1),
+            :data(%(name => "original")), :name<ignored>);
+    }, X::Multi::NoMatch, "explicit data cannot be mixed with individual payload fields";
+    is StoredEvent.list-events(:stream<invalid-arguments>).elems, 0,
+        "invalid calls do not persist partial data";
+};
+
+done-testing;

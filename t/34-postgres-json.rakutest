@@ -1,0 +1,50 @@
+use Test;
+use RedSourcing::PgJSON;
+use Red::AST::JsonItem;
+use Red::AST::Value;
+use Red::AST::Infixes;
+use Red::AST::Unary;
+use JSON::Fast;
+
+# A minimal SQL context exercises the adapter without needing a Pg server or
+# loading DB::Pg. Real execution is covered by the opt-in estate regressions.
+class Translator does RedSourcing::PgJSON {
+    has UInt $.counter is rw = 0;
+    method wildcard { '$' ~ ++$!counter }
+    multi method translate(Red::AST::Value $value, $context?) { 'payload' => [] }
+}
+sub item($key) { Red::AST::JsonItem.new(ast-value('document'), ast-value($key)) }
+subtest 'JSON path keys are bound, including nested keys and array indexes' => {
+    my $driver = Translator.new;
+    my $key = q[a,b}'{quoted];
+    my $sql = $driver.translate(item($key));
+    ok $sql.key.contains('ARRAY[$1]::text[]'), 'PostgreSQL receives a typed path array';
+    nok $sql.key.contains($key), 'punctuation and quotes never enter the SQL';
+    is-deeply $sql.value.Array, [$key], 'path value is preserved exactly';
+    my $nested = Red::AST::JsonItem.new(item('outer'), 'inner');
+    $sql = Translator.new.translate(Red::AST::JsonItem.new($nested, 2));
+    is-deeply $sql.value.Array, ['outer', 'inner', '2'], 'AST-wrapped nested keys and indexes are flattened';
+    ok $sql.key.contains('ARRAY[$1, $2, $3]'), 'nested keys each have a parameter';
+};
+subtest 'scalar casts extract text instead of casting quoted JSON' => {
+    for <str num int boolean datetime date> -> $type {
+        my $sql = Translator.new.translate(Red::AST::Cast.new(item('value'), $type));
+        ok $sql.key.contains('#>>'), "$type extracts the unquoted scalar";
+        is-deeply $sql.value.Array, ['value'], 'cast retains bound path';
+    }
+    dies-ok { Translator.new.translate(Red::AST::Cast.new(item('value'), 'unsafe-type')) },
+        'unknown types cannot be interpolated into SQL';
+};
+subtest 'uncast equality encodes JSON strings, numbers, booleans and null once' => {
+    for 'quoted " value', 42, True, Any -> $value {
+        for False, True -> $reverse {
+            my $field = item('value');
+            my $literal = ast-value($value);
+            my $eq = $reverse ?? Red::AST::Eq.new($literal, $field) !! Red::AST::Eq.new($field, $literal);
+            my $sql = Translator.new.translate($eq);
+            ok $sql.key.ends-with('= $2::jsonb'), 'JSON equality uses a typed bound literal';
+            is-deeply from-json($sql.value.tail), $value, 'literal is valid JSON with its original type';
+        }
+    }
+};
+done-testing;

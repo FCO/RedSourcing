@@ -1,0 +1,91 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use Cro::HTTP::Client;
+
+my $tmp = tempdir.IO;
+my $database = $tmp.add('new.db').Str;
+my $port = 41000 + (^15000).pick;
+my $base = "http://127.0.0.1:$port";
+$tmp.add('BrowserDomain.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module BrowserDomain;
+    aggregate Account is export {
+        has Str $.id is entity-id;
+        method APPLY(|) { }
+        method answer(Int :$value = 7) is command { %(answer => $value + 1) }
+    }
+    MODULE
+my $config = $tmp.add('monitor.rakuconf');
+$config.spurt("use RedSourcing::CLI::Config; config \{ .database = 'new.db'; .monitor: \{ .port = $port } }");
+my $started = Promise.new;
+my $stdout = '';
+my $stderr = '';
+my $proc = Proc::Async.new($*EXECUTABLE.Str, '-I' ~ $*CWD.add('lib'),
+    $*CWD.add('bin/red-sourcing.raku').Str, 'web-monitor', "--file=$config", '--allow-new-store',
+    "-I=$tmp", '-M=BrowserDomain', '--origin=http://example.invalid');
+$proc.stdout.tap(-> $chunk {
+    $stdout ~= $chunk;
+    $started.keep(True) if $stdout.contains('Store:') && $started.status == Planned;
+});
+$proc.stderr.tap(-> $chunk { $stderr ~= $chunk });
+my $finished = $proc.start;
+LEAVE {
+    if $finished.defined && $finished.status == Planned {
+        $proc.kill(SIGINT);
+        await Promise.anyof($finished, Promise.in(8));
+        $proc.kill(SIGKILL) if $finished.status == Planned;
+    }
+}
+await Promise.anyof($started, $finished, Promise.in(30));
+die "Monitor did not start: $stderr" unless $started.status == Kept;
+is $started.status, Kept, 'new-store mode starts without connecting to a missing SQLite file';
+nok $database.IO.e, 'starting the console does not create a database';
+my $overview = await Cro::HTTP::Client.get("$base/monitor");
+like await($overview.body-text), /'Initialize tables'/, 'new-store dashboard links to explicit initialization';
+my $settings = await Cro::HTTP::Client.get("$base/monitor/operations?operation=web-monitor");
+my $html = await $settings.body-text;
+like $html, /'BrowserDomain'/, 'CLI -M reaches the operation configuration';
+like $html, /'Connected store'/, 'monitor subcommand is represented as connection settings';
+my sub post(Str $path, %body) {
+    await Cro::HTTP::Client.post("$base/monitor/operations/$path", :body(%body), :content-type<application/json>,
+        :headers(['Origin' => 'http://example.invalid', 'X-RedSourcing-Console' => '1']))
+}
+sub run-form(%data) {
+    my $response = post('submit', %data);
+    my $html = await $response.body-text;
+    die "Submission failed: $html" unless $response.status == 202;
+    my $id = $html.match(/ 'id="execution-' (\d+) '"' /)[0].Str;
+    my $deadline = now + 20;
+    loop {
+        my $job = await Cro::HTTP::Client.get("$base/monitor/operations/job/$id");
+        $html = await $job.body-text;
+        last unless $html.contains('hx-trigger="every 1s"');
+        die "Timed out: $html" if now > $deadline;
+        await Promise.in(.1);
+    }
+    die "Execution failed: $html" unless $html.contains('succeeded');
+    $html
+}
+like run-form({:operation<init>}), /'Completed without output'/, 'authorized explicit init succeeds';
+ok $database.IO.f, 'database now exists';
+my $report = await Cro::HTTP::Client.get("$base/monitor/report");
+nok from-json(await($report.body-text))<store-error>:exists, 'inspector becomes ready after initialization';
+like run-form({:operation<create>, :p-entity<Account>, :o-identity<id=a1>}), /'BrowserDomain::Account'/,
+    'configured CLI imports are used only when an operation needs them';
+like run-form({:operation<command>, :p-entity<Account>, :p-method<answer>, :o-identity<id=a1>, :o-data('{"value":9}') }),
+    /'10'/, 'domain command can execute through the independent monitor';
+my $watch = post('submit', {:operation<work>, :o-watch<true>, :o-interval('0.1')});
+is $watch.status, 202, 'watch worker can run beside the HTTP server';
+await $watch.body-text;
+await Promise.in(1);
+$proc.kill(SIGINT);
+await Promise.anyof($finished, Promise.in(10));
+is $finished.status, Kept, 'monitor process stops promptly';
+if $*DISTRO.is-win {
+    skip 'Proc::Async.kill cannot deliver a catchable SIGINT on Windows';
+} else {
+    is $finished.result.exitcode, 0, 'monitor exits successfully after stopping its workers';
+}
+is $stderr, '', 'no route, socket or shutdown warnings';
+done-testing;

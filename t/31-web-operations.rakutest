@@ -1,0 +1,145 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::CLI::Config;
+use RedSourcing::Web::Operations;
+
+my $tmp = tempdir.IO;
+my $database = $tmp.add('operations.db').Str;
+$tmp.add('ConsoleDomain.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module ConsoleDomain;
+    class Renamed does Event is export { has Str $.id; has Str $.name }
+    aggregate Account is export {
+        has Str $.id is entity-id;
+        has Str $.name = '';
+        method APPLY(Renamed $e) { $!name = $e.name }
+        method rename(Str :$name! where *.chars) is command { self.renamed(:$name); %(name => $!name) }
+        method fail is command { die 'Rejected by domain' }
+    }
+    saga Workflow is export {
+        has Str $.id is entity-id;
+        method APPLY(Renamed $e where { .id eqv $!id }) { }
+        method REACT(Renamed $e where { .id eqv $!id }) {
+            self.^service('console-provider', 'send', \(), :retry{:1max}, :!compensation);
+        }
+    }
+    register-service 'console-provider', -> | { die Uncertain.new(:message('Provider outcome unknown')) };
+    MODULE
+my $settings = Settings.new(:driver<SQLite>, :$database, :includes([$tmp.Str]), :modules(['ConsoleDomain']));
+my $ops = RedSourcing::Web::Operations.new(:$settings, :directory($tmp), :max-running(2));
+LEAVE $ops.close if $ops.defined;
+sub completed(%job, $controller = $ops) {
+    my $deadline = now + 20;
+    loop {
+        my %current = $controller.job(%job<id>);
+        return %current if %current<state> ne any(<running stopping>);
+        die 'Execution timed out' if now > $deadline;
+        await Promise.in(.03);
+    }
+}
+sub execute(Str $operation, :@positionals = [], :%options = {}) {
+    completed($ops.submit($operation, :@positionals, :%options))
+}
+sub decoded(%job) {
+    die %job<stderr> unless %job<state> eq 'succeeded';
+    from-json(%job<stdout>)
+}
+sub request(Str $operation, *@positionals, *%options) {
+    execute($operation, :@positionals, :options(%(json => True, |%options)))
+}
+my %identity = ids => '{"id":"a=001"}';
+
+subtest 'catalog reflects every CLI operation and validates transport arguments' => {
+    my @names = $ops.catalog.map({ |.<commands>.map(*.<name>) });
+    is @names.elems, 23, 'all CLI operations are represented';
+    is $ops.configuration<database>, $database, 'store is fixed at startup';
+    is-deeply $ops.arguments('command', :positionals(['Account', 'rename']),
+        :options(%(identity => ['id=a=001'], data => '{"name":"$(touch /tmp/nope)"}', async => True))),
+        ['command', 'Account', 'rename', '--async', '--data={"name":"$(touch /tmp/nope)"}', '--identity=id=a=001'],
+        'argument arrays preserve literal shell characters and repeatable identity values';
+    is-deeply $ops.arguments('work'), ['work', '--/watch'], 'browser workers default to one pass';
+    for { $ops.arguments('missing') }, { $ops.arguments('web-monitor') },
+        { $ops.arguments('command', :positionals(['Account'])) },
+        { $ops.arguments('describe', :positionals(['Account', 'extra'])) },
+        { $ops.arguments('describe', :positionals(['--help'])) },
+        { $ops.arguments('streams', :options{:unknown<x>}) },
+        { $ops.arguments('streams', :options{:database<other.db>}) },
+        { $ops.arguments('streams', :options{:json<yes>}) },
+        { $ops.arguments('describe', :positionals(['Account']), :options{:modules<bad>}) },
+        { $ops.arguments('describe', :positionals(['Account']), :options{:modules([1])}) },
+        { $ops.arguments('load', :positionals(['Account']), :options{:ids(42)}) },
+        { $ops.arguments('update') } -> &invalid {
+        dies-ok &invalid, 'invalid or unsupported request is rejected before spawning';
+    }
+    is $ops.jobs.elems, 0, 'catalog and validation execute nothing';
+    nok $database.IO.e, 'opening an operations controller creates no database';
+};
+subtest 'create, validation, async execution and snapshots share CLI persistence' => {
+    is execute('init')<state>, 'succeeded', 'explicit init creates the schema';
+    my %created = decoded(request('create', 'Account', |%identity, data => '{"name":"Initial"}'));
+    is %created<data><name>, 'Initial', 'initial snapshot is persisted';
+    my %plan = decoded(request('command', 'Account', 'rename', |%identity,
+        data => '{"name":"Later"}', dry-run => True));
+    ok %plan<dry-run>, 'command preview uses actual signature validation';
+    my %bad = request('command', 'Account', 'rename', |%identity, data => '{"unknown":1}');
+    is %bad<state>, 'failed', 'invalid command completes as a failed job';
+    like %bad<stderr>, /'Unknown command arguments'/, 'domain/CLI diagnostics are retained';
+    my %queued = decoded(request('command', 'Account', 'rename', |%identity,
+        data => '{"name":"Current"}', async => True));
+    is %queued<state>, 'Pending', 'async request is stored, not executed';
+    is decoded(request('load', 'Account', |%identity))<data><name>, 'Initial', 'load does not run pending commands';
+    is decoded(request('run-command', %queued<id>.Str))<result><name>, 'Current', 'stored command executes with configured modules';
+    is decoded(request('load', 'Account', |%identity))<data><name>, 'Current', 'load reconstructs committed events';
+    ok decoded(request('snapshot', 'Account', |%identity))<version> > 1, 'snapshot writes a checkpoint';
+    is request('command', 'Account', 'fail', |%identity)<state>, 'failed', 'business failure retains CLI semantics';
+    my %description = decoded(request('describe', 'Account'));
+    ok %description<commands>.first(*.<name> eq 'rename')<declaration>.contains('where *.chars'), 'where predicate is available in web results';
+    for <types streams list-events list-commands list-entities list-aggregates list-projections list-sagas inspect stats> -> $name {
+        is request($name)<state>, 'succeeded', "$name works through the shared dispatcher";
+    }
+    my @events = decoded(request('list-events'));
+    my %migration = %(class => 'ConsoleDomain::Renamed', version => '0', transformation => '.<name> ~= "!"');
+    is decoded(request('update', |%migration, dry-run => True))<affected>, 1, 'migration preview counts matching rows';
+    is decoded(request('update', |%migration))<affected>, 1, 'migration runs the CLI transaction';
+    is decoded(request('list-events', class-name => 'ConsoleDomain::Renamed')).head<data><name>, 'Current!', 'transformation persisted';
+};
+subtest 'saga status, advance and action resolution persist without provider reissue' => {
+    decoded(request('create', 'Workflow', |%identity));
+    my %report = decoded(request('advance', 'Workflow', |%identity));
+    my %status = decoded(request('saga-status', 'Workflow', |%identity, details => True));
+    my $action = %status<actions>.head<id>;
+    is %status<actions>.head<status>, 'blocked', 'uncertain service action remains blocked';
+    decoded(request('resolve-action', 'Workflow', $action, |%identity, result => '{"confirmed":true}'));
+    is decoded(request('saga-status', 'Workflow', |%identity))<completed-actions>, 1, 'confirmed result is committed';
+};
+subtest 'watch workers run separately, enforce slots and stop cleanly' => {
+    my %worker = $ops.submit('work', :options{:watch, :interval('0.05')});
+    my %second = $ops.submit('work', :options{:watch, :interval('0.05')});
+    dies-ok { $ops.submit('types') }, 'active jobs are bounded';
+    is $ops.job(%worker<id>)<state>, 'running', 'watch job is retained';
+    await Promise.in(1);
+    $ops.stop(%worker<id>);
+    is completed(%worker)<state>, 'cancelled', 'watch is interrupted independently';
+    $ops.stop(%second<id>);
+    is completed(%second)<state>, 'cancelled', 'second worker stops';
+    is $ops.stop(%worker<id>)<state>, 'cancelled', 'stopping a completed job is harmless';
+    dies-ok { $ops.stop(99999) }, 'missing jobs have a clear error';
+    ok !$ops.job(99999).defined, 'missing jobs return no state';
+    my %pass = decoded(request('work'));
+    is %pass<processed>.elems, 0, 'one-pass worker returns its summary';
+};
+subtest 'history and output are bounded and shutdown rejects new jobs' => {
+    my $limited = RedSourcing::Web::Operations.new(:$settings, :directory($tmp), :history-limit(1), :output-limit(20));
+    LEAVE $limited.close;
+    my %job = $limited.submit('describe', :positionals(['Account']));
+    my %done = completed(%job, $limited);
+    ok %done<truncated>, 'large output is flagged, not allowed to grow indefinitely';
+    ok %done<stdout>.chars <= 20, 'stdout is bounded';
+    completed($limited.submit('types'), $limited);
+    is $limited.jobs.elems, 1, 'completed history is pruned';
+    $limited.close;
+    dies-ok { $limited.submit('types') }, 'shutdown stops accepting work';
+};
+done-testing;

@@ -1,0 +1,220 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $repo = $*CWD;
+my $tmp = tempdir.IO;
+my $database = $tmp.add('operations.db').Str;
+my $cli = $repo.add('bin/red-sourcing.raku').Str;
+my $lib = $repo.add('lib').Str;
+$tmp.add('CliOperations.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module CliOperations;
+    class Renamed does Event is export { has Int $.id; has Str $.name; }
+    aggregate Account is export {
+        has Int $.id is entity-id;
+        has Str $.name = '';
+        method APPLY(Renamed $e) { $!name = $e.name }
+        method rename(Str :alias(:$name)!) is command { self.renamed(:$name); %(name => $!name) }
+        method rejected is command { die 'Business rejection' }
+    }
+    projection Names is export {
+        has Int $.id is entity-id;
+        has Str $.name = '';
+        method APPLY(Renamed $e where { .id eqv $!id }) { $!name = $e.name }
+    }
+    saga Workflow is export {
+        has Int $.id is entity-id;
+        has Bool $.finished = False;
+        method APPLY(Renamed $e where { .id eqv $!id }) { }
+        method REACT(Renamed $e where { .id eqv $!id }) {
+            self.^command(Account, 'rename', \(:name('From saga')), :!compensation);
+        }
+    }
+    saga ServiceWorkflow is export {
+        has Int $.id is entity-id;
+        method APPLY(Renamed $e where { .id eqv $!id }) { }
+        method REACT(Renamed $e where { .id eqv $!id }) {
+            self.^service('cli-fake', 'charge', \(), :retry{:1max}, :!compensation);
+        }
+    }
+    register-service 'cli-fake', -> | { die Uncertain.new(:message('Provider outcome unknown')) };
+    MODULE
+
+sub cli(*@args) {
+    @args.push('--json') if @args.head ne 'init' && '--json' ne any(@args);
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $cli, |@args, "--database=$database",
+        :cwd($tmp), :out, :err;
+    %(code => $p.exitcode, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub app-cli(*@args) { cli(|@args, "-I=$tmp", '-M=CliOperations') }
+sub decoded(%r) {
+    die "CLI failed: {%r<err>}" if %r<code>;
+    from-json(%r<out>)
+}
+sub fixture(Str $code) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", "-I$tmp", '-MCliOperations', '-e',
+        'use RedSourcing; red-defaults "SQLite", :database(@*ARGS.head); ' ~ $code,
+        $database, :out, :err;
+    $p.out.slurp(:close);
+    die $p.err.slurp(:close) if $p.exitcode;
+    $p.err.slurp(:close);
+}
+sub journal { decoded(cli('list-events', '--json')) }
+sub commands { decoded(cli('list-commands', '--json')) }
+sub enqueue(Int $id, Str $method, Str $data = '{}') {
+    decoded(app-cli('command', 'Account', $method, "--ids={to-json(%(:$id), :!pretty)}", "--data=$data", '--async'))
+}
+
+is cli('init')<code>, 0, 'initialize operations store';
+subtest 'create validates identity and initial state and refuses to reset a stream' => {
+    my %row = decoded(app-cli('create', 'Account', '--ids={"id":1}', '--data={"name":"Initial"}'));
+    is %row<class>, 'CliOperations::Account', 'create stores an aggregate snapshot';
+    is %row<data><name>, 'Initial', 'initial attributes are stored';
+    is %row<version>, 1, 'initial snapshot starts the version';
+    for '--data={"id":9}', '--data={"stream":"spoofed"}', '--data={"unknown":1}', '--data=[]' -> $data {
+        isnt app-cli('create', 'Account', '--ids={"id":2}', $data)<code>, 0, 'invalid initial fields are rejected';
+    }
+    isnt app-cli('create', 'Account', '--ids={"id":1}')<code>, 0, 'duplicate creation is rejected';
+    is journal().elems, 1, 'invalid and duplicate creation preserve the journal';
+    isnt app-cli('create', 'Account', '--ids={}')<code>, 0, 'required identity is enforced';
+    isnt app-cli('create', 'Account', '--ids={"id":2,"extra":3}')<code>, 0, 'unknown identity is rejected';
+};
+subtest 'describe reports the original command signature and aliases' => {
+    my %description = decoded(app-cli('describe', 'Account'));
+    is %description<kind>, 'aggregate', 'kind comes from the metaclass';
+    is-deeply %description<ids>, ['id'], 'identity fields are listed';
+    my %rename = %description<commands>.first(*.<name> eq 'rename');
+    like %rename<signature>, /'Str :alias(:$name)!'/,
+        'signature text includes the named aliases, type and required marker';
+    is-deeply %rename<parameters>.head<aliases>.sort.Array, ['alias', 'name'], 'both aliases are reported';
+    is %rename<parameters>.head<type>, 'Str', 'parameter type is retained';
+    nok %rename<parameters>.head<optional>, 'required parameter is reported';
+    isnt app-cli('describe', 'MissingType')<code>, 0, 'unknown type is diagnosed';
+};
+subtest 'load folds events without writing and snapshot saves the folded state' => {
+    decoded(app-cli('command', 'Account', 'rename', '--ids={"id":1}', '--data={"name":"Current"}'));
+    my $before = journal().elems;
+    my %loaded = decoded(app-cli('load', 'Account', '--ids={"id":1}'));
+    is %loaded<data><name>, 'Current', 'load folds the latest event';
+    is journal().elems, $before, 'load emits no snapshot or event';
+    my %snapshot = decoded(app-cli('snapshot', 'Account', '--ids={"id":1}'));
+    is %snapshot<data><name>, 'Current', 'snapshot stores folded state';
+    is %snapshot<version>, %loaded<version> + 1, 'snapshot advances stream version';
+    isnt app-cli('load', 'Account', '--ids={"id":999}')<code>, 0, 'missing aggregate cannot load';
+    decoded(app-cli('snapshot', 'Names', '--ids={"id":1}'));
+    is decoded(app-cli('load', 'Names', '--ids={"id":1}'))<data><name>, 'Current', 'projection can replay and checkpoint';
+};
+subtest 'database-only catalog, inspection and metrics require no application modules' => {
+    my @before = journal().List;
+    my @types = decoded(cli('types')).List;
+    ok @types.first(*.<name> eq 'CliOperations::Account').defined, 'catalog discovers stored aggregate';
+    my %report = decoded(cli('inspect', '--limit=1'));
+    ok %report<stored-only>, 'inspection uses stored-only reader';
+    is %report<events>.elems, 1, 'recent history respects limit';
+    my %stream = decoded(cli('inspect', '--stream=CliOperations::Account: id = 1'));
+    is %stream<instance><data><name>, 'Current', 'stream inspection reads its last snapshot';
+    isnt cli('inspect', '--stream=missing')<code>, 0, 'unknown stream is diagnosed';
+    my %stats = decoded(cli('stats', '--minutes=2'));
+    is %stats<series>.elems, 2, 'metrics use requested minute buckets';
+    is %stats<totals><events>, 1, 'snapshot rows are excluded from domain events';
+    is %stats<totals><snapshots>, 3, 'snapshots are counted separately';
+    isnt cli('stats', '--minutes=0')<code>, 0, 'invalid metrics window is rejected';
+    is-deeply journal(), @before.Array, 'inspection never writes domain data';
+};
+subtest 'history supports raw class/schema filters, newest order and limits' => {
+    my @snapshots = decoded(cli('list-events', '--json', '--snapshots', '--latest', '--limit=2')).List;
+    is @snapshots.elems, 2, 'snapshot history is limited';
+    ok @snapshots[0]<id> > @snapshots[1]<id>, 'newest rows appear first';
+    my @events = decoded(cli('list-events', '--json', '--class-name=CliOperations::Renamed', '--schema-version=0')).List;
+    is @events.elems, 1, 'stored class filter needs no import';
+    is decoded(cli('list-events', '--json', '--schema-version=99')).elems, 0, 'unmatched schema returns an empty array';
+    isnt cli('list-events', '--limit=-1')<code>, 0, 'negative history limit is rejected';
+};
+subtest 'run-command executes a pending row once and honors its schedule' => {
+    my %pending = enqueue(1, 'rename', '{"name":"Queued"}');
+    my %done = decoded(app-cli('run-command', %pending<id>.Str));
+    is %done<state>, 'Done', 'stored command completes';
+    is %done<result><name>, 'Queued', 'stored result is returned';
+    is decoded(app-cli('run-command', %pending<id>.Str))<tries>, 1, 'rerunning a completed row uses its stored result';
+    my %future = enqueue(1, 'rename', '{"name":"Future"}');
+    fixture("my \$row = StoredCommand.^all.grep(*.id == {%future<id>}).head; \$row.next-run = DateTime.now.later(:hours(1)); \$row.^save;");
+    is decoded(app-cli('run-command', %future<id>.Str))<state>, 'Pending', 'future command remains pending without --wait';
+    is decoded(cli('list-commands', '--json', '--state=Pending', '--due')).elems, 0, 'due filter excludes future work';
+    isnt app-cli('run-command', '99999')<code>, 0, 'unknown command ID is diagnosed';
+    is decoded(cli('list-commands', '--json', '--entity=CliOperations::Account', '--method=rename', '--latest', '--limit=1')).head<id>, %future<id>, 'command filters and order select the expected row';
+};
+subtest 'worker bounds a pass, skips future work and continues after a failed command' => {
+    my %failed = enqueue(1, 'rejected');
+    my %success = enqueue(1, 'rename', '{"name":"Worker"}');
+    my %pass = app-cli('work', '--limit=1');
+    isnt %pass<code>, 0, 'one-shot worker returns failure status when a handler fails';
+    my %result = from-json(%pass<out>);
+    is %result<processed>.elems, 1, 'pass observes its limit';
+    is %result<processed>.head<state>, 'Failed', 'business failure is persisted';
+    like %result<processed>.head<execution-error>, /'Business rejection'/, 'worker reports the original failure';
+    is decoded(app-cli('work'))<processed>.head<id>, %success<id>, 'later invocation processes the remaining due row';
+    is decoded(app-cli('work'))<processed>.elems, 0, 'empty pass is harmless and excludes future row';
+    my %failure2 = enqueue(1, 'rejected');
+    my %success2 = enqueue(1, 'rename', '{"name":"Continued"}');
+    my %batch = app-cli('work', '--stream=CliOperations::Account: id = 1', '--entity=CliOperations::Account');
+    is from-json(%batch<out>)<processed>.tail<state>, 'Done', 'a failed handler does not prevent the next command';
+    isnt app-cli('work', '--limit=0')<code>, 0, 'zero worker limit is rejected';
+    isnt app-cli('work', '--interval=0')<code>, 0, 'zero worker interval is rejected';
+};
+subtest 'advance replays saga input and executes its scheduled aggregate command' => {
+    decoded(app-cli('create', 'Workflow', '--ids={"id":1}'));
+    my %advanced = decoded(app-cli('advance', 'Workflow', '--ids={"id":1}', '--limit=1'));
+    is %advanced<data><saga-state><actions>.head<status>, 'done', 'advance executes the saga action';
+    is decoded(app-cli('load', 'Account', '--ids={"id":1}'))<data><name>, 'From saga', 'aggregate receives the saga command';
+    my $count = commands().elems;
+    decoded(app-cli('advance', 'Workflow', '--ids={"id":1}', '--limit=1', '--now=2000-01-01T00:00:00Z'));
+    is commands().elems, $count, 'completed action is not repeated';
+    isnt app-cli('advance', 'Account', '--ids={"id":1}')<code>, 0, 'advance requires a saga';
+    isnt app-cli('advance', 'Workflow', '--ids={"id":1}', '--limit=0')<code>, 0, 'zero advance limit is rejected';
+};
+
+subtest 'resolve-action records a confirmed outcome without reissuing an uncertain service call' => {
+    decoded(app-cli('create', 'ServiceWorkflow', '--ids={"id":1}'));
+    my %blocked = decoded(app-cli('advance', 'ServiceWorkflow', '--ids={"id":1}', '--limit=1'));
+    my %action = %blocked<data><saga-state><actions>.head;
+    is %action<status>, 'blocked', 'uncertain external outcome is blocked';
+    my %resolved = decoded(app-cli('resolve-action', 'ServiceWorkflow', %action<id>,
+        '--ids={"id":1}', '--result={"confirmed":true}'));
+    is %resolved<data><saga-state><actions>.head<status>, 'done', 'confirmed result is recorded';
+    is %resolved<data><saga-state><actions>.head<attempts>, 1, 'service was not retried';
+    isnt app-cli('resolve-action', 'ServiceWorkflow', %action<id>, '--ids={"id":1}', '--result=null')<code>, 0,
+        'a settled operation cannot be resolved twice';
+    for [], ['--result=null', '--error=failed'] -> @options {
+        isnt app-cli('resolve-action', 'ServiceWorkflow', %action<id>, '--ids={"id":1}', |@options)<code>, 0,
+            'resolution requires exactly one outcome';
+    }
+    isnt app-cli('resolve-action', 'Account', 'unknown', '--ids={"id":1}', '--error=failed')<code>, 0,
+        'resolution requires a saga';
+};
+
+subtest 'watch worker starts and stops without waiting for the whole interval' => {
+    my $first = Promise.new;
+    my $errors = '';
+    my $proc = Proc::Async.new($*EXECUTABLE.Str, "-I$lib", $cli, 'work', "--database=$database",
+        "-I=$tmp", '-M=CliOperations', '--watch', '--interval=120');
+    $proc.stdout.tap(-> $chunk { $first.keep(True) unless $first.status ~~ Kept });
+    $proc.stderr.tap(-> $chunk { $errors ~= $chunk });
+    my $finished = $proc.start(:cwd($tmp));
+    await Promise.anyof($first, $finished, Promise.in(30));
+    is $first.status, Kept, 'watch performs its first pass';
+    $proc.kill(SIGINT);
+    await Promise.anyof($finished, Promise.in(10));
+    is $finished.status, Kept, 'stopping interrupts a long polling interval';
+    # libuv's Windows process kill uses TerminateProcess, which cannot run the
+    # child's signal handler. Startup and termination are still checked above.
+    if $*DISTRO.is-win {
+        skip 'Proc::Async.kill cannot deliver a catchable SIGINT on Windows', 2;
+    } else {
+        is $finished.result.exitcode, 0, 'worker exits cleanly';
+        is $finished.result.signal, 0, 'worker handles SIGINT gracefully';
+    }
+    is $errors, '', 'watch shutdown has no errors';
+};
+
+done-testing;

@@ -1,0 +1,115 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing::Web::Operations;
+use RedSourcing::Web::Console;
+use RedSourcing::CLI::Config;
+use Cro::HTTP::Router;
+use Cro::HTTP::Request;
+
+my $tmp = tempdir.IO;
+my $ops = RedSourcing::Web::Operations.new(:directory($tmp),
+    :settings(Settings.new(:driver<SQLite>, :database($tmp.add('store.db').Str))));
+LEAVE $ops.close if $ops.defined;
+my $source = Supplier.new;
+my &report = -> { %(types => [%(name => '<script>Unloaded::Account</script>')]) };
+my $routes = route { include monitor => route {
+    include operations => console-routes($ops, :&report, :origins(['http://localhost:3001']));
+} };
+my $responses = $routes.transformer($source.Supply).Channel;
+sub request(Str $target, Str :$method = 'GET', :%data = {}, Str :$origin = 'http://localhost:3001',
+            Bool :$console-header = True, Str :$fetch-site = 'same-origin') {
+    my $request = Cro::HTTP::Request.new(:$method, :$target);
+    $request.append-header('Host', 'localhost:3001');
+    $request.append-header('Origin', $origin) if $origin.chars;
+    $request.append-header('Sec-Fetch-Site', $fetch-site);
+    $request.append-header('X-RedSourcing-Console', '1') if $console-header;
+    if %data {
+        my $body = to-json(%data).encode('utf-8');
+        $request.append-header('Content-Type', 'application/json');
+        $request.append-header('Content-Length', $body.bytes.Str);
+        $request.set-body-byte-stream(supply { emit $body });
+    }
+    $source.emit($request);
+    $responses.receive
+}
+sub body($response) { $response.body-byte-stream.list.map(*.decode('utf-8')).join }
+subtest 'all CLI operations have grouped, accessible forms with shared help' => {
+    for $ops.catalog -> %group {
+        for %group<commands>.List -> %operation {
+            my $response = request('/monitor/operations?operation=' ~ %operation<name>);
+            is $response.status, 200, "{%operation<name>} has a page";
+            my $html = body($response);
+            ok $html.contains('aria-label="Operations"'), 'operations are grouped in navigation';
+            ok $html.contains('script-src &#39;self&#39;') || $response.header('Content-Security-Policy').contains("script-src 'self'"), 'local script policy is retained';
+            for %operation<options>.grep({ .<name> ne any(<file driver database json>) }) -> %option {
+                next if %operation<name> eq 'web-monitor';
+                ok $html.contains('name="o-' ~ %option<name> ~ '"'), "option {%option<name>} is available";
+                ok $html.contains('for="field-o-' ~ %option<name> ~ '"'), 'fields have visible labels';
+            }
+            nok $html.contains('<script>Unloaded'), 'persisted names are escaped';
+        }
+    }
+    is $ops.jobs.elems, 0, 'opening pages never starts jobs';
+    my $catalog = from-json(body(request('/monitor/operations/catalog')));
+    is $catalog.elems, 7, 'machine-readable catalog shares CLI functional groups';
+    is request('/monitor/operations?operation=missing').status, 404, 'unknown operation is diagnosed';
+    is request('/monitor/operations/job/99999').status, 404, 'unknown job has a 404';
+    ok body(request('/monitor/operations/jobs')).contains('Run an operation'), 'empty history explains how to begin';
+    my $prefilled = body(request('/monitor/operations?operation=command&entity=Account&method=rename&ids=%7B%22id%22%3A%22a1%22%7D'));
+    ok $prefilled.contains('value="Account"') && $prefilled.contains('value="rename"'), 'detail links can prefill the target';
+    ok $prefilled.contains('{&quot;id&quot;:&quot;a1&quot;}'), 'identity JSON is displayed safely';
+};
+subtest 'POST requires an allowed origin and custom console header' => {
+    for %(origin => 'http://evil.invalid'), %(origin => ''), %(console-header => False),
+        %(fetch-site => 'cross-site'), %(origin => 'http://attacker.localhost:3001') -> %flags {
+        my $response = request('/monitor/operations/submit', :method<POST>, :data{:operation<init>}, |%flags);
+        is $response.status, 403, 'cross-origin or incomplete console request is rejected';
+        ok body($response).contains('same-origin'), 'rejection is readable';
+    }
+    is $ops.jobs.elems, 0, 'rejected requests cannot execute operations';
+    is request('/monitor/operations/submit').status, 405, 'GET cannot execute operations';
+    for {:operation<command>, :p-entity<Account>}, {:operation<streams>, :o-json<invalid>},
+        {:operation<streams>, :o-database<other>}, {:operation<streams>, :o-json([True])},
+        {:operation<describe>, :p-entity([1])}, {:operation<missing>}, {:operation<web-monitor>} -> %data {
+        my $response = request('/monitor/operations/submit', :method<POST>, :%data);
+        is $response.status, 400, 'invalid request is rejected before running';
+        ok body($response).contains('role="alert"'), 'validation failure is accessible';
+    }
+};
+subtest 'accepted operations return pollable jobs and escaped output' => {
+    my $response = request('/monitor/operations/submit', :method<POST>, :data{:operation<init>});
+    is $response.status, 202, 'accepted job returns immediately';
+    ok body($response).contains('hx-trigger="every 1s"'), 'result polls independently of SSE';
+    my $deadline = now + 15;
+    await Promise.in(.05) while $ops.job(1)<state> eq 'running' && now < $deadline;
+    is $ops.job(1)<state>, 'succeeded', 'explicit init created the database';
+    ok body(request('/monitor/operations/job/1')).contains('Completed without output.'), 'no-result success is explained';
+    my $read = request('/monitor/operations/submit', :method<POST>,
+        :data{:operation<list-events>, :o-limit('10'), :o-json<true>, :o-events("Missing::Event\nOther::Event")});
+    is $read.status, 202, 'repeated and ordinary fields reach CLI validation';
+    $deadline = now + 15;
+    await Promise.in(.05) while $ops.job(2)<state> eq 'running' && now < $deadline;
+    is $ops.job(2)<state>, 'failed', 'unknown event type produces a failed result';
+    my $failed = body(request('/monitor/operations/job/2'));
+    ok $failed.contains('Action failed') && $failed.contains('Diagnostics'), 'failure explanation and optional diagnostics are available';
+    nok $failed.contains('hx-trigger="every 1s"'), 'completed jobs stop polling';
+    my $watch = request('/monitor/operations/submit', :method<POST>, :data{:operation<work>, :o-watch<true>, :o-interval('0.05')});
+    is $watch.status, 202, 'worker starts without blocking response';
+    my $watch-id = $ops.jobs.head<id>;
+    is request("/monitor/operations/stop/$watch-id", :method<POST>, :origin('http://evil.invalid')).status, 403, 'stopping is protected too';
+    await Promise.in(1);
+    is request("/monitor/operations/stop/$watch-id", :method<POST>).status, 200, 'worker can be stopped';
+    $deadline = now + 10;
+    await Promise.in(.05) while $ops.job($watch-id)<state> eq any(<running stopping>) && now < $deadline;
+    is $ops.job($watch-id)<state>, 'cancelled', 'stop result is retained';
+    is request('/monitor/operations/stop/99999', :method<POST>).status, 404, 'unknown stop target returns 404';
+    ok body(request('/monitor/operations?job=1')).contains('id="execution-1"'), 'history links reopen prior output';
+    ok body(request('/monitor/operations/jobs')).contains('#1 init'), 'job history is available as a fragment';
+    my %malicious = $ops.job(1); %malicious<stdout> = '<script>alert(1)</script>';
+    ok job-view(%malicious).contains('&lt;script&gt;'), 'process output cannot inject HTML';
+    %malicious<truncated> = True;
+    ok job-view(%malicious).contains('Output was truncated'), 'output limits are visible';
+};
+$source.done;
+done-testing;

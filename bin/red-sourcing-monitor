@@ -1,0 +1,32 @@
+#!/usr/bin/env raku
+use RedSourcing::Web::Monitor;
+use RedSourcing::Config;
+
+my %*SUB-MAIN-OPTS = :named-anywhere, :coerce-allomorphs-to(Numeric);
+
+my %loaded;
+{
+    CATCH { default { note .message; exit 1 } }
+    %loaded = load-cli-config(@*ARGS);
+}
+my $settings = %loaded<settings>;
+
+sub MAIN(Str :f(:$file), Str :$driver = $settings.driver // 'SQLite',
+         Str :$database = $settings.database, Str :$host = $settings.monitor.host // '127.0.0.1',
+         UInt :$port = $settings.monitor.port // 3001, UInt :$minutes = $settings.monitor.minutes // 60,
+         Str :$app-url = $settings.monitor.app-url // '', Bool :$debug = $settings.debug,
+         :I(:@includes), :M(:@modules), :origin(:@origins), Bool :$allow-new-store = $settings.monitor.allow-new-store) {
+    CATCH {
+        default {
+            .rethrow if $debug;
+            note .message;
+            exit 1;
+        }
+    }
+    die '--database is required, either on the CLI or in configuration' unless $database.defined;
+    my $explicit = @*ARGS.first({ $_ eq '--database' || .starts-with('--database=') }).defined;
+    my $path = config-database($driver, $database, %loaded<directory>, :$explicit);
+    run-monitor(:$driver, :database($path), :$host, :$port, :$minutes, :$app-url, :$debug,
+        :connection($settings.connection), :$settings, :@includes, :@modules,
+        :origins(@origins ?? @origins !! $settings.monitor.origins), :$allow-new-store);
+}

@@ -1,0 +1,63 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Inspector;
+
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $i = RedSourcing::Inspector.new(:stored-only);
+is-deeply $i.types, [], 'database-only catalog starts empty';
+is-deeply $i.instances, [], 'database-only discovery starts empty';
+ok $i.report<stored-only>, 'report identifies database-only inspection';
+
+# These names are intentionally not defined or imported in this process.
+sub row(Str $type, Str $stream, UInt $version, Str $mro, %data, *%extra) {
+    StoredEvent.^create(:class($type), :$stream, :$version, :$mro, :data(%data), |%extra)
+}
+my $snapshot = row('Unknown::Account', 'account/a', 1, '|Unknown::Account|Entity|', %(id => 'a', balance => 10));
+row('Unknown::Deposited', 'account/a', 2, '|Unknown::Deposited|Event|', %(amount => 5));
+row('Unknown::Balance', 'balance/a', 1, '|Unknown::Balance|Entity|', %(id => 'a', amount => 10), :replay-cursor(0));
+row('Unknown::Saga', 'Unknown::Saga: id = a', 1, '|Unknown::Saga|Entity|',
+    %(id => 'a', saga-state => %(status => 'running', actions => [], timers => {}, compensations => [])));
+row('RedSourcing::Saga::StepSucceeded', 'Unknown::Saga: id = a', 2,
+    '|RedSourcing::Saga::Control|Event|', %(values => %(id => 'a', payment => 'paid'),
+        state => %(status => 'completed', actions => [], timers => {}, compensations => []), cursor => 2));
+row('Unknown::BareEvent', 'just-a-stream', 1, '|Event|', %(note => 'raw'));
+StoredCommand.^create(:stream<account/a>, :entity<Unknown::Account>, :entity-ids{ :id<a> },
+    :method<deposit>, :class<Unknown::Account::Deposit>, :data{ :amount(5) });
+StoredCommand.^create(:stream<commands-only>, :entity<Unknown::CommandTarget>, :entity-ids{ :id<b> },
+    :method<process>, :class<Unknown::CommandTarget::Process>, :data{});
+StoredCommand.^create(:stream<account/b>, :entity<Unknown::Account>, :entity-ids{ :id<b> },
+    :method<withdraw>, :class<Unknown::Account::Withdraw>, :data{});
+my $before = StoredEvent.^all.elems;
+my %report = $i.report;
+is %report<types>.elems, 4, 'catalog is discovered from stored names';
+is %report<instances>.elems, 6, 'snapshots, controls, commands and bare streams are discoverable';
+my %account = %report<instances>.first(*.<stream> eq 'account/a');
+is %account<kind>, 'aggregate', 'aggregate snapshot is classified';
+is %account<data><balance>, 10, 'snapshot state is reported without inventing a fold';
+is %account<state-event-id>, $snapshot.id, 'state record is explicit';
+is %account<head-version>, 2, 'stream head can be newer than the displayed snapshot';
+is-deeply %account<identity>, %(id => 'a'), 'command metadata supplies identity';
+is %report<instances>.first(*.<stream> eq 'balance/a')<kind>, 'projection', 'replay cursor identifies projection checkpoint';
+my %saga = %report<instances>.first(*.<kind> eq 'saga');
+is %saga<data><payment>, 'paid', 'latest control includes post-snapshot domain state';
+is %saga<status>, 'completed', 'saga runtime status comes from control';
+is %saga<state-source>, 'control', 'control is the state source';
+is %report<instances>.first(*.<stream> eq 'just-a-stream')<state-source>, 'unavailable', 'bare event payload is not mislabelled entity state';
+is %report<instances>.first(*.<stream> eq 'commands-only')<kind>, 'entity', 'commands alone cannot distinguish aggregate and projection';
+is %report<events>.head<mro>, '|Event|', 'raw event metadata is available';
+is %report<commands>.head<entity>, 'Unknown::Account', 'command target metadata is available';
+is StoredEvent.^all.elems, $before, 'inspection emits no snapshots or controls';
+is StoredCommand.^all.grep(*.state == StoredCommand::Pending).elems, 3, 'inspection executes no commands';
+is-deeply $i.types.first(*.<name> eq 'Unknown::Account')<ids>, ['id'], 'catalog merges identities across streams';
+is-deeply $i.types.first(*.<name> eq 'Unknown::Account')<commands>, ['deposit', 'withdraw'], 'catalog merges observed command methods';
+is $i.events(:id($snapshot.id)).head<data><balance>, 10, 'event ID query returns its exact persisted payload';
+is $i.events(:id(99999)).elems, 0, 'unknown event ID returns no rows';
+is $i.events(:type<Unknown::Account>).elems, 1, 'event type filter is exact';
+is $i.events(:stream<account/a>).elems, 2, 'event stream filter is exact';
+is $i.commands(:type<Unknown::Account>).elems, 2, 'command type filter includes entity targets';
+is $i.commands(:type<Unknown::Account::Deposit>).elems, 1, 'command type filter includes stored command classes';
+is $i.commands(:stream<account/a>, :id(1)).head<method>, 'deposit', 'command ID and stream filters combine';
+is $i.commands(:id(99999)).elems, 0, 'unknown command ID returns no rows';
+done-testing;

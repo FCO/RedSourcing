@@ -1,0 +1,110 @@
+/* Uses a dedicated empty store and the Cart example; never point at user data. */
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdir } from 'node:fs/promises';
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
+const base = process.env.CONSOLE_URL || 'http://127.0.0.1:3107';
+const output = process.env.SCREENSHOT_DIR || '/tmp/redsourcing-operation-screenshots';
+const cartId = 'browser-cart-' + Date.now();
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch({ headless: true,
+  ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+const run = async operation => {
+  await page.getByRole('button', { name: `Run ${operation}`, exact: true }).click();
+  await page.locator('#operation-result .pill').filter({ hasText: /^succeeded$/ }).waitFor({ timeout: 20000 });
+};
+const runEntity = async action => {
+  const previous = await page.locator('#entity-result .execution-result').getAttribute('id').catch(() => null);
+  await page.getByRole('button', { name: action, exact: true }).click();
+  await page.waitForFunction(previous => {
+    const result = document.querySelector('#entity-result .execution-result');
+    return result && result.id !== previous && result.querySelector('.panel-heading .pill')?.textContent === 'succeeded';
+  }, previous, { timeout: 20000 });
+};
+try {
+  assert.equal((await page.goto(base + '/monitor')).status(), 200);
+  const initialize = page.getByRole('link', { name: 'Initialize tables', exact: true });
+  if (await initialize.count()) await initialize.click();
+  else await page.goto(base + '/monitor/operations?operation=init');
+  await run('init');
+  await page.goto(base + '/monitor/operations?operation=create&entity=Cart');
+  await page.getByLabel('Entity IDs', { exact: false }).fill('cart-id=' + cartId);
+  await run('create');
+  await page.goto(base + '/monitor/operations?operation=command&entity=Cart&method=add-item');
+  await page.getByLabel('Entity IDs', { exact: false }).fill('cart-id=' + cartId);
+  await page.getByLabel('data', { exact: true }).fill('{"product-id":"book","name":"Raku book","unit-price":19.5,"quantity":2}');
+  await run('command');
+  assert.match(await page.locator('.execution-output').textContent(), /39/);
+  await page.screenshot({ path: `${output}/command.png`, fullPage: true });
+  // CLI validation errors are visible while inputs survive the HTMX response.
+  await page.getByLabel('data', { exact: true }).fill('{"unknown":true}');
+  await page.getByRole('button', { name: 'Run command', exact: true }).click();
+  await page.locator('#operation-result .pill').filter({ hasText: /^failed$/ }).waitFor({ timeout: 20000 });
+  assert.match(await page.locator('.execution-errors').textContent(), /Unknown command arguments/);
+  assert.equal(await page.getByLabel('data', { exact: true }).inputValue(), '{"unknown":true}');
+  // Transport errors also replace the result panel and keep the form usable.
+  await page.locator('input[name="p-entity"]').evaluate(element => element.value = '--help');
+  await page.getByRole('button', { name: 'Run command', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: /cannot begin with a dash/ }).waitFor();
+  assert.match(await page.getByRole('alert').filter({ hasText: /cannot begin with a dash/ }).textContent(), /cannot begin with a dash/);
+  assert.equal(await page.getByRole('button', { name: 'Run command', exact: true }).isEnabled(), true);
+  await page.goto(base + '/monitor/operations?operation=work');
+  await page.getByLabel('watch', { exact: true }).selectOption('true');
+  await page.getByLabel('interval', { exact: true }).fill('0.2');
+  await page.getByRole('button', { name: 'Run work', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop execution', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Stop execution', exact: true }).click();
+  await page.locator('#operation-result .pill').filter({ hasText: /^cancelled$/ }).waitFor({ timeout: 20000 });
+  await page.goto(base + '/monitor');
+  const card = page.locator('.instance').filter({ has: page.locator('.stream').filter({ hasText: cartId }) });
+  await card.waitFor();
+  await card.locator('h3').getByRole('link').click();
+  const detailUrl = page.url();
+  await runEntity('Load current state');
+  assert.equal(page.url(), detailUrl, 'loading stays on the selected entity');
+  assert.match(await page.locator('#entity-result .execution-output').textContent(), /39/);
+  assert.equal(await page.locator('#entity-result .execution-output pre').count(), 0, 'state is rendered as HTML');
+  await page.getByRole('link', { name: 'Send command', exact: true }).click();
+  await page.locator('.command-choice').filter({ hasText: 'add-item' }).click();
+  await page.getByLabel('product-id', { exact: false }).fill('pen');
+  await page.getByLabel('name', { exact: false }).fill('Pen');
+  await page.getByLabel('unit-price', { exact: false }).fill('4');
+  await page.getByLabel('quantity', { exact: false }).fill('1');
+  await runEntity('Send command');
+  assert.equal(page.url(), detailUrl, 'command stays on the selected entity');
+  assert.equal(await page.locator('#entity-action input[name="p-entity"]').count(), 0, 'entity is not editable');
+  await runEntity('Load current state');
+  assert.match(await page.locator('#entity-result .execution-output').textContent(), /43/);
+  await runEntity('Save checkpoint');
+  await page.screenshot({ path: `${output}/entity-actions.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.locator('body').evaluate(element => element.scrollWidth > innerWidth), false, 'mobile entity details fit');
+  await page.screenshot({ path: `${output}/entity-actions-mobile.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('link', { name: 'View flow', exact: false }).click();
+  await page.locator('.flow-node').first().waitFor();
+  assert.equal(await page.getByLabel('Starting entity').inputValue(), 'Cart: cart-id = ' + cartId);
+  await page.waitForFunction(() => document.querySelectorAll('.flow-path').length > 0);
+  assert.ok(await page.locator('.flow-node').count() >= 5, 'graph connects creation, commands, events and consumer');
+  const commandNode = page.locator('.flow-stage').nth(2).locator('.flow-node').first();
+  await commandNode.focus();
+  assert.ok(await page.locator('.flow-path.active').count() > 0, 'keyboard focus highlights recorded connections');
+  await page.screenshot({ path: `${output}/flow.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.locator('body').evaluate(element => element.scrollWidth > innerWidth), false, 'mobile flow scrolls inside its diagram');
+  await page.screenshot({ path: `${output}/flow-mobile.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + '/monitor/operations?operation=command&entity=Cart&method=add-item');
+  assert.equal(await page.locator('body').evaluate(element => element.scrollWidth > innerWidth), false, 'mobile operations fit the viewport');
+  await page.screenshot({ path: `${output}/command-mobile.png`, fullPage: true });
+  assert.deepEqual(errors, [], 'no browser script errors');
+  console.log('Initialization, commands, scoped actions, HTML results, causal flow links, keyboard highlighting and mobile layout verified.');
+} catch (error) {
+  console.error('Page:', page.url(), '\n', await page.locator('body').innerText());
+  await page.screenshot({ path: `${output}/failure.png`, fullPage: true });
+  throw error;
+} finally { await browser.close(); }

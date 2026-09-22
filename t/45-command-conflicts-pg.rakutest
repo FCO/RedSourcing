@@ -1,0 +1,78 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Flow;
+use lib $?FILE.IO.parent.add('lib').Str;
+use CommandConflictDomain;
+
+my $pg-database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+unless $pg-database.defined {
+    skip 'Set RED_SOURCING_TEST_PG_DATABASE for independent PostgreSQL writer checks';
+    done-testing;
+    exit;
+}
+die 'Use a simple PostgreSQL test database name' unless $pg-database ~~ /^ <[\w\-]>+ $/;
+require ::('DB::Pg'); require ::('RedSourcing::PgJSON');
+my $admin = ::('DB::Pg').new(:conninfo("dbname=$pg-database"));
+my $schema = 'rs_command_conflict_' ~ $*PID;
+$admin.execute("CREATE SCHEMA $schema");
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE");
+my $pool = ::('DB::Pg').new(:conninfo("dbname=$pg-database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+    :converters(<DateTime UUID Geometric>));
+my $*RED-DB = (database 'Pg', :dbh($pool)) but ::('RedSourcing::PgJSON');
+schema(StoredEvent, StoredCommand).create;
+enable-flow-tracing;
+my $proxy = ConcurrentBalance.^with-ids(:id<shared>);
+$proxy.^create;
+my $directory = tempdir.IO;
+my $barrier = $directory.add('writer').Str;
+my $row = $proxy.credit(:amount(5), :$barrier, :!sync);
+my $script = $directory.add('worker.raku');
+$script.spurt(q:to/WORKER/);
+use RedSourcing;
+use RedSourcing::Flow;
+use CommandConflictDomain;
+use DB::Pg;
+use RedSourcing::PgJSON;
+my ($database, $schema, $id) = @*ARGS;
+my $pool = DB::Pg.new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+    :converters(<DateTime UUID Geometric>));
+my $*RED-DB = (database 'Pg', :dbh($pool)) but RedSourcing::PgJSON;
+enable-flow-tracing;
+say StoredCommand.^all.grep(*.id == $id.UInt).head.run;
+WORKER
+my $worker = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-It/lib', $script.Str,
+    $pg-database, $schema, $row.id.Str);
+my ($output, $errors) = '', '';
+$worker.stdout.tap(-> $text { $output ~= $text });
+$worker.stderr.tap(-> $text { $errors ~= $text });
+my $finished = $worker.start;
+LEAVE { $worker.kill if $finished.status ~~ Planned }
+my $deadline = now + 40;
+until ($barrier ~ '.ready').IO.e {
+    die "First writer failed before reaching its barrier: $errors" if $finished.status !~~ Planned;
+    die 'First writer did not reach its barrier' if now > $deadline;
+    await Promise.in(0.02);
+}
+is ($barrier ~ '.ready').IO.slurp, '1', 'the first process loaded the initial stream version';
+is $proxy.credit(:amount(7)), 7, 'the independent writer commits the competing version';
+($barrier ~ '.resume').IO.spurt('resume');
+await Promise.anyof($finished, Promise.in(40));
+die 'The conflicting writer did not complete its retry' if $finished.status ~~ Planned;
+my $process = await $finished;
+is $process.exitcode, 0, 'the real PostgreSQL unique violation rolls back and retries successfully';
+is $errors, '', 'the worker emits no transaction-aborted or conflict diagnostics';
+is $output, "12\n", 'the caller receives a result computed from the competing committed event';
+my $stored = StoredCommand.^all.grep(*.id == $row.id).head;
+is $stored.state.Str, 'Done', 'the original command succeeds';
+is $stored.tries, 2, 'the same command records the rejected and successful invocations';
+nok $stored.error.defined, 'optimistic contention leaves no terminal error';
+is StoredCommand.^all.elems, 2, 'there are only the two independently submitted commands';
+is $proxy.^load.balance, 12, 'both credits contribute to the restored state exactly once';
+is-deeply StoredEvent.^all.sort(*.version).map(*.version).Array, [1, 2, 3],
+    'the retry appends a new version without overwriting its competitor';
+my @links = flow-links(:source-kind<command>, :source($row.id.Str), :target-kind<event>);
+is @links.elems, 1, 'the aborted attempt does not retain emission telemetry';
+is StoredEvent.^all.grep(*.id == @links.head<target>.UInt).head.version, 3,
+    'the successful retry emits after the competing version';
+done-testing;

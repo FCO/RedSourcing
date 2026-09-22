@@ -1,0 +1,175 @@
+use Test;
+use Red;
+use RedFactory;
+use RedSourcing;
+use RedSourcing::Event;
+use RedSourcing::C;
+use RedSourcing::Utils;
+
+my $*RED-DB = factory-db;
+StoredEvent.^create-table;
+
+class RuleTransaction does Event {
+    has Str $.name;
+    has Str $.month;
+    has Int $.from-client;
+    has Int $.to-client;
+    has %.profile;
+}
+class OtherRuleEvent does Event { has Str $.name; }
+
+for (
+    %(name => 'Ana', month => '2026-10', from-client => 42, to-client => 7,
+        profile => %(city => 'Porto', country => 'PT')),
+    %(name => 'Bia', month => '2026-10', from-client => 7, to-client => 42,
+        profile => %(city => 'Lisbon', country => 'PT')),
+    %(name => 'Caio', month => '2026-11', from-client => 42, to-client => 7,
+        profile => %(city => 'Porto', country => 'BR')),
+    %(name => 'Davi', month => '2026-10', from-client => 9, to-client => 7,
+        profile => %(city => 'Porto', country => 'PT')),
+).kv -> $version, %payload {
+    RuleTransaction.emit(:stream<signature-rules>, :$version, |%payload);
+}
+OtherRuleEvent.emit(:stream<signature-rules>, :version(4), :name<Other>);
+
+sub names(@rules) {
+    StoredEvent.list-events(:stream<signature-rules>, |@rules).map(*.name).Array
+}
+
+my $handler-calls = 0;
+class StatementRules {
+    has Str $.month;
+    has Int $.client-id;
+    multi method APPLY(RuleTransaction $_ where {
+        .month eq $!month && .from-client == $!client-id
+    }) { ++$handler-calls }
+    multi method APPLY(RuleTransaction $_ where {
+        .month eq $!month && .to-client == $!client-id
+    }) { ++$handler-calls }
+}
+
+subtest 'method rules bind self, preserve candidates and leave handlers unchanged' => {
+    my $october = StatementRules.new(:month<2026-10>, :client-id(42));
+    my $november = StatementRules.new(:month<2026-11>, :client-id(42));
+    my &method = StatementRules.^find_method('APPLY');
+    my @original-params = &method.candidates.map({
+        .signature.params.grep({ !.invocant && !.slurpy }).head
+    });
+    my @october = rules-from-func($october, &method);
+    my @november = rules-from-func($november, &method);
+    is @october.elems, 2, 'both candidates of the same event type remain rules';
+    ok @october.all.key === RuleTransaction, 'rule keys contain the event type';
+    is-deeply names(@october), ['Ana', 'Bia'], 'SQL combines receiver attributes and event predicates';
+    is-deeply names(@november), ['Caio'], 'a second receiver uses its own state';
+    is-deeply names(@october), ['Ana', 'Bia'], 'building other rules does not replace the first receiver';
+    is-deeply names(rules-from-func(
+        StatementRules.new(:month<2026-10>, :client-id(9)), &method
+    ).Array), ['Davi'], 'both receiver attributes affect the query';
+    is $handler-calls, 0, 'building and querying rules never executes the handlers';
+    for &method.candidates.kv -> $index, &candidate {
+        my $param = &candidate.signature.params.grep({ !.invocant && !.slurpy }).head;
+        ok $param === @original-params[$index], 'the original Parameter object is retained';
+        ok $param.type === RuleTransaction, 'the original nominal event type is retained';
+    }
+    $october.APPLY(RuleTransaction.new(:name<Ana>, :month<2026-10>, :from-client(42), :to-client(7)));
+    is $handler-calls, 1, 'the original handler still dispatches normally';
+    my $wrong-type = \($october, C.new(:json{month => '2026-10', from-client => 42}));
+    nok &method.candidates.head.signature.ACCEPTS($wrong-type),
+        'the original signature still rejects the JSON query view';
+};
+
+multi sub all-transactions(RuleTransaction $_) { die 'handler executed' }
+multi sub true-transactions(RuleTransaction $_ where { True }) { die 'handler executed' }
+multi sub false-transactions(RuleTransaction $_ where { False }) { die 'handler executed' }
+multi sub named-transaction(RuleTransaction $_ where { .name eqv 'Ana' }) { die 'handler executed' }
+multi sub nested-accessor(RuleTransaction $_ where { .profile.city eqv 'Porto' }) {
+    die 'handler executed'
+}
+
+subtest 'the subroutine API retains constant and JSON predicates' => {
+    is-deeply names(rules-from-func(&all-transactions).Array), ['Ana', 'Bia', 'Caio', 'Davi'],
+        'an unconstrained subroutine filters by event type';
+    is-deeply names(rules-from-func(&true-transactions).Array), ['Ana', 'Bia', 'Caio', 'Davi'],
+        'constant True includes all events of the type';
+    is-deeply names(rules-from-func(&false-transactions).Array), [],
+        'constant False produces no events';
+    is-deeply names(rules-from-func(&named-transaction).Array), ['Ana'],
+        'JSON accessor predicates still translate to SQL';
+    is-deeply names(rules-from-func(&nested-accessor).Array), ['Ana', 'Caio', 'Davi'],
+        'nested accessor predicates retain JSON SQL expressions';
+};
+
+subtest 'JSON query views preserve nested objects and scalar values' => {
+    my $json = %(profile => %(city => 'Porto'), count => 0, active => False,
+        names => ['Ana', 'Bia']);
+    my $view = C.new(:$json);
+    is $view.profile.city, 'Porto', 'ordinary nested objects support accessors';
+    is $view<profile><city>, 'Porto', 'ordinary nested objects support key lookup';
+    is $view.count, 0, 'zero remains a scalar';
+    is $view.active, False, 'False remains a scalar';
+    is-deeply $view.names, ['Ana', 'Bia'], 'arrays remain ordinary JSON values';
+    nok $view.missing.defined, 'an absent field remains undefined';
+    ok $view eqv $json, 'a wrapped left operand compares its JSON';
+    ok $json eqv $view, 'a wrapped right operand compares its JSON';
+    ok $view eqv C.new(:json($json.clone)), 'two wrappers compare their JSON';
+    nok $view eqv C.new(:json{count => 1}), 'different JSON objects are unequal';
+};
+
+class NestedStatementRules {
+    has Str $.city;
+    multi method APPLY(RuleTransaction $_ (
+        :$profile (:$city where { $_ eq $!city }, :$country where { $_ eq 'PT' })
+    )) { die 'handler executed' }
+}
+multi sub destructured-transaction(RuleTransaction $_ (:$name where { $_ eq 'Ana' })) {
+    die 'handler executed'
+}
+
+subtest 'sub-signatures bind nested fields and the method receiver' => {
+    my $porto = NestedStatementRules.new(:city<Porto>);
+    my $lisbon = NestedStatementRules.new(:city<Lisbon>);
+    my &method = NestedStatementRules.^find_method('APPLY');
+    is-deeply names(rules-from-func($porto, &method).Array), ['Ana', 'Davi'],
+        'nested constraints combine JSON fields and private receiver attributes';
+    is-deeply names(rules-from-func($lisbon, &method).Array), ['Bia'],
+        'the nested constraint uses the selected receiver';
+    is-deeply names(rules-from-func(&destructured-transaction).Array), ['Ana'],
+        'subroutine destructuring works without a receiver';
+    my &predicate = rules-from-func($porto, &method).head.value;
+    ok predicate(C.new(:json{profile => {city => 'Porto', country => 'PT'}})),
+        'the same binding works with ordinary JSON values';
+    nok predicate(C.new(:json{profile => {city => 'Porto', country => 'BR'}})),
+        'ordinary JSON values must satisfy both constraints';
+};
+
+multi sub no-event() { }
+multi sub two-events(RuleTransaction $a, RuleTransaction $b) { }
+multi sub extra-named(RuleTransaction $_, :$extra!) { }
+multi sub positional-nested(RuleTransaction $_ ($name)) { }
+multi sub typed-nested(RuleTransaction $_ (Str :$name)) { }
+multi sub aliases-nested(RuleTransaction $_ (:n(:$name))) { }
+multi sub defaults-nested(RuleTransaction $_ (:$name = 'Ana')) { }
+
+subtest 'unsupported binding shapes fail when the rules are constructed' => {
+    my &method = StatementRules.^find_method('APPLY');
+    throws-like { rules-from-func(&method).Array }, X::AdHoc,
+        message => /'require an invocant'/, 'method rules require their receiver';
+    throws-like { rules-from-func(42, &method).Array }, X::AdHoc,
+        message => /'does not match'/, 'the receiver must match the method type';
+    throws-like { rules-from-func(42, &all-transactions).Array }, X::AdHoc,
+        message => /'does not accept an invocant'/, 'subroutine rules reject an extra receiver';
+    for &no-event, &two-events, &extra-named -> &invalid {
+        throws-like { rules-from-func(&invalid).Array }, X::AdHoc,
+            message => /'single positional event parameter'/, 'exactly one event parameter is required';
+    }
+    throws-like { rules-from-func(&positional-nested).Array }, X::AdHoc,
+        message => /'named scalar'/, 'positional destructuring is unsupported';
+    throws-like { rules-from-func(&typed-nested).Array }, X::AdHoc,
+        message => /'Typed sub-signature'/, 'JSON nominal type validation is not silently discarded';
+    throws-like { rules-from-func(&aliases-nested).Array }, X::AdHoc,
+        message => /'aliases'/, 'ambiguous JSON aliases are unsupported';
+    throws-like { rules-from-func(&defaults-nested).Array }, X::AdHoc,
+        message => /'defaults'/, 'SQL missing-key defaults are unsupported';
+};
+
+done-testing;

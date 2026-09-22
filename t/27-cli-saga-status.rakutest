@@ -1,0 +1,210 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::Inspector;
+use RedSourcing::CLI::Output;
+
+my $tmp = tempdir.IO;
+my $database = $tmp.add('sagas.db').Str;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :$database;
+schema(StoredEvent, StoredCommand).create;
+my $inspector = RedSourcing::Inspector.new;
+my $now = DateTime.new('2026-10-11T12:00:00Z');
+my $clock = $now.Instant.Num;
+my $serial = 0;
+
+sub snapshot(%state, Str :$stream = 'Unknown::Workflow: id = ' ~ ++$serial) {
+    StoredEvent.^create(:class<Unknown::Workflow>, :$stream, :1version, :mro('|Entity|'),
+        :data{ :id<order-1>, :payment<pending>, :saga-state(%state) }, :replay-cursor(0));
+    $stream
+}
+sub report(%state) { $inspector.saga-status(:stream(snapshot(%state)), :$now) }
+sub action(Str $status = 'pending', Numeric :$due = $clock, Str :$id = 'reserve', *%extra) {
+    %(:$id, :$status, :$due, :kind<service>, :target<inventory>, :method<reserve>, :step<reserve-stock>,
+        :attempts(2), :retry{ :max(5), :delay(10) }, :error<provider unavailable>,
+        :args{ :positional[], :named{ :order-id<order-1> } }, :undo-entry(''), |%extra).item
+}
+sub cli(*@args) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, |@args,
+        "--database=$database", :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub decoded(*@args) {
+    my %r = cli('saga-status', |@args, '--json');
+    die %r<err> if %r<code>;
+    from-json(%r<out>)
+}
+
+subtest 'diagnosis follows the committed checkpoint without running domain code' => {
+    my $stream = snapshot(%(:status<running>));
+    my $control = StoredEvent.^create(:class<RedSourcing::Saga::StepSucceeded>, :$stream,
+        :2version, :mro('|RedSourcing::Saga::Control|Event|'),
+        :data{ :values{ :id<order-1>, :payment<paid> }, :state{ :status<completed>, :actions[] }, :cursor(12) });
+    my %r = $inspector.saga-status(:$stream, :$now);
+    is %r<state-source>, 'control', 'control after the snapshot is the authoritative state';
+    is %r<data><payment>, 'paid', 'domain values also come from the control';
+    nok %r<data><saga-state>:exists, 'domain state is separate from workflow bookkeeping';
+    is %r<version>, 2, 'state version is retained';
+    is %r<cursor>, 12, 'source replay cursor is retained';
+    ok %r<terminal>, 'explicit completed state is terminal';
+    is %r<activity>, 'completed', 'completion is not inferred from an empty queue';
+    is %r<as-of>, $now.Str, 'report uses the supplied UTC clock';
+    is report(%(:status<compensated>))<activity>, 'compensated', 'compensation completion is terminal';
+    my %waiting = report(%(:status<running>));
+    is %waiting<activity>, 'waiting', 'an idle running saga remains running';
+    nok %waiting<terminal>, 'empty work is not proof of completion';
+    like %waiting<message>, /'future steps are not known'/, 'dynamic workflow limit is explicit';
+    throws-like { $inspector.saga-status(:stream<missing>) }, X::AdHoc, message => /'Unknown stream'/;
+    StoredEvent.^create(:class<Unknown::Account>, :stream<account>, :1version, :mro('|Entity|'), :data{});
+    throws-like { $inspector.saga-status(:stream<account>) }, X::AdHoc, message => /'not a saga'/;
+};
+
+subtest 'action ordering, failures and deadlines explain the next available work' => {
+    my @scenarios =
+        ['pending', $clock, 'ready'], ['retry', $clock + 10, 'waiting-retry'],
+        ['pending', $clock + 10, 'scheduled-action'], ['running', $clock, 'running-action'],
+        ['blocked', $clock, 'blocked'];
+    for @scenarios -> ($status, $due, $activity) {
+        my %r = report(%(:status<running>, :actions[
+            action($status, :$due), action('pending', :id<later>), action('done', :id<paid>), action('failed', :id<failed>)
+        ]));
+        is %r<activity>, $activity, "diagnoses $status at its recorded deadline";
+        is %r<next-action><id>, 'reserve', 'first unfinished action gates later ready actions';
+        is %r<completed-actions>, 1, 'completed actions counted';
+        is %r<failed-actions>.elems, 1, 'failed actions remain visible';
+        is %r<pending-actions>.elems, 2, 'queue excludes done and failed records';
+        is %r<next-action><due>, $due, 'raw saved deadline is preserved';
+        is %r<next-action><due-at>, $now.later(:seconds($due - $clock)).Str, 'deadline converted from Instant to UTC';
+        is %r<next-action><remaining-seconds>, 0 max ($due - $clock), 'remaining delay uses report clock';
+    }
+    my %past = report(%(:status<running>, :actions[action(:due($clock - 20))]));
+    is %past<next-action><remaining-seconds>, 0, 'overdue action has no remaining delay';
+    ok %past<next-action><ready>, 'overdue action is ready';
+};
+
+subtest 'timeouts and compensations distinguish pending work from registered rollback' => {
+    my %timers = z => %(due => $clock + 2, method => 'expire', positional => [], named => {}),
+        a => %(due => $clock + 2, method => 'notify', positional => [], named => {}),
+        first => %(due => $clock + 1.5, method => 'expire', positional => [], named => {});
+    my @stack = %(id => 'old', method => 'release', result => %(reservation-id => 'r1')),
+        %(id => 'new', method => 'refund', result => %(payment-id => 'p1'));
+    my %waiting = report(%(:status<running>, :%timers, :compensations(@stack)));
+    is %waiting<activity>, 'waiting-timeout', 'future timeout is a known waiting condition';
+    is-deeply %waiting<timers>.map(*.<name>).Array, ['first', 'a', 'z'], 'sort deadlines numerically then by name';
+    is %waiting<timers>.head<due-at>, $now.later(:seconds(1.5)).Str, 'fractional timeout deadlines preserved';
+    is %waiting<compensations>.head<id>, 'new', 'stack presented in LIFO order';
+    nok %waiting<compensations-active>, 'registered inverses are only available on failure';
+    is report(%(:status<running>, :timers{ :expired{ :due($clock - 1), :method<expire> } }))<activity>,
+        'ready-timeout', 'expired timeout can be processed';
+    my %comp = report(%(:status<compensating>, :compensations(@stack), :reason<deadline>));
+    is %comp<activity>, 'compensating', 'next inverse can be enqueued';
+    is %comp<reason>, 'deadline', 'reason retained';
+    ok %comp<compensations-active>, 'inverse stack is active during rollback';
+    like %comp<message>, /'start the next compensation'/, 'next rollback work described';
+    like report(%(:status<compensating>))<message>, /'mark compensation complete'/, 'empty rollback must still commit completion';
+    my @active = %(id => 'old', method => 'release'), %(id => 'new', method => 'refund', action-id => 'undo');
+    is report(%(:status<compensating>, :compensations(@active),
+        :actions[action('failed', :id<undo>, :undo-entry<new>)]))<activity>,
+        'failed-compensation', 'exhausted inverse is an explicit blocker';
+    is report(%(:status<compensating>, :compensations(@active),
+        :actions[action('retry', :id<undo>, :undo-entry<new>, :due($clock + 3))]))<activity>,
+        'waiting-retry', 'active inverse respects its delay';
+    my %blocked = report(%(:status<compensating>, :compensations(@active),
+        :actions[action('running', :id<forward>), action('blocked', :id<uncertain>), action('pending', :id<undo>, :undo-entry<new>)]));
+    is %blocked<next-action><id>, 'uncertain', 'uncertain forward work blocks rollback before running forward work';
+    is %blocked<activity>, 'blocked', 'unsettled forward work must be reconciled first';
+    is report(%(:status<compensating>, :compensations(@active),
+        :actions[action('running', :id<forward>), action('pending', :id<undo>, :undo-entry<new>)]))<next-action><id>,
+        'forward', 'otherwise running forward work is observed before rollback';
+    is report(%(:status<compensating>, :compensations(@active)))<activity>, 'compensating',
+        'a missing referenced inverse is represented without inventing an action';
+};
+
+subtest 'CLI exposes full names, saved arguments and JSON without effects' => {
+    my $stream = 'Unknown::Workflow: id = São Paulo/a & b ' ~ ('long-name-' x 12);
+    snapshot(%(:status<running>, :actions[action()],
+        :timers{ :deadline{ :due($clock), :method<expire>, :positional[], :named{ :reason<Late> } } },
+        :compensations[%(id => 'reserve', method => 'compensate-reserve', result => %(reservation-id => 'r1')),]), :$stream);
+    StoredCommand.^create(:stream<unrelated>, :entity<Unknown::Account>, :entity-ids{}, :method<pay>, :data{});
+    my %failed = report(%(:status<compensating>, :compensations[%(id => 'done', method => 'undo', action-id => 'x'),],
+        :actions[action('failed', :id<x>, :undo-entry<done>)]));
+    my $events = StoredEvent.^all.elems;
+    my $commands = StoredCommand.^all.elems;
+    my %r = decoded("--stream=$stream");
+    is %r<stream>, $stream, 'JSON stream names preserved';
+    is %r<actions>.head<args><named><order-id>, 'order-1', 'JSON contains durable action arguments';
+    my %human = cli('saga-status', "--stream=$stream");
+    is %human<code>, 0, 'human report succeeds';
+    ok %human<out>.contains($stream), 'full names are not truncated';
+    for 'Saga status', 'Pending actions', 'Timeouts', 'available on failure', 'Domain state', '2/5' -> $label {
+        ok %human<out>.contains($label), "report includes $label";
+    }
+    my %details = cli('saga-status', "--stream=$stream", '--details');
+    ok %details<out>.contains('reservation-id'), 'details contain inverse result arguments';
+    ok %details<out>.contains('order-id'), 'details contain saved action arguments';
+    ok format-saga-status(%failed).contains('Compensation stack (active, next first)'), 'active rollback label clear';
+    ok format-saga-status(%failed).contains('provider unavailable'), 'failure error displayed';
+    $tmp.add('red-sourcing.rakuconf').spurt("use RedSourcing::CLI::Config; config \{ .modules = <Missing::Domain> }");
+    is decoded("--stream=$stream")<stream>, $stream, 'database-only status ignores configured imports';
+    for [], ["--stream=$stream", 'Unknown::Workflow'], ['--stream=missing'], ['--stream=account'],
+        ["--stream=$stream", '--id=id=x'], ["--stream=$stream", '--ids={}'] -> @invalid {
+        isnt cli('saga-status', |@invalid)<code>, 0, 'invalid or ambiguous selection rejected';
+    }
+    is StoredEvent.^all.elems, $events, 'inspection writes no events or checkpoints';
+    is StoredCommand.^all.elems, $commands, 'inspection submits no commands';
+    is StoredCommand.^all.head.state, StoredCommand::Pending, 'pending commands are not run';
+    like cli('saga-status', '--help')<out>, /'committed state'/, 'help describes read-only diagnosis';
+};
+
+subtest 'entity selection uses typed IDs without loading or advancing the saga' => {
+    $tmp.add('StatusApp.rakumod').spurt(q:to/MODULE/);
+        use RedSourcing;
+        unit module StatusApp;
+        saga Workflow is export {
+            has Int $.id is entity-id;
+            has Str $.code is entity-id;
+            method APPLY() { die 'Inspection must not APPLY' }
+            method REACT() { die 'Inspection must not REACT' }
+        }
+        aggregate Account is export { has Int $.id is entity-id; method APPLY() { } }
+        MODULE
+    $tmp.add('red-sourcing.rakuconf').spurt("use RedSourcing::CLI::Config; config \{ .includes = ['.']; .modules = <StatusApp> }");
+    # Obtain the framework's exact stream name without loading state or creating a record.
+    my %created = cli('create', 'Workflow', '--id=id=003', '--id=code=001=x', '--json');
+    is %created<code>, 0, 'fixture saga creates an initial checkpoint';
+    die %created<err> if %created<code>;
+    my $stream = from-json(%created<out>)<stream>;
+    my $before = StoredEvent.^all.elems;
+    is decoded('Workflow', '--id=id=3', '--id=code=001=x')<stream>, $stream,
+        'numeric and string IDs select the same checkpoint';
+    is decoded('Workflow', '--ids={"id":3,"code":"001=x"}')<stream>, $stream, 'legacy JSON IDs supported';
+    is decoded("--stream=$stream")<stream>, $stream, 'generic selection finds the same state';
+    $tmp.add('StatusAddon.rakumod').spurt(q:to/MODULE/);
+        unit module StatusAddon;
+        'status-addon-loaded'.IO.spurt('loaded');
+        MODULE
+    $tmp.add('StatusOtherAddon.rakumod').spurt(q:to/MODULE/);
+        unit module StatusOtherAddon;
+        'status-other-addon-loaded'.IO.spurt('loaded');
+        MODULE
+    is decoded("--stream=$stream", '-I=.', "-I=$tmp", '-M=StatusAddon', '-M=StatusOtherAddon')<stream>,
+        $stream, 'stream selection accepts repeatable include paths and modules';
+    ok $tmp.add('status-addon-loaded').f, 'explicit module is actually imported';
+    ok $tmp.add('status-other-addon-loaded').f, 'every repeated module is imported';
+    is decoded('Workflow', '--id=id=3', '--id=code=001=x', '-I=.', '-M=StatusAddon')<stream>,
+        $stream, 'entity selection accepts explicit paths and modules alongside configuration';
+    is decoded("--stream=$stream", '--includes=.', '--modules=StatusAddon')<stream>,
+        $stream, 'long aliases for includes and modules are supported';
+    my %missing = cli('saga-status', "--stream=$stream", '-M=Missing::Domain');
+    isnt %missing<code>, 0, 'explicit missing modules fail instead of being ignored';
+    like %missing<err>, /'Missing::Domain'/, 'import failure identifies the requested module';
+    isnt cli('saga-status', 'Account', '--id=id=3')<code>, 0, 'entity selector rejects an aggregate';
+    isnt cli('saga-status', 'Workflow', '--id=id=3')<code>, 0, 'entity selector requires all declared IDs';
+    is StoredEvent.^all.elems, $before, 'typed selection does not create a new checkpoint';
+};
+
+done-testing;

@@ -1,0 +1,213 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+subtest 'the installed distribution resolves every published module and runs commands' => {
+    my $tmp = tempdir.IO;
+    my $destination = $tmp.add('installed');
+    my $repository = CompUnit::Repository::Installation.new(:prefix($destination));
+    lives-ok {
+        $repository.install(Distribution::Path.new($*CWD), :!precompile);
+    }, 'the distribution installs into an isolated repository';
+
+    my %meta = from-json $*CWD.add('META6.json').slurp;
+    is %meta<name>, 'RedSourcing', 'the distribution publishes its new name';
+    is %meta<provides><RedSourcing>, 'lib/RedSourcing.rakumod',
+        'the new entry point is published with the distribution';
+    is %meta<provides>{'RedSourcing::StoredEvent'}, 'lib/RedSourcing/StoredEvent.rakumod',
+        'the namespaced event storage model is published';
+    is %meta<provides>{'RedSourcing::StoredCommand'}, 'lib/RedSourcing/StoredCommand.rakumod',
+        'the namespaced command storage model is published';
+    is %meta<provides>{'Metamodel::RedSourcing::ProxyHOW'},
+        'lib/Metamodel/RedSourcing/ProxyHOW.rakumod',
+        'the proxy metaclass is published with the distribution';
+    my $modules = to-json %meta<provides>.keys.sort.Array;
+    my $consumer = q:to/RAKU/;
+        use RedSourcing;
+        use JSON::Fast;
+
+        for from-json(@*ARGS[0]).List -> $module {
+            my $unit = $*REPO.resolve(CompUnit::DependencySpecification.new(:short-name($module)));
+            die "Module $module was resolved outside the isolated installation"
+                unless $unit.repo.prefix.absolute eq @*ARGS[1];
+        }
+
+        my $settings = red-sourcing-defaults(:database(':memory:'));
+        die 'Installed library configuration defaults failed'
+            unless $settings.driver eq 'SQLite' && $settings.database eq ':memory:';
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        die 'Installed storage aliases do not resolve to their canonical types'
+            unless StoredEvent === RedSourcing::StoredEvent
+                && StoredCommand === RedSourcing::StoredCommand
+                && StoredEvent.^name eq 'RedSourcing::StoredEvent'
+                && StoredCommand.^name eq 'RedSourcing::StoredCommand';
+        die 'Installed storage models use incorrect table names'
+            unless StoredEvent.^table eq 'red_sourcing_event'
+                && StoredCommand.^table eq 'red_sourcing_command';
+        class InstalledMovement does Event {
+            has Int $.client-id;
+            has Int $.amount;
+        }
+        aggregate InstalledAccount {
+            has Int $.id is entity-id;
+            has Int $.balance = 0;
+            method APPLY(InstalledMovement $event) is entity-id-map(:client-id<id>) {
+                $!balance += $event.amount;
+            }
+            method deposit(Int :$amount!) is command {
+                self.installed-movement(:$amount);
+                $!balance
+            }
+            method answer(Int :$value = 7) is command { $.id + $value }
+        }
+        projection InstalledProjection {
+            has Int $.client-id is entity-id;
+            has Int $.amount = 0;
+            method APPLY(InstalledMovement $_ where { .client-id == $!client-id }) {
+                $!amount += .amount;
+            }
+            method total { $!amount }
+        }
+        saga InstalledSaga {
+            has Int $.id is entity-id;
+            method APPLY(InstalledMovement $event where { .client-id eqv $!id }) { }
+            method REACT(InstalledMovement $event where { .client-id eqv $!id }) {
+                self.^service('installed-adapter', 'observe', \(:amount($event.amount)));
+            }
+        }
+        my $adapter-calls = 0;
+        register-service('installed-adapter', sub ($method, Capture $arguments, :$idempotency-key!) {
+            ++$adapter-calls; %(observed => $arguments.hash<amount>)
+        });
+        my $saga-proxy = InstalledSaga.^with-ids(:id(45));
+        $saga-proxy.^create;
+        InstalledMovement.emit(:stream<installed-saga-source>, :version(1), :client-id(45), :amount(6));
+        my $saga = $saga-proxy.^advance;
+        die 'Installed saga did not execute its service' unless $adapter-calls == 1
+            && $saga.^state<actions>.head<result><observed> == 6;
+        $saga.^emit-snapshot;
+        die 'Installed saga restoration repeated an effect'
+            unless $saga-proxy.^load.^state<actions>.head<status> eq 'done' && $adapter-calls == 1;
+        my $proxy = InstalledAccount.^with-ids(:id(42));
+        die 'Installed proxy uses the wrong stream identity'
+            unless $proxy.^stream-name eq 'InstalledAccount: id = 42';
+        die 'Installed proxy does not expose its identity map'
+            unless $proxy.^ids-map<id> == 42;
+        my $command-class = $proxy.^get-cmd-class('InstalledAccount::Answer');
+        my $proxy-type = InstalledAccount.^proxy;
+        die 'Installed proxy registry did not resolve the generated command'
+            unless $command-class === $proxy-type.^get-cmd-class('InstalledAccount::Answer');
+        my $snapshot = $proxy.^create(:id(99), :stream<another-stream>);
+        die 'Installed creation allows initial state to override proxy identity'
+            unless $snapshot.data<id> == 42 && $snapshot.stream eq $proxy.^stream-name;
+        my $blocked = False;
+        try {
+            CATCH { default { $blocked = .message.contains('Please do not construct') } }
+            InstalledAccount.new(:id(42));
+        }
+        die 'Installed entity permits direct construction' unless $blocked;
+        my $restored = $snapshot.COERCE;
+        die 'Installed snapshot does not restore identity and private metadata'
+            unless $restored.id == 42
+                && $restored.^stream eq $snapshot.stream
+                && $restored.^version == $snapshot.version
+                && $restored.^current-id == $snapshot.id;
+        $restored.^apply-new-events-of-stream;
+        die 'Installed empty replay changed restored metadata'
+            unless $restored.^current-id == $snapshot.id
+                && $restored.^version == $snapshot.version;
+        my $loaded = $proxy.^load;
+        die 'Installed loader does not restore the aggregate snapshot'
+            unless $loaded.id == 42 && $loaded.^current-id == $snapshot.id;
+        my $projection-proxy = InstalledProjection.^with-ids(:client-id(43));
+        my $projection = $projection-proxy.^load;
+        $projection.^apply-new-applyable-events;
+        my $checkpoint = $projection.^emit-snapshot;
+        die 'Installed projection snapshot does not preserve cursor zero'
+            unless $checkpoint.replay-cursor == 0
+                && $projection-proxy.^load.^current-id == 0;
+        InstalledMovement.emit(:stream<installed-source>, :version(9), :client-id(44), :amount(7));
+        my $without-snapshot = InstalledProjection.^with-ids(:client-id(44));
+        die 'Installed projection did not replay without a snapshot'
+            unless $without-snapshot.^load.total == 7;
+        say $snapshot.class;
+        say $proxy.answer;
+        say StoredCommand.^all.head.state.Str;
+        my @history = $proxy.^list-commands(:state(StoredCommand::State::Done));
+        die 'Installed command history did not return the completed result'
+            unless @history.elems == 1 && @history.head.result == 49;
+        die 'Installed commands do not expose the execution schedule'
+            unless @history.head.next-run ~~ DateTime;
+        my $scheduled = $proxy.answer(:value(8), :!sync);
+        $scheduled.next-run = DateTime.now.later(:seconds(0.1));
+        $scheduled.^save;
+        die 'Installed scheduled execution returned the wrong result'
+            unless $scheduled.run(:wait) == 50;
+        die 'Installed scheduled execution did not count its attempt'
+            unless StoredCommand.^all.grep(*.id == $scheduled.id).head.tries == 1;
+        die 'Installed event helpers did not apply emitted state'
+            unless $proxy.deposit(:amount(5)) == 5 && $proxy.^load.balance == 5;
+        die 'Installed event helpers did not map aggregate identity'
+            unless StoredEvent.list-events(:types[InstalledMovement], :stream($proxy.^stream-name)).head.client-id == 42;
+        die 'Installed proxies or projections expose event emission helpers'
+            if $proxy.^can('installed-movement') || InstalledProjection.^can('installed-movement');
+    RAKU
+    my $result = run $*EXECUTABLE.Str, "-Iinst#$destination", '-e', $consumer,
+        $modules, $destination.absolute, :cwd($tmp), :out, :err;
+    my $out = $result.out.slurp(:close);
+    my $err = $result.err.slurp(:close);
+    is $result.exitcode, 0, 'the consumer works without a source-tree include path';
+    is $err, '', 'all published modules resolve from the installed distribution';
+    is $out, "InstalledAccount\n49\nDone\n",
+        'snapshot creation and synchronous execution work after installation';
+
+    my $cli = $destination.add('bin/red-sourcing.raku');
+    my $database = $tmp.add('cli store.db');
+    my $initialized = run $*EXECUTABLE.Str, "-Iinst#$destination", $cli.Str,
+        'init', "--database=$database", :cwd($tmp), :out, :err;
+    is $initialized.exitcode, 0, 'installed CLI initializes the store';
+    is $initialized.out.slurp(:close) ~ $initialized.err.slurp(:close), '', 'initialization is quiet';
+    $tmp.add('InstalledCliAccount.rakumod').spurt(q:to/RAKU/);
+        use RedSourcing;
+        unit aggregate InstalledCliAccount;
+        has Int $.id is entity-id;
+        method APPLY { }
+        method answer(Int :$value = 2) is command { $!id + $value }
+        RAKU
+    my $seed = run $*EXECUTABLE.Str, "-Iinst#$destination", "-I$tmp", '-e',
+        'use RedSourcing; use InstalledCliAccount; red-defaults "SQLite", :database(@*ARGS[0]); InstalledCliAccount.^with-ids(:id(42)).^create;',
+        $database.Str, :cwd($tmp), :out, :err;
+    is $seed.exitcode, 0, 'installed application creates its aggregate';
+    is $seed.out.slurp(:close) ~ $seed.err.slurp(:close), '', 'application setup is quiet';
+    my $called = run $*EXECUTABLE.Str, "-Iinst#$destination", $cli.Str,
+        'command', 'InstalledCliAccount', 'answer', '--json', "-I=$tmp", '-M=InstalledCliAccount',
+        '--ids={"id":42}', '--data={"value":7}', "--database=$database", :cwd($tmp), :out, :err;
+    is $called.exitcode, 0, 'installed CLI invokes an application command without source-tree paths';
+    is $called.out.slurp(:close), "49\n", 'installed CLI prints the JSON result';
+    is $called.err.slurp(:close), '', 'installed execution has no diagnostics';
+    $tmp.add('red-sourcing.rakuconf').spurt(q:to/RAKU/);
+        use RedSourcing::CLI::Config;
+        config {
+            .database = 'cli store.db';
+            .includes = ['.'];
+            .modules = <InstalledCliAccount>;
+        }
+        RAKU
+    my $configured = run $*EXECUTABLE.Str, "-Iinst#$destination", $cli.Str,
+        'command', 'InstalledCliAccount', 'answer', '--json', '--ids={"id":42}', '--data={"value":8}',
+        :cwd($tmp), :out, :err;
+    is $configured.exitcode, 0, 'installed CLI discovers and loads configuration without source-tree paths';
+    is $configured.out.slurp(:close), "50\n", 'installed configuration supplies the database, path and module';
+    is $configured.err.slurp(:close), '', 'installed configuration has no diagnostics';
+    my $native = run $*EXECUTABLE.Str, "-Iinst#$destination", "-I$tmp", '-e',
+        'use RedSourcing; use InstalledCliAccount; my $settings = red-sourcing-defaults; say $settings.database; say InstalledCliAccount.^with-ids(:id(42)).answer(:value(9));',
+        :cwd($tmp), :out, :err;
+    is $native.exitcode, 0, 'installed library discovers the same configuration as the CLI';
+    is $native.out.slurp(:close), "{$tmp.resolve.add('cli store.db')}\n51\n",
+        'native bootstrap opens the configured store and calls a persisted aggregate';
+    is $native.err.slurp(:close), '', 'installed native bootstrap is quiet';
+
+
+};
+
+done-testing;

@@ -1,0 +1,190 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::Config;
+
+my $lib = $*CWD.add('lib').Str;
+my $tmp = tempdir.IO.resolve;
+my $project = $tmp.add('project');
+my $child = $project.add('nested');
+$child.mkdir(:parents);
+my $file = $project.add('red-sourcing.rakuconf');
+sub configuration(IO::Path $path, Str $body) {
+    $path.spurt("use RedSourcing;\nconfig \{\n$body\n}\n");
+}
+sub consumer(IO::Path $cwd, Str $code, *@args) {
+    my $process = run $*EXECUTABLE.Str, "-I$lib", '-e', $code, |@args, :$cwd, :out, :err;
+    %(code => $process.exitcode || $process.signal,
+        out => $process.out.slurp(:close), err => $process.err.slurp(:close))
+}
+my $domain = q:to/DOMAIN/;
+    aggregate ConfiguredCounter {
+        has Int $.id is entity-id;
+        method APPLY { }
+        method answer(Int :$value = 1) is command { $!id + $value }
+    }
+    DOMAIN
+
+subtest 'ordinary imports do not read files, CLI arguments or replace a connection' => {
+    $file.spurt('die "Import must not evaluate configuration"');
+    my %result = consumer($child, q:to/CODE/, '--file=does-not-exist', '--help');
+        use Red;
+        BEGIN red-defaults 'SQLite', :database(':memory:');
+        use RedSourcing;
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        say StoredEvent.^all.elems;
+        CODE
+    is %result<code>, 0, 'one import keeps an explicitly selected default usable';
+    is %result<err>, '', 'malformed nearby configuration and process arguments are ignored';
+    is %result<out>, "0\n", 'the caller retains control of store initialization';
+    nok $child.add('a.db').e, 'import does not create the fallback database';
+};
+configuration($file, q:to/CONFIG/);
+    .driver = 'SQLite';
+    .database = 'library.db';
+    .debug = True;
+    .includes = <lib>;
+    .modules = <Missing::Domain>;
+    .connection = %(timeout => 3000);
+    .monitor: { .port = 3040 }
+    .worker: { .limit = 17 }
+    CONFIG
+subtest 'one library import discovers configuration and returns effective settings' => {
+    my %result = consumer($child, 'use RedSourcing; use JSON::Fast; '
+        ~ $domain ~ q:to/CODE/);
+        my $settings = red-sourcing-defaults;
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        my $proxy = ConfiguredCounter.^with-ids(:id(7));
+        $proxy.^create;
+        say to-json %(driver => $settings.driver, database => $settings.database,
+            debug => $settings.debug, includes => $settings.includes.Array,
+            modules => $settings.modules.Array, timeout => $settings.connection<timeout>,
+            port => $settings.monitor.port, limit => $settings.worker.limit,
+            answer => $proxy.answer(:value(5)));
+        CODE
+    is %result<code>, 0, 'native application bootstrap works without a CLI import';
+    is %result<err>, '', 'configuration metadata does not import domain modules or enable scoped logging';
+    my %settings = from-json %result<out>;
+    is %settings<driver>, 'SQLite', 'configured driver is selected';
+    is %settings<database>, $project.add('library.db').Str, 'configured SQLite path is based on the file';
+    is-deeply %settings<includes>, [$project.add('lib').Str], 'include paths are normalized';
+    is-deeply %settings<modules>, ['Missing::Domain'], 'module metadata is returned without import side effects';
+    ok %settings<debug>, 'configured debug value is returned';
+    is %settings<timeout>, 3000, 'driver-specific connection options are retained';
+    is %settings<port>, 3040, 'monitor options are returned';
+    is %settings<limit>, 17, 'worker options are returned';
+    is %settings<answer>, 12, 'a command uses the configured store';
+    ok $project.add('library.db').f, 'configured database was opened';
+    nok $child.add('a.db').e, 'discovery never opens the fallback database';
+};
+subtest 'a fresh process restores entities and commands from the configured store' => {
+    my %result = consumer($child, 'use RedSourcing; ' ~ $domain ~ q:to/CODE/);
+        red-sourcing-defaults;
+        my $proxy = ConfiguredCounter.^with-ids(:id(7));
+        say $proxy.^load.id;
+        say $proxy.^list-commands.head.result;
+        say $proxy.answer;
+        CODE
+    is %result<code>, 0, 'restoration works without another schema initialization';
+    is %result<err>, '', 'restoration is quiet';
+    is %result<out>, "7\n12\n8\n", 'persisted snapshots and commands survive a restart';
+};
+subtest 'explicit file and named overrides take precedence and preserve configuration data' => {
+    my $custom = $tmp.add('custom configuration.rakuconf');
+    configuration($custom, ".driver = 'Pg'; .database = 'other'; .debug = True; .connection = %(timeout => 2000);");
+    my %result = consumer($child, q:to/CODE/, $custom.Str);
+        use RedSourcing;
+        use JSON::Fast;
+        my $settings = red-sourcing-defaults(:file(@*ARGS[0].IO), :driver<SQLite>,
+            :database<explicit.db>, :!debug, :connection{:timeout(5000)});
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        say to-json %(driver => $settings.driver, database => $settings.database,
+            debug => $settings.debug, timeout => $settings.connection<timeout>);
+        CODE
+    is %result<code>, 0, 'explicit file may be an IO::Path';
+    is %result<err>, '', 'overridden initialization is quiet';
+    is-deeply from-json(%result<out>), %(driver => 'SQLite', database => 'explicit.db', debug => False, timeout => 5000),
+        'call-site values override configured values, including false and connection keys';
+    ok $child.add('explicit.db').f, 'explicit relative database is based on process cwd';
+    nok $tmp.add('explicit.db').e, 'explicit database is not rebased onto the file';
+    my %relative = load-config(:file($custom.relative($child).Str), :directory($child));
+    is %relative<settings>.database, 'other', 'relative explicit files resolve against the supplied directory';
+    my $settings = red-sourcing-defaults(:file($custom), :driver<SQLite>, :database(':memory:'));
+    is $settings.database, ':memory:', 'memory databases retain their special meaning';
+};
+subtest 'missing configuration keeps the library fallback and debug is scoped by the caller' => {
+    my $empty = $tmp.add('empty');
+    $empty.mkdir;
+    my %result = consumer($empty, q:to/CODE/);
+        use RedSourcing;
+        my $settings = red-sourcing-defaults;
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        say "{$settings.driver}/{$settings.database}/{$settings.debug}";
+        CODE
+    is %result<code>, 0, 'no file is required';
+    is %result<out>, "SQLite/a.db/False\n", 'built-in defaults match the CLI';
+    ok $empty.add('a.db').f, 'default SQLite database is relative to process cwd';
+    my %debug = consumer($child, q:to/CODE/);
+        use RedSourcing;
+        my $settings = red-sourcing-defaults(:database(':memory:'));
+        my $*RED-DEBUG = $settings.debug;
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        CODE
+    is %debug<code>, 0, 'caller can apply the configured Red debug setting';
+    like %debug<err>, /'SQL'/, 'dynamic debug logs SQL in the caller scope';
+};
+subtest 'configuration errors leave an existing default connection usable' => {
+    my $invalid = $tmp.add('invalid.rakuconf');
+    configuration($invalid, '.connection = %(driver => "SQLite");');
+    my $malformed = $tmp.add('malformed.rakuconf');
+    $malformed.spurt('42');
+    my $directory = $tmp.add('directory-config');
+    $directory.mkdir;
+    red-defaults 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    for $tmp.add('missing'), $invalid, $malformed, $directory -> $bad {
+        dies-ok { red-sourcing-defaults(:file($bad)) }, "invalid configuration is rejected: {$bad.basename}";
+        is StoredEvent.^all.elems, 0, 'existing default remains available after failure';
+    }
+    dies-ok { red-sourcing-defaults(:directory($tmp), :connection{:database<bad>}) },
+        'reserved options in call-site connection overrides are rejected';
+    is StoredEvent.^all.elems, 0, 'invalid call-site options do not change the default';
+};
+subtest 'initialization is idempotent and can be disabled without creating tracing tables' => {
+    my $trace-config = $tmp.add('tracing.rakuconf');
+    configuration($trace-config, ".driver = 'SQLite'; .database = ':memory:'; .flow-tracing = True;");
+    my %disabled = consumer($tmp, q:to/CODE/, $trace-config.Str);
+        use RedSourcing;
+        use Red::DB;
+        red-sourcing-defaults(:file(@*ARGS[0]), :!initialize);
+        say get-RED-DB.execute("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'").row<n>;
+        CODE
+    is %disabled<code>, 0, 'connect-only initialization succeeds';
+    is %disabled<out>, "0\n", 'neither storage nor tracing tables are created';
+    is %disabled<err>, '', 'connect-only mode is quiet';
+    my %enabled = consumer($child, 'use RedSourcing; ' ~ $domain ~ q:to/CODE/);
+        red-sourcing-defaults;
+        my $before = StoredEvent.^all.elems;
+        red-sourcing-defaults(:initialize(True));
+        say StoredEvent.^all.elems == $before;
+        say ConfiguredCounter.^with-ids(:id(7)).^load.id;
+        CODE
+    is %enabled<code>, 0, 'repeated default initialization succeeds';
+    is %enabled<out>, "True\n7\n", 'existing events and entity state are preserved';
+    is %enabled<err>, '', 'existing tables are not recreated';
+};
+
+subtest 'the old configuration import aliases the shared configuration type' => {
+    my %result = consumer($tmp, q:to/CODE/);
+        use RedSourcing::CLI::Config;
+        my $settings = config { .database = ':memory:' };
+        die 'Different configuration types' unless $settings ~~ RedSourcing::Config::Settings;
+        say $settings.database;
+        say load-cli-config([])<settings>.^name;
+        CODE
+    is %result<code>, 0, 'legacy imports re-export the shared builder, Settings and loader';
+    is %result<err>, '', 'legacy imports remain quiet';
+    is %result<out>, ":memory:\nRedSourcing::Config::Settings\n", 'new and legacy configurations share one schema';
+};
+done-testing;

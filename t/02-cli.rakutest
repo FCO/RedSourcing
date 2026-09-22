@@ -1,0 +1,290 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $repo = $*CWD;
+my $raku = $*EXECUTABLE.Str;
+my $cli = $repo.add('bin/red-sourcing.raku').Str;
+my $repo-lib = $repo.add('lib').Str;
+my $tmp = tempdir;
+my $module-dir = $tmp.IO.add("O'Brien libraries");
+$module-dir.mkdir;
+$module-dir.add('TestCliApp.rakumod').spurt(q:to/RAKU/);
+    use RedSourcing;
+    unit module TestCliApp;
+    my $defaults = 0;
+    class UserRegistered does Event is export {
+        has Int $.account-id;
+        has Str $.something;
+    }
+    class OtherEvent does Event is export { has Str $.something; }
+    aggregate Account is export {
+        has Int $.account-id is entity-id;
+        has Str $.name = '';
+        method APPLY(UserRegistered $event) { $!name = $event.something }
+        method register(Str :$name!) is command {
+            self.user-registered(:something($name));
+            $!name
+        }
+        method even-value(Int :input(:$value) where { $_ %% 2 } = 8) is command { $value + 10 }
+        method choose(:$value = ++$defaults) is command { $value }
+        method empty is command { Nil }
+        method fail-after-event is command {
+            self.user-registered(:something('Rolled back'));
+            die 'CLI command rejected'
+        }
+        method ordinary { 'not a command' }
+    }
+    RAKU
+
+sub run-cli(*@args) { run $raku, "-I$repo-lib", $cli, |@args, :cwd($tmp.IO), :out, :err }
+sub result(*@args) {
+    @args.push('--json') if @args.head eq 'command' && '--json' ne any(@args);
+    my $p = run-cli(|@args);
+    %(code => $p.exitcode, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub fixture(Str $code, *@args) {
+    my $p = run $raku, "-I$repo-lib", "-I$module-dir", '-MTestCliApp', '-e',
+        'use RedSourcing; use JSON::Fast; red-defaults "SQLite", :database<a.db>; ' ~ $code,
+        |@args, :cwd($tmp.IO), :out, :err;
+    my $out = $p.out.slurp(:close);
+    my $err = $p.err.slurp(:close);
+    die "Fixture failed: $err" if $p.exitcode;
+    $out
+}
+sub invoke(Str $method, *@args) {
+    result('command', 'Account', $method, "-I=$module-dir", '-M=TestCliApp',
+        '--ids={"account-id":42}', |@args)
+}
+sub events { from-json(result('list-events', '--json')<out>) }
+sub commands { from-json(result('list-commands', '--json')<out>) }
+my $stream = 'TestCliApp::Account: account-id = 42';
+
+subtest 'init creates both tables and is idempotent' => {
+    for ^2 {
+        my %r = result('init');
+        is %r<code>, 0, 'init succeeds';
+        is %r<out>, '', 'init is quiet';
+        is %r<err>, '', 'init has no diagnostics';
+    }
+    is-deeply events(), [], 'event table starts empty';
+    is-deeply commands(), [], 'command table starts empty';
+    fixture('Account.^with-ids(:account-id(42)).^create; OtherEvent.emit(:stream<other>, :version(1), :something<Other>);');
+    is events().elems, 2, 'application supplies initial aggregate snapshot and another event';
+    result('init');
+    is events().elems, 2, 'repeated initialization preserves records';
+};
+
+subtest 'command calls the generated proxy and persists its result and event' => {
+    my %r = result('command', 'Account', 'register', "-I=$module-dir", "-I=$module-dir",
+        '-M=TestCliApp', '-M=TestCliApp', '-M=JSON::Fast',
+        '--ids={"account-id":42}', '--data={"name":"Jane"}');
+    is %r<code>, 0, 'repeated module and include flags work with JSON options';
+    is %r<err>, '', 'successful execution has no diagnostics';
+    is from-json(%r<out>), 'Jane', 'stdout contains the JSON result';
+    my $row = commands().tail;
+    is $row<entity>, 'TestCliApp::Account', 'stored target has its canonical name';
+    is $row<stream>, $stream, 'stream comes from the entity IDs';
+    is $row<state>, 'Done', 'command completes synchronously';
+    is $row<tries>, 1, 'one execution is recorded';
+    is $row<result>, 'Jane', 'result is stored';
+    is-deeply $row<entity-ids>, %(account-id => 42), 'identity is stored';
+    is events().tail<data><something>, 'Jane', 'handler emitted its domain event';
+};
+
+subtest 'dry-run validates and normalizes arguments without executing' => {
+    my @before-events = events().List;
+    my @before-commands = commands().List;
+    my %r = invoke('even-value', '--data={"value":4}', '--dry-run');
+    is %r<code>, 0, 'dry-run accepts an argument alias';
+    is %r<err>, '', 'dry-run has no diagnostics';
+    my %plan = from-json(%r<out>);
+    ok %plan<dry-run>, 'plan identifies dry-run';
+    is %plan<stream>, $stream, 'plan includes the computed stream';
+    is-deeply %plan<data>, %(value => 4), 'payload uses the canonical parameter name';
+    my %default = from-json(invoke('even-value', '--dry-run')<out>);
+    is-deeply %default<data>, %(value => 8), 'handler defaults appear in the preview';
+    is-deeply events(), @before-events.Array, 'dry-run emits no events';
+    is-deeply commands(), @before-commands.Array, 'dry-run stores no commands';
+};
+
+subtest 'aliases, calculated defaults and empty results keep library semantics' => {
+    my %qualified = result('command', 'TestCliApp::Account', 'even-value', "-I=$module-dir", '-M=TestCliApp',
+        '--ids={"account-id":42}', '--data={"input":4}');
+    is %qualified<code>, 0, 'fully qualified entity name is supported';
+    is from-json(%qualified<out>), 14, 'qualified lookup executes the same handler';
+    for <input value> -> $name {
+        my %r = invoke('even-value', '--data=' ~ to-json(%($name => 4)));
+        is %r<code>, 0, "$name is accepted";
+        is from-json(%r<out>), 14, 'normalized handler receives the argument';
+    }
+    is from-json(invoke('choose')<out>), 1, 'calculated default is evaluated once per submission';
+    my %empty = invoke('empty');
+    is %empty<code>, 0, 'Nil is a successful result';
+    is %empty<out>, "null\n", 'Nil has an unambiguous JSON representation';
+    is commands().tail<state>, 'Done', 'Nil still completes the command';
+};
+
+subtest 'async submits pending work and history queries never execute it' => {
+    my $before = events().elems;
+    my %r = invoke('even-value', '--data={"input":12}', '--async');
+    is %r<code>, 0, 'async submission succeeds';
+    my %row = from-json(%r<out>);
+    is %row<state>, 'Pending', 'stdout describes the pending row';
+    is %row<tries>, 0, 'handler has not run';
+    is-deeply %row<data>, %(value => 12), 'normalized arguments are stored';
+    my %listed = result('list-commands', '--json', '--state=Pending', "--stream=$stream",
+        '--from-id=' ~ (%row<id> - 1));
+    is %listed<code>, 0, 'history filters combine';
+    diag %listed<err> if %listed<code>;
+    is from-json(%listed<out>).elems, 1, 'only the selected pending command is listed';
+    is events().elems, $before, 'submission and inspection emit no events';
+    is fixture('say StoredCommand.^all.grep(*.id == @*ARGS[0].Int).head.run;', %row<id>.Str),
+        "22\n", 'a separate process can execute the stored command';
+    is commands().tail<state>, 'Done', 'deferred execution completes';
+};
+
+subtest 'bad identity, data and methods are rejected before submission' => {
+    my $before = commands().elems;
+    my @cases =
+        ['Account', 'register', '{}', '{"name":"Invalid"}', 'Missing entity IDs'],
+        ['Account', 'register', '{"account-id":42,"extra":1}', '{"name":"Invalid"}', 'Unknown entity IDs'],
+        ['Account', 'register', '{"account-id":"wrong"}', '{"name":"Invalid"}', 'Type check'],
+        ['Account', 'register', '[]', '{"name":"Invalid"}', '--ids must be a JSON object'],
+        ['Account', 'register', '{"account-id":42}', '[]', '--data must be a JSON object'],
+        ['Account', 'register', '{"account-id":42}', '{}', 'Missing command argument'],
+        ['Account', 'register', '{"account-id":42}', '{"name":7}', 'Type check'],
+        ['Account', 'register', '{"account-id":42}', '{"name":"Invalid","typo":1}', 'Unknown command arguments'],
+        ['Account', 'even-value', '{"account-id":42}', '{"input":3}', 'does not match the signature'],
+        ['Account', 'even-value', '{"account-id":42}', '{"input":4,"value":6}', 'argument aliases'],
+        ['Account', 'even-value', '{"account-id":42}', '{"sync":false}', 'Unknown command arguments'],
+        ['Account', 'ordinary', '{"account-id":42}', '{}', 'No command'],
+        ['Account', 'create', '{"account-id":42}', '{}', 'No command'],
+        ['OtherEvent', 'new', '{}', '{}', 'not an aggregate'],
+        ['MissingEntity', 'register', '{}', '{}', 'Unknown entity'];
+    for @cases -> @case {
+        for False, True -> $dry {
+            my %r = result('command', @case[0], @case[1], "-I=$module-dir", '-M=TestCliApp',
+                '--ids=' ~ @case[2], '--data=' ~ @case[3], |($dry ?? ('--dry-run',) !! ()));
+            isnt %r<code>, 0, 'invalid input fails';
+            is %r<out>, '', 'invalid input produces no success result';
+            ok %r<err>.contains(@case[4]), "error explains invalid input for {@case[0]}.{@case[1]} (dry-run=$dry)"
+                or diag "Expected {@case[4].raku} in {%r<err>.raku}";
+        }
+    }
+    is commands().elems, $before, 'validation failures create no command rows';
+};
+
+subtest 'handler failure remains recorded and rolls back emitted events' => {
+    my $before = events().elems;
+    my %r = invoke('fail-after-event');
+    isnt %r<code>, 0, 'domain failure gives a nonzero exit status';
+    is %r<out>, '', 'domain failure produces no success result';
+    is %r<err>, "CLI command rejected\n", 'default diagnostics are concise';
+    is events().elems, $before, 'event emitted before failure is rolled back';
+    my $row = commands().tail;
+    is $row<state>, 'Failed', 'failure remains in command history';
+    is $row<error>, 'CLI command rejected', 'persisted error is preserved';
+    my %failed = result('list-commands', '--state=Failed', '--json');
+    is from-json(%failed<out>).elems, 1, 'failed command filter works';
+};
+
+subtest 'JSON arguments preserve quotes, backslashes and newlines' => {
+    my $value = "O'Brien \\ folder\n" ~ q[$("still text")];
+    my %r = invoke('register', '--data=' ~ to-json(%(name => $value)));
+    is %r<code>, 0, 'special text is accepted';
+    is from-json(%r<out>), $value, 'result preserves the exact text';
+    is events().tail<data><something>, $value, 'event preserves the exact text';
+};
+
+subtest 'event listing resolves short names, qualified names and expressions' => {
+    for '-l=UserRegistered', '-l=TestCliApp::UserRegistered', '-c=UserRegistered' -> $filter {
+        my %r = result('list-events', "-I=$module-dir", '-M=TestCliApp', $filter,
+            "--stream=$stream", '--after=2000-01-01T00:00:00Z');
+        is %r<code>, 0, "$filter resolves";
+        like %r<out>, /UserRegistered/, 'selected type is included';
+        unlike %r<out>, /OtherEvent/, 'other types are excluded';
+        is %r<err>, '', 'type query has no diagnostics';
+    }
+    my %all = result('list-events', "-I=$module-dir", '-M=TestCliApp', '-M=JSON::Fast');
+    is %all<code>, 0, 'imports alone do not filter events';
+    like %all<out>, /OtherEvent/, 'other event type remains visible';
+    my %rows = result('list-events', '--rows', "--stream=$stream");
+    like %rows<out>, /UserRegistered/, 'stored history is formatted without application imports';
+    my $last = events().tail<id>;
+    is-deeply from-json(result('list-events', '--json', "--from-id=$last")<out>), [],
+        'JSON event cursor returns a valid empty array';
+    is-deeply from-json(result('streams', '--json')<out>), ['other', $stream].sort.Array,
+        'stream output is deterministic JSON';
+};
+
+subtest 'migrations persist JSON and dry-run preserves it' => {
+    my %r = result('update', '-c=TestCliApp::UserRegistered', '-v=0',
+        '-e=.<name> = .<something>:delete', '--debug');
+    is %r<code>, 0, 'migration succeeds';
+    like %r<err>, /'UPDATE red_sourcing_event SET'/, 'debug traces the write';
+    my $row = events().tail;
+    ok $row<data><name>:exists, 'renamed JSON key is persisted';
+    nok $row<data><something>:exists, 'old key was removed';
+    is $row<event-schema-version>, 1, 'target version defaults to source plus one';
+    my @before = events().List;
+    my %dry = result('update', '-c=TestCliApp::UserRegistered', '-v=1', '-n=2',
+        '-e=.<other-name> = .<name>:delete', '--dry-run', '--debug');
+    is %dry<code>, 0, 'migration preview succeeds';
+    like %dry<err>, /'Affected rows:'/ , 'preview identifies affected rows';
+    unlike %dry<err>, /'UPDATE red_sourcing_event SET'/, 'preview issues no updates';
+    is-deeply events(), @before.Array, 'preview preserves data and versions';
+};
+
+subtest 'migration failure rolls back the entire batch' => {
+    fixture('my $p = Account.^with-ids(:account-id(84)); $p.^create; $p.register(:name<Original>); $p.register(:name<Original>);');
+    my @before = events().List;
+    my %r = result('update', '-c=TestCliApp::UserRegistered', '-v=0',
+        '--trans-signature=StoredEvent $row',
+        '-e=die "intentional failure" if $row.version == 3; $row.data<something> = "Changed"');
+    isnt %r<code>, 0, 'failure is reported';
+    like %r<err>, /'intentional failure'/, 'original error is preserved';
+    is-deeply events(), @before.Array, 'earlier updates roll back with the failing row';
+};
+
+subtest 'removed emit and unknown flags cannot bypass command validation' => {
+    for ['emit', '-e=die "should not run"'], ['init', '--typo'],
+        ['command', 'Account', 'register', '--stream=arbitrary'],
+        ['list-commands', '--state=Unknown'], ['list-events', '--from-id=-1'] -> @args {
+        my %r = result(|@args);
+        isnt %r<code>, 0, 'unsupported command, option or state is rejected';
+        is %r<out>, '', 'invalid invocation has no success result';
+    }
+};
+my $help = run-cli('--help');
+is $help.exitcode, 0, 'CLI help succeeds';
+my $usage = $help.out.slurp(:close);
+is $help.err.slurp(:close), '', 'help has no diagnostics';
+for <command list-events list-commands update web-monitor> -> $name {
+    ok $usage.contains($name), "help advertises $name";
+}
+nok $usage.contains(' emit '), 'help no longer advertises direct event emission';
+
+subtest 'web-monitor is integrated and validates its own store without creating it' => {
+    my $working = $tmp.IO.add('monitor-working');
+    $working.mkdir;
+    my $database = $working.add('missing store.db').Str;
+    my $help = run-cli('web-monitor', '--help');
+    is $help.exitcode, 0, 'monitor help works without loading the HTTP module';
+    like $help.out.slurp(:close), /'--database'/, 'help exposes required database';
+    is $help.err.slurp(:close), '', 'monitor help has no dependency diagnostics';
+    my %missing = result("--database=$database", 'web-monitor', '--host=127.0.0.1',
+        '--port=4321', '--minutes=15', '--app-url=http://localhost:3000/');
+    isnt %missing<code>, 0, 'monitor rejects a missing existing store';
+    like %missing<err>, /'Database does not exist'/, 'integrated monitor reports its validation error';
+    nok $database.IO.e, 'monitor does not create a database';
+    my %window = result('web-monitor', "--database=$database", '--minutes=0');
+    like %window<err>, /'minutes must be between'/, 'metrics window is forwarded and validated';
+    for (), ('--port=-1',), ('--unknown-option',) -> @flags {
+        my %invalid = result('web-monitor', |(@flags ?? ("--database=$database", |@flags) !! ()));
+        isnt %invalid<code>, 0, 'missing database and invalid flags are rejected';
+        is %invalid<out>, '', 'invalid input never starts the monitor';
+    }
+};
+
+done-testing;

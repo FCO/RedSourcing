@@ -1,0 +1,175 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/shopping-cart').Str;
+use Red;
+use RedSourcing;
+use RedSourcing::StoredCommand;
+use Cart;
+use CartEvents;
+use CartSummary;
+use ShopSales;
+
+my $*RED-DB;
+sub cart(Str $id = 'ana') { Cart.^with-ids(:cart-id($id)) }
+sub summary(Str $id = 'ana') { CartSummary.^with-ids(:cart-id($id)) }
+sub fresh-shop {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    cart().^create;
+    cart('bob').^create;
+}
+sub coffee(UInt $quantity = 1) {
+    cart().add-item(:product-id<coffee>, :name<Coffee>, :unit-price(12.50), :$quantity)
+}
+
+subtest 'item commands replay exact quantities and totals in an isolated cart' => {
+    fresh-shop;
+    is coffee(2)<total>, 25.00, 'adding a product returns its updated total';
+    is coffee()<quantity>, 3, 'adding an existing product increments its quantity';
+    cart().add-item(:product-id<mug>, :name<Mug>, :unit-price(8.90));
+    is cart().set-quantity(:product-id<coffee>, :quantity(2))<total>, 33.90,
+        'setting a quantity adjusts the total';
+    is cart().remove-item(:product-id<mug>), 25.00, 'removing deletes the entire product line';
+    my $loaded = cart().^load;
+    is $loaded.items.elems, 1, 'only the retained product remains';
+    is $loaded.items<coffee><quantity>, 2, 'the aggregate replays the final quantity';
+    is-deeply $loaded.total, 25.00, 'the aggregate total is an exact Rat';
+    my %view = summary().^load.summary;
+    is %view<lines>, 1, 'the projection counts distinct product lines';
+    is %view<item-count>, 2, 'the projection counts units';
+    is-deeply %view<total>, 25.00, 'the projection agrees with the aggregate';
+    is summary('bob').^load.total, 0.0, 'another cart does not consume these events';
+    is ShopSales.^with-ids.^load.orders, 0, 'open carts do not count as sales';
+    my $before = StoredEvent.^all.elems;
+    cart().set-quantity(:product-id<coffee>, :quantity(2));
+    is StoredEvent.^all.elems, $before, 'setting an unchanged quantity emits no event';
+    cart().remove-item(:product-id<coffee>);
+    is cart().^load.items.elems, 0, 'removing the last product empties the cart';
+    is summary().^load.item-count, 0, 'removing the last product empties the projection';
+    is summary().^load.total, 0.0, 'an empty cart has zero total';
+};
+
+subtest 'payload and domain failures preserve event history' => {
+    fresh-shop;
+    my $commands = StoredCommand.^all.elems;
+    for 0.0, -1.0, 0.001 -> $unit-price {
+        dies-ok {
+            cart().add-item(:product-id<coffee>, :name<Coffee>, :$unit-price)
+        }, 'nonpositive prices and fractional cents fail before submission';
+    }
+    dies-ok { coffee(0) }, 'a zero quantity cannot be added';
+    dies-ok { cart().add-item(:product-id(''), :name<Coffee>, :unit-price(1.00)) },
+        'an empty product identity is rejected';
+    dies-ok { cart().add-item(:product-id<coffee>, :name(''), :unit-price(1.00)) },
+        'an empty product name is rejected';
+    is StoredCommand.^all.elems, $commands, 'invalid payloads create no command records';
+    throws-like { cart().checkout }, X::AdHoc, message => "Cart 'ana' is empty",
+        'an empty cart cannot be checked out';
+    coffee();
+    my $events = StoredEvent.^all.elems;
+    throws-like {
+        cart().add-item(:product-id<coffee>, :name<Coffee>, :unit-price(13.00))
+    }, X::AdHoc, message => /'different name or price'/, 'an existing line cannot silently change price';
+    throws-like {
+        cart().add-item(:product-id<coffee>, :name<Espresso>, :unit-price(12.50))
+    }, X::AdHoc, message => /'different name or price'/, 'an existing line cannot silently change name';
+    throws-like { cart().set-quantity(:product-id<missing>, :quantity(1)) }, X::AdHoc,
+        message => /'is not in cart'/, 'an unknown product cannot change quantity';
+    throws-like { cart().remove-item(:product-id<missing>) }, X::AdHoc,
+        message => /'is not in cart'/, 'an unknown product cannot be removed';
+    dies-ok { cart().set-quantity(:product-id<coffee>, :quantity(0)) },
+        'removing a line uses remove-item rather than zero quantity';
+    is StoredEvent.^all.elems, $events, 'rejected commands do not emit events';
+    is cart().^load.total, 12.50, 'the cart retains its original total';
+    my @failed = cart().^list-commands(:state(StoredCommand::State::Failed));
+    is @failed.elems, 5, 'domain failures are stored as terminal failed commands';
+    ok @failed.all.error.defined, 'failure reasons are persisted';
+};
+
+subtest 'checkout records the receipt and closes the cart' => {
+    fresh-shop;
+    coffee(2);
+    cart().add-item(:product-id<mug>, :name<Mug>, :unit-price(8.90));
+    my %receipt = cart().checkout;
+    is-deeply %receipt<total>, 33.90, 'the receipt keeps the exact Rat total';
+    is %receipt<item-count>, 3, 'the receipt counts every unit';
+    is-deeply %receipt<items>.map(*.<product-id>).Array, ['coffee', 'mug'],
+        'receipt lines have a deterministic product order';
+    is %receipt<items>[0]<quantity>, 2, 'the receipt records product quantities';
+    is-deeply %receipt<items>[1]<unit-price>, 8.90, 'the receipt records its agreed price';
+    my @orders = StoredEvent.list-events(:types[CartCheckedOut]);
+    is @orders.elems, 1, 'one checkout becomes one business event';
+    is @orders.head.order-id, %receipt<order-id>, 'the event identifies the returned order';
+    ok cart().^load.checked-out, 'aggregate replay restores the closed state';
+    ok summary().^load.summary<checked-out>, 'the projection sees checkout';
+    my $before = StoredEvent.^all.elems;
+    throws-like { coffee() }, X::AdHoc, message => /'already been checked out'/,
+        'closed carts reject additions';
+    throws-like { cart().set-quantity(:product-id<coffee>, :quantity(1)) }, X::AdHoc,
+        message => /'already been checked out'/, 'closed carts reject quantity changes';
+    throws-like { cart().remove-item(:product-id<coffee>) }, X::AdHoc,
+        message => /'already been checked out'/, 'closed carts reject removals';
+    throws-like { cart().checkout }, X::AdHoc, message => /'already been checked out'/,
+        'a new checkout command cannot buy the same cart twice';
+    is StoredEvent.^all.elems, $before, 'a closed cart emits no further business events';
+};
+
+subtest 'deferred commands load current state and reuse successful results' => {
+    fresh-shop;
+    coffee();
+    my $pending = cart().checkout(:!sync);
+    ok !cart().^load.checked-out, 'submission alone does not close the cart';
+    coffee(2);
+    my %first = $pending.run;
+    is %first<item-count>, 3, 'checkout loads the state at execution time';
+    my $before = StoredEvent.^all.elems;
+    my %again = $pending.run;
+    is-deeply %again, %first, 'repeated execution returns the saved receipt';
+    is StoredEvent.^all.elems, $before, 'repeated execution emits no second checkout';
+    my $row = StoredCommand.^all.grep(*.id == $pending.id).head;
+    is-deeply $row.run, %first, 'a reloaded command also returns the saved receipt';
+    my $sales = ShopSales.^with-ids.^load;
+    is $sales.orders, 1, 'sales count the checkout once';
+    is $sales.revenue, 37.50, 'sales use the executed order total';
+    my $change = cart('bob').set-quantity(:product-id<tea>, :quantity(2), :!sync);
+    throws-like { $change.run }, X::AdHoc, message => /'is not in cart'/,
+        'deferred commands validate their execution state';
+};
+
+subtest 'snapshots restore cart lines and projections replay later events once' => {
+    fresh-shop;
+    coffee(2);
+    cart().^load.^emit-snapshot;
+    summary().^load.^emit-snapshot;
+    coffee();
+    cart().set-quantity(:product-id<coffee>, :quantity(1));
+    is cart().^load.items<coffee><quantity>, 1, 'aggregate checkpoints retain mutable product lines';
+    is summary().^load.total, 12.50, 'a projection checkpoint consumes subsequent changes';
+    cart().checkout;
+    my $sales-proxy = ShopSales.^with-ids;
+    $sales-proxy.^load.^emit-snapshot;
+    cart('bob').add-item(:product-id<tea>, :name<Tea>, :unit-price(4.25), :quantity(3));
+    cart('bob').checkout;
+    cart().^load.^emit-snapshot;
+    summary().^load.^emit-snapshot;
+    is cart().^load.order-id, summary().^load.order-id, 'closed state survives both checkpoint types';
+    my $sales = $sales-proxy.^load;
+    is $sales.orders, 2, 'sales restoration adds the later checkout';
+    is $sales.items-sold, 4, 'sales count units across carts';
+    is-deeply $sales.revenue, 25.25, 'sales add exact Rat revenue across streams';
+    $sales.^replay;
+    is $sales.orders, 2, 'replaying again does not recount receipts';
+};
+
+subtest 'decimal prices stay exact across events, aggregate snapshots and receipts' => {
+    fresh-shop;
+    cart().add-item(:product-id<a>, :name<A>, :unit-price(0.10));
+    cart().add-item(:product-id<b>, :name<B>, :unit-price(0.20));
+    cart().^load.^emit-snapshot;
+    is-deeply cart().^load.total, 0.30, 'snapshot restoration preserves exact decimal sums';
+    cart().set-quantity(:product-id<a>, :quantity(3));
+    is-deeply cart().^load.total, 0.50, 'restored line prices support exact quantity arithmetic';
+    is-deeply cart().checkout<total>, 0.50, 'checkout preserves the rational total';
+    is-deeply ShopSales.^with-ids.^load.revenue, 0.50, 'sales replay preserves the rational total';
+};
+
+done-testing;

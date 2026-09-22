@@ -1,0 +1,178 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing::CLI::Output;
+
+subtest 'values are readable and terminal controls are escaped' => {
+    is format-value(Nil), '—', 'missing values are explicit';
+    is format-value({}), '(empty object)', 'empty objects are explicit';
+    is format-value([]), '(empty list)', 'empty lists are explicit';
+    is format-value({name => "Ana\nMaria", tags => ['first', 'second'], active => True}),
+        "active: True\nname: Ana\n  Maria\ntags:\n  - first\n  - second", 'nested values retain readable structure';
+    is format-value([%(a => 1, b => 2).item]), "- a: 1\n  b: 2", 'records inside lists are indented';
+    is format-value("\e[31m\tbad\r\x[7F]"), '\x[1B][31m\tbad\r\x[7F]', 'values cannot inject terminal control sequences';
+    is format-value({"a\nb" => 1}), 'a\nb: 1', 'multiline keys cannot inject new fields';
+};
+
+subtest 'tables align columns and preserve complete names' => {
+    is format-table(<NAME STATE>, [['A', 'Done'], ['Long name', 'Pending']]),
+        "NAME       STATE\n---------  -------\nA          Done\nLong name  Pending", 'columns use the widest value';
+    is format-table(['NAME'], []), '(none)', 'empty tables are explicit';
+    like format-table(['NAME'], [["Ana\nMaria"].item]), /'Ana\nMaria'/, 'multiline cells stay on one row';
+    my $name = 'Unknown::VeryLongEntity::' ~ ('full-name-' x 12);
+    ok format-entities([%(kind => 'aggregate', type => $name, stream => 'account/a',
+        version => 1, state-source => 'snapshot').item]).contains($name), 'long names are not truncated';
+    like format-types([%(kind => 'aggregate', name => $name, ids => ['id'], commands => ['rename']).item]),
+        /'rename'/, 'type tables include observed commands';
+};
+
+subtest 'history, inspection and command definitions have readable views' => {
+    my @events = [%(id => 1, class => 'Changed', version => 2, stream => 'account/a', created => 'today', data => {name => 'Ana'}).item];
+    my @commands = [%(id => 4, state => 'Done', entity => 'Account', method => 'rename', tries => 1,
+        stream => 'account/a', result => {name => 'Ana'}, error => Nil).item];
+    like format-events(@events), /'Changed'/, 'event table uses stored class names';
+    like format-events([%(id => 2, type => 'InspectorEvent', version => 1, stream => 'other', created => 'today').item]),
+        /InspectorEvent/, 'Inspector event field names are supported';
+    like format-events(@events, :details), /'Event #1' .* 'name: Ana'/, 'detailed events include payloads';
+    is format-events([], :details), '(none)', 'empty detailed events are explicit';
+    like format-commands(@commands), /'Done'/, 'command table includes state';
+    like format-commands(@commands, :details), /'Command #4' .* 'name: Ana'/, 'detailed commands include results';
+    is format-commands([], :details), '(none)', 'empty detailed commands are explicit';
+    my %report = types => [], instances => [], events => @events, commands => @commands;
+    like format-inspection(%report), /'Entity types' .* 'Entity instances' .* 'Recent events' .* 'Recent commands'/,
+        'overview separates discovery and history';
+    like format-inspection(%(instance => {stream => 'account/a', data => {name => 'Ana'}}, events => @events, commands => @commands)),
+        /'Persisted entity state' .* 'name: Ana'/, 'scoped inspection includes stored state';
+    like format-description(%(entity => 'Account', kind => 'aggregate', ids => ['id'],
+        commands => [%(name => 'rename', signature => '(:$name!)').item])), /'Entity definition' .* 'rename' .* '(:$name!)'/,
+        'definitions show original handler signatures';
+};
+
+subtest 'metrics and worker summaries explain rates and failures' => {
+    my %metrics = window-minutes => 2, as-of => 'today', totals => {events => 3},
+        events-per-minute => 1.5, mean-events-per-entity => 3,
+        entities => [%(type => 'Account', stream => 'account/a', events => 3, snapshots => 1,
+            commands => 1, failure-total => 0, retries => 0, events-since-snapshot => 2).item],
+        series => [%(time => 'active', events => 3, snapshots => 0, controls => 0, retries => 0).item,
+            %(time => 'idle', events => 0, snapshots => 0, controls => 0, retries => 0).item];
+    my $output = format-metrics(%metrics);
+    like $output, /'last 2 minutes' .* 'events-per-minute: 1.50' .* 'By entity' .* 'Active minutes'/,
+        'metrics show window, totals, rates and entity counts';
+    unlike $output, /idle/, 'empty minute buckets do not flood the terminal';
+    is format-work(%(processed => [])), 'No due commands.', 'empty work pass is clear';
+    like format-work(%(processed => [%(id => 1, state => 'Failed', entity => 'Account', method => 'rename',
+        tries => 1, stream => 'account/a', execution-error => 'Rejected').item])),
+        /'1 command (1 failed)' .* Rejected/, 'worker includes execution failure and count';
+    like format-work(%(processed => [%(id => 2, state => 'Done', entity => 'Account', method => 'rename', tries => 1, stream => 'account/a').item])),
+        /'1 command (0 failed)'/, 'successful work has a distinct summary';
+    like format-work(%(processed => [%(id => 3, state => 'Done', entity => 'Account', method => 'rename', tries => 1, stream => 'account/a').item,
+        %(id => 4, state => 'Pending', entity => 'Missing', method => 'rename', tries => 0, stream => 'missing/a', execution-error => 'Unknown target').item])),
+        /'2 commands (1 failed)' .* 'Unknown target'/, 'mixed batches count failures before a command can be claimed';
+};
+
+my $tmp = tempdir.IO;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+$tmp.add('OutputApp.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module OutputApp;
+    class Renamed does Event is export { has Int $.id; has Str $.name; }
+    aggregate Account is export {
+        has Int $.id is entity-id;
+        has Str $.name = '';
+        method APPLY(Renamed $e) { $!name = $e.name }
+        method rename(Str :$name!) is command { self.renamed(:$name); %(name => $!name) }
+        method answer is command { 42 }
+        method empty is command { Nil }
+        method rejected is command { die 'Output rejection' }
+    }
+    projection Names is export {
+        has Int $.id is entity-id;
+        has Str $.name = '';
+        method APPLY(Renamed $e where { .id eqv $!id }) { $!name = $e.name }
+    }
+    saga Workflow is export {
+        has Int $.id is entity-id;
+        method APPLY(Renamed $e where { .id eqv $!id }) { }
+        method REACT(Renamed $e where { .id eqv $!id }) {
+            self.^service('output-fake', 'charge', \(), :retry{:1max}, :!compensation);
+        }
+    }
+    register-service 'output-fake', -> | { die Uncertain.new(:message('Unknown provider outcome')) };
+    MODULE
+$tmp.add('red-sourcing.rakuconf').spurt(q:to/CONF/);
+    use RedSourcing::CLI::Config;
+    config { .database = 'output.db'; .includes = ['.']; .modules = <OutputApp> }
+    CONF
+sub cli(*@args) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, |@args, :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub human(*@args) {
+    my %result = cli(|@args);
+    die %result<err> if %result<code>;
+    %result<out>
+}
+sub json(*@args) {
+    my %result = cli(|@args, '--json');
+    die %result<err> if %result<code>;
+    from-json(%result<out>)
+}
+
+subtest 'default command output is human while JSON preserves its original values' => {
+    is cli('init')<code>, 0, 'initialize a CLI store';
+    like human('create', 'Account', '--ids={"id":1}'), /'Created entity' .* 'id: 1'/, 'create describes the saved entity';
+    like human('command', 'Account', 'answer', '--ids={"id":1}'), /'Result' .* '42'/, 'scalar command result is labelled';
+    like human('command', 'Account', 'empty', '--ids={"id":1}'), /'Command completed (no result)'/, 'empty command result is still successful';
+    my $text = "O'Brien\nnext line";
+    is-deeply json('command', 'Account', 'rename', '--ids={"id":1}', '--data=' ~ to-json({name => $text})),
+        {name => $text}, 'JSON retains special text and result schema';
+    like human('command', 'Account', 'rename', '--ids={"id":1}', '--data={"name":"Preview"}', '--dry-run'),
+        /'Command preview' .* 'name: Preview'/, 'dry-run displays normalized arguments';
+    like human('command', 'Account', 'rename', '--ids={"id":1}', '--data={"name":"Queued"}', '--async'),
+        /'Queued command' .* 'state: Pending'/, 'async submission shows pending metadata';
+    my $id = json('list-commands', '--state=Pending').head<id>;
+    like human('run-command', $id.Str), /'Command' .* 'state: Done'/, 'execution displays its stored outcome';
+    json('command', 'Account', 'answer', '--ids={"id":1}', '--async');
+    like human('work'), /'Processed 1 command (0 failed)'/, 'worker defaults to a readable summary';
+    is-deeply json('work'), %(processed => []), 'JSON worker schema is unchanged';
+    like human('load', 'Account', '--ids={"id":1}'), /'Loaded entity' .* 'name: Queued'/, 'load prints replayed fields';
+    like human('snapshot', 'Account', '--ids={"id":1}'), /'Snapshot stored' .* 'name: Queued'/, 'snapshot describes its saved state';
+    my $description = human('describe', 'Account');
+    like $description, /'Entity definition' .* 'Commands' .* rename .* 'Str :$name!'/,
+        'describe displays readable parameter syntax';
+    unlike $description, /'Signature<'/, 'describe does not print a signature object identity';
+    human('create', 'Names', '--ids={"id":1}');
+    human('create', 'Workflow', '--ids={"id":1}');
+    my %advanced = json('advance', 'Workflow', '--ids={"id":1}', '--limit=1');
+    my $action = %advanced<data><saga-state><actions>.head<id>;
+    like human('advance', 'Workflow', '--ids={"id":1}', '--limit=1'), /'Saga state' .* 'saga-state'/, 'advance presents saga state';
+    like human('resolve-action', 'Workflow', $action, '--ids={"id":1}', '--result={"confirmed":true}'),
+        /'Reconciled saga' .* 'confirmed: True'/, 'reconciliation presents its recorded result';
+};
+
+subtest 'default queries are human, histories have details and failures retain their status' => {
+    my @before = json('list-events').List;
+    my @commands = json('list-commands').List;
+    like human('types'), /KIND .* TYPE .* 'OutputApp::Account'/, 'catalog uses a table';
+    like human('list-entities'), /KIND .* STREAM .* 'OutputApp::Account'/, 'entity list is aligned';
+    like human('inspect'), /'Entity types' .* 'Recent events' .* 'Recent commands'/, 'overview separates sections';
+    like human('inspect', '--stream=OutputApp::Account: id = 1'), /'Persisted entity state' .* 'name: Queued'/, 'scoped inspection includes snapshot fields';
+    like human('stats', '--minutes=2'), /'Journal metrics (last 2 minutes)' .* 'By entity'/, 'metrics explain totals and rates';
+    like human('list-events'), /ID .* EVENT .* 'OutputApp::Renamed'/, 'event history defaults to a table';
+    like human('list-events', '--class-name=OutputApp::Renamed', '--details'), /'Event #' .* 'name: Queued'/, 'event details include payload fields';
+    like human('list-commands'), /ID .* STATE .* METHOD/, 'command history defaults to a table';
+    like human('list-commands', '--method=rename', '--details'), /'Command #' .* 'name: Queued'/, 'command details include arguments and results';
+    is-deeply json('list-events'), @before.Array, 'formatted queries do not write events';
+    is-deeply json('list-commands'), @commands.Array, 'formatted queries do not execute commands';
+    like human('update', '-c=OutputApp::Renamed', '-v=0', '-e=.<name> ~= "!"', '--dry-run'),
+        /'Would update 2 events'/, 'migration preview is readable';
+    my %migration = json('update', '-c=OutputApp::Renamed', '-v=0', '-e=.<name> ~= "!"');
+    is %migration<affected>, 2, 'JSON migration summary records the affected count';
+    json('command', 'Account', 'rejected', '--ids={"id":1}', '--async');
+    my %failure = cli('work');
+    is %failure<code>, 1, 'worker failure retains a nonzero exit code';
+    like %failure<out>, /'1 command (1 failed)' .* 'Output rejection'/, 'human worker output includes the failure';
+};
+
+done-testing;

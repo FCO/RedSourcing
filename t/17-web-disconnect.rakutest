@@ -1,0 +1,52 @@
+use Test;
+use Cro::HTTP::Router;
+use Cro::HTTP::Client;
+use RedSourcing::Web::Server;
+
+# Exercise real TCP teardown: a router-only test cannot reproduce the SSE leak.
+my $port = 40000 + (^20000).pick;
+my $started;
+my $closed;
+my $routes = route {
+    get -> 'live' {
+        content 'text/event-stream', supply {
+            $started.keep(True);
+            whenever Supply.interval(0.02) { emit "data: heartbeat\n\n".encode('utf-8') }
+            CLOSE { $closed.keep(True) }
+        };
+    }
+    get -> { content 'text/plain', 'still serving' }
+    get -> 'broken' {
+        content 'text/event-stream', supply { die 'Unexpected response body failure' };
+    }
+};
+my $server = web-server(:host<127.0.0.1>, :$port, :application($routes));
+$server.start;
+LEAVE $server.stop;
+
+for ^5 -> $attempt {
+    $started = Promise.new;
+    $closed = Promise.new;
+    my $socket = await IO::Socket::Async.connect('127.0.0.1', $port);
+    my $tap = $socket.Supply(:bin).tap(-> $ { }, :quit(-> $ { }));
+    await $socket.write("GET /live HTTP/1.1\r\nHost: localhost\r\n\r\n".encode('ascii'));
+    await Promise.anyof($started, Promise.in(5));
+    is $started.status, Kept, "SSE connection {$attempt + 1} started";
+    $socket.close;
+    $tap.close;
+    await Promise.anyof($closed, Promise.in(5));
+    is $closed.status, Kept, 'disconnect cancels the response body and its interval';
+}
+my $response = await Cro::HTTP::Client.get("http://127.0.0.1:$port/");
+is $response.status, 200, 'HTTP server remains available after repeated disconnects';
+is await($response.body-text), 'still serving', 'ordinary responses still work';
+
+# Errors in response generation must not be swallowed by the socket-write guard.
+my $source = Supplier.new;
+my $responses = $routes.transformer($source.Supply).Channel;
+$source.emit(Cro::HTTP::Request.new(:method<GET>, :target</broken>));
+my $broken = $responses.receive;
+throws-like { $broken.body-byte-stream.list.eager }, X::AdHoc,
+    :message('Unexpected response body failure'), 'body errors retain their original failure';
+$source.done;
+done-testing;

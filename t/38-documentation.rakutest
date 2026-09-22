@@ -1,0 +1,120 @@
+use Test;
+use File::Temp;
+
+my $repo = $?FILE.IO.parent.parent.absolute.IO;
+my $tmp = tempdir.IO;
+my $readme = $repo.add('README.md').slurp;
+sub raku-block(Str $section) {
+    my $start = $section.index("```raku\n");
+    die 'Missing Raku documentation block' unless $start.defined;
+    my $body = $section.substr($start + "```raku\n".chars);
+    $body.substr(0, $body.index("\n```"))
+}
+sub execute(Str $code, *@args) {
+    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", '-e', $code, |@args, :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+subtest 'the README quick start runs as printed' => {
+    my $section = $readme.split('## Quick start', 2).tail;
+    my %result = execute(raku-block($section));
+    is %result<code>, 0, 'complete inline program compiles and runs';
+    is %result<err>, '', 'no missing imports or API diagnostics';
+    is %result<out>, "2\nPending\n5\n5\n5\n", 'documented command and projection results agree';
+};
+subtest 'the README configuration is usable by application code' => {
+    my $section = $readme.split('## Application configuration', 2).tail;
+    my $file = $tmp.add('red-sourcing.rakuconf');
+    $file.spurt(raku-block($section));
+    my %result = execute(q:to/CODE/);
+        use RedSourcing;
+        my $settings = red-sourcing-defaults;
+        my $*RED-DEBUG = $settings.debug;
+        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        say $settings.driver;
+        say StoredEvent.^all.elems;
+        CODE
+    is %result<code>, 0, 'shared config and native initialization example run together';
+    is %result<err>, '', 'configured module metadata is not imported by native bootstrap';
+    is %result<out>, "SQLite\n0\n", 'file config selects the store and initializes its schema';
+};
+subtest 'the documented CLI counter flow works in an isolated store' => {
+    my $start = $readme.index('A complete counter flow');
+    my $section = $readme.substr($start);
+    my $fence = $section.index("```sh\n");
+    my $body = $section.substr($fence + "```sh\n".chars);
+    $body = $body.substr(0, $body.index("\n```"));
+    my $database = $tmp.add('cli-counter.db');
+    for $body.lines -> $line {
+        my @args = $line.words.skip(3).map(-> $arg {
+            my $value = $arg.subst('-f=examples/counter/', "-f={$repo.add('examples/counter')}/");
+            if $value.starts-with("--data='") && $value.ends-with("'") {
+                $value = '--data=' ~ $value.substr(8, $value.chars - 9);
+            }
+            $value
+        });
+        my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", $repo.add('bin/red-sourcing.raku').Str,
+            |@args, "--database=$database", :cwd($tmp), :out, :err;
+        is $p.exitcode, 0, "CLI example succeeds: $line";
+        is $p.signal, 0, 'documented operation exits without a signal';
+        is $p.err.slurp(:close), '', 'documented operation has no diagnostics';
+        my $out = $p.out.slurp(:close);
+        like $out, /'value: 2'/, 'load returns the documented state' if @args.first(* eq 'load').defined;
+    }
+};
+subtest 'module POD synopsis and the counter demonstration run' => {
+    my $source = $repo.add('lib/RedSourcing.rakumod').slurp;
+    my $section = $source.split('=head1 SYNOPSIS', 2).tail;
+    my $start = $section.index("=begin code :lang<raku>\n");
+    my $code = $section.substr($start + "=begin code :lang<raku>\n".chars).split('=end code', 2).head;
+    my %result = execute($code);
+    is %result<code>, 0, 'installed API synopsis is executable';
+    is %result<err>, '', 'synopsis uses current API';
+    is %result<out>, "2\n5\n5\n", 'synopsis results agree';
+    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", $repo.add('examples/counter/main.raku').Str,
+        :cwd($tmp), :out, :err;
+    is $p.exitcode, 0, 'linked counter demonstration runs';
+    is $p.err.slurp(:close), '', 'counter demo has no diagnostics';
+    is $p.out.slurp(:close), "2\nPending\n5\n5\n5\n", 'linked demo agrees with the README';
+};
+sub visible(Str $text) {
+    my $fenced = False;
+    $text.lines.map(-> $line {
+        if $line.starts-with('```') { $fenced = !$fenced; '' }
+        else { $fenced ?? '' !! $line }
+    }).join("\n")
+}
+sub markdown-files(IO::Path $directory) {
+    my @files;
+    for $directory.dir.grep({ !.basename.starts-with('.') && .basename ne 'node_modules' }) -> $path {
+        if $path.d { @files.append(markdown-files($path)) }
+        elsif $path.extension eq 'md' { @files.push($path) }
+    }
+    @files
+}
+sub anchor(Str $heading) {
+    $heading.lc.subst(/<-[\w\s\-]>/, '', :g).trim.subst(/\s+/, '-', :g)
+}
+subtest 'public documentation links and section anchors resolve locally' => {
+    my @documents = $repo.add('README.md'), |markdown-files($repo.add('docs')), |markdown-files($repo.add('examples'));
+    my %anchors;
+    for @documents -> $doc {
+        my @headings = visible($doc.slurp).lines.grep(* ~~ /^ '#' + \h+ /).map({ .subst(/^ '#' + \h+ /, '') });
+        %anchors{$doc.resolve.Str} = @headings.map({ anchor($_) }).Set;
+    }
+    my @failures;
+    for @documents -> $doc {
+        for visible($doc.slurp).match(/ '[' <-[\]]>* ']' '(' (<-[\s\)]>+) ')' /, :g) -> $match {
+            my $target = $match[0].Str;
+            next if $target ~~ /^ <[a..z A..Z]> + ':'/;
+            my ($path, $fragment) = $target.split('#', 2);
+            my $file = $path.chars ?? $doc.parent.add($path) !! $doc;
+            unless $file.e { @failures.push("{$doc.relative($repo)}: missing $target"); next }
+            if $fragment.defined && $fragment.chars && $file.extension eq 'md' {
+                @failures.push("{$doc.relative($repo)}: missing anchor $target")
+                    unless %anchors{$file.resolve.Str}{$fragment};
+            }
+        }
+    }
+    is-deeply @failures.Array, [], 'all local links and Markdown fragments are valid';
+};
+done-testing;

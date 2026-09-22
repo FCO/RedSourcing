@@ -1,0 +1,17 @@
+#!/usr/bin/env raku
+use RedSourcing;
+
+# Seed the mounted example once, using its local configuration.
+sub MAIN(Str $program = 'main.raku', Str :$database = '/data/events.db') {
+    red-sourcing-defaults(:$database);
+    if StoredEvent.^all.head {
+        say 'Example data already exists; keeping the current store.';
+        return;
+    }
+    die "Example program does not exist: $program" unless $program.IO.f;
+    my @includes = 'lib'.IO.d ?? ['-Ilib'] !! [];
+    my %environment = %*ENV;
+    %environment<REDSOURCING_EXAMPLE_DATABASE> = $database;
+    my $process = run $*EXECUTABLE.Str, |@includes, $program, :env(%environment);
+    exit($process.signal ?? 128 + $process.signal !! $process.exitcode);
+}

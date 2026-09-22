@@ -1,0 +1,248 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/real-estate/lib').Str;
+use RedSourcing;
+use RedSourcing::Inspector;
+use Estate::Domain;
+use Estate::App;
+use Estate::Routes;
+use Cro::HTTP::Request;
+use JSON::Fast;
+use RedSourcing::PgJSON;
+
+my $*RED-DB;
+my $*RED-FALLBACK = False;
+# Opt in with a dedicated PostgreSQL test database. Every case uses its own
+# schema; the normal suite remains self-contained on in-memory SQLite.
+my $pg-database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $pg-admin;
+my @pg-schemas;
+LEAVE {
+    if $pg-admin.defined { $pg-admin.execute("DROP SCHEMA $_ CASCADE") for @pg-schemas }
+}
+sub fresh(Bool :$seed = True) {
+    if $pg-database.defined {
+        die 'Use a simple database name for the PostgreSQL test database'
+            unless $pg-database ~~ /^ <[\w\-]>+ $/;
+        require ::('DB::Pg');
+        $pg-admin //= ::('DB::Pg').new(:conninfo("dbname=$pg-database"));
+        my $schema = 'rs_estate_test_' ~ $*PID ~ '_' ~ @pg-schemas.elems;
+        $pg-admin.execute("CREATE SCHEMA $schema");
+        @pg-schemas.push($schema);
+        my $pool = ::('DB::Pg').new(:conninfo("dbname=$pg-database options='-csearch_path=$schema'"),
+            :converters(<DateTime UUID Geometric>));
+        $*RED-DB = (database 'Pg', :dbh($pool)) but RedSourcing::PgJSON;
+    } else {
+        $*RED-DB = database 'SQLite', :database(':memory:');
+    }
+    App.new.initialize(:$seed)
+}
+sub repair(Str $id = 'r-boiler') { Repair.^with-ids(:repair-id($id)) }
+sub workflow(Str $id = 'r-boiler') { RepairWorkflow.^with-ids(:repair-id($id)) }
+sub property(Str $id = 'p-cedar') { Property.^with-ids(:property-id($id)) }
+
+subtest 'application serves installed framework assets at the public URLs' => {
+    my $requests = Supplier.new;
+    my $responses = estate-routes(App.new).transformer($requests.Supply).Channel;
+    for <app.css live.js vendor/htmx-4.0.0.min.js> -> $asset {
+        my $request = Cro::HTTP::Request.new(:method<GET>, :target("/assets/$asset"));
+        $request.append-header('Host', 'localhost'); $requests.emit($request);
+        my $response = $responses.receive;
+        is $response.status, 200, "$asset is available without a framework source path";
+        ok $response.body-byte-stream.list.map(*.elems).sum > 0, 'asset content is nonempty';
+    }
+    $requests.done;
+};
+
+sub inspector {
+    my $i = RedSourcing::Inspector.new;
+    $i.register($_) for Property, Tenant, Repair, Conversation, Portfolio,
+        TenantDirectory, RentLedger, RepairBoard, RepairChat, RepairWorkflow;
+    $i.watch($_.^with-ids) for Portfolio, TenantDirectory, RentLedger, RepairBoard;
+    $i.watch(RepairChat.^with-ids(:repair-id(.repair-id)))
+        for StoredEvent.list-events(:types[RepairRequested]);
+    $i
+}
+
+subtest 'Seeded portfolio and read models use domain events' => {
+    my $app = fresh;
+    my %m = $app.read-model;
+    is %m<properties>.elems, 4, 'four properties';
+    is %m<tenants>.elems, 3, 'three tenants';
+    is %m<rent>.elems, 3, 'three rent charges';
+    is %m<received>, 2150, 'exact rent receipts';
+    is %m<repairs>.elems, 2, 'two repair streams';
+    is $app.controller-error, '', 'controller is healthy';
+    is property().^load.monthly-rent, 1650, 'aggregate restores rent';
+    ok property().^load.monthly-rent ~~ Rat, 'aggregate money is Rat';
+    is $app.chat('r-window').elems, 1, 'request schedules a persisted notification';
+    is $app.chat('r-boiler').elems, 4, 'manual messages and notifications share a conversation';
+    ok $app.chat('r-window').head<notification>, 'notification is marked';
+    nok $app.chat('r-window').first(*.<body>.contains('Harris')), 'saga IDs isolate the scheduled notification';
+};
+subtest 'Rent validation and tenancy lifecycle' => {
+    my $app = fresh;
+    my $period = Date.today.Str.substr(0,7);
+    dies-ok { property().charge-rent(:$period) }, 'cannot double-charge a month';
+    dies-ok { property('p-park').charge-rent(:$period) }, 'cannot charge without a tenant';
+    dies-ok { property('p-dock').start-tenancy(:tenant-id<tenant-ana>) }, 'one active tenancy';
+    dies-ok { property('p-park').start-tenancy(:tenant-id<missing>) }, 'unknown tenant is rejected';
+    dies-ok { property('p-dock').receive-rent(:$period, :amount(1500.0), :reference<over>) }, 'no overpayment';
+    dies-ok { property('p-garden').end-tenancy }, 'cannot abandon outstanding rent';
+    property('p-garden').receive-rent(:$period, :amount(475.0), :reference<garden-final>);
+    lives-ok { property('p-garden').end-tenancy }, 'settled tenancy can end';
+    is property('p-garden').^load.tenant-id, '', 'end is replayed';
+    property('p-park').start-tenancy(:tenant-id<tenant-ana>);
+    property('p-park').charge-rent(:period<2026-12>);
+    property('p-park').receive-rent(:period<2026-12>, :amount(100.0), :reference<bank-unique>);
+    dies-ok { property('p-park').receive-rent(:period<2026-12>, :amount(100.0), :reference<bank-unique>) }, 'duplicate bank reference is rejected';
+    dies-ok { property('p-park').charge-rent(:period<2026-13>) }, 'invalid month is rejected';
+    dies-ok { property('p-park').receive-rent(:period<2026-11>, :amount(10.0), :reference<no-charge>) }, 'missing bill is rejected';
+    is $app.read-model<rent><p-park/2026-12><paid>, 100, 'projection records exactly one payment';
+};
+subtest 'Payment retry persists intent and survives a new app instance' => {
+    my $app = fresh;
+    my $now = DateTime.now;
+    $app.execute('fail-next-payment', {});
+    $app.execute('finish', %(repair-id => 'r-boiler', cost => '185.00'));
+    $app.execute('pay-repair', %(repair-id => 'r-boiler'));
+    $app.tick(:$now);
+    is repair().^load.status, 'payment-pending', 'temporary failure leaves payment pending';
+    my $payment = workflow().^load.^pending-actions.first(*.<step> eq 'send-payment');
+    is $payment<status>, 'retry', 'retry is saved';
+    is $payment<attempts>, 1, 'one attempted payment';
+    is $app.controller-error, '', 'retry does not break the controller';
+    # Sagas have controls but no snapshot: this must still reconstruct their identity.
+    nok StoredEvent.^all.grep(*.class eq RepairWorkflow.^name).head, 'no saga snapshot yet';
+    my $restarted = App.new.initialize(:!seed);
+    $restarted.tick(:now($now.later(:seconds(5))));
+    is repair().^load.status, 'paid', 'restarted controller finishes the payment';
+    is $restarted.controller-error, '', 'restarted controller is healthy';
+    my @receipts = $restarted.read-model<receipts>.grep(*.<operation> eq 'pay');
+    is @receipts.elems, 1, 'same stable provider key was reused';
+    is @receipts.head<attempts>, 2, 'provider saw one failure and one success';
+    is workflow().^load.payment-id, @receipts.head<result><payment-id>, 'native success restored saga state';
+    is workflow().^load.^state<compensations>.elems, 2, 'provider and aggregate inverses are registered';
+    is workflow('r-window').^load.payment-id, '', 'native controls never leak to another saga';
+    is repair('r-window').^load.status, 'requested', 'other aggregate is untouched';
+    $restarted.execute('checkpoint', {});
+    my $before = StoredEvent.^all.elems;
+    my $messages = $restarted.chat('r-boiler').elems;
+    $restarted.tick(:now($now.later(:seconds(8))));
+    is StoredEvent.^all.elems, $before, 'reload after checkpoint emits nothing new';
+    is $restarted.chat('r-boiler').elems, $messages, 'notifications do not repeat on replay';
+    $restarted.execute('compensate', %(repair-id => 'r-boiler'));
+    $restarted.tick(:now($now.later(:seconds(9))));
+    is workflow().^load.^status, 'compensated', 'stack unwinds';
+    is repair().^load.status, 'payment-reversed', 'aggregate payment is reversed';
+    dies-ok { repair().pay-contractor }, 'terminal reversal cannot leave another payment pending';
+    is $restarted.read-model<receipts>.grep(*.<operation> eq 'refund').elems, 1, 'provider refund is durable';
+    is workflow().^load.^state<compensations>.elems, 0, 'successful inverses pop the stack';
+};
+subtest 'Controls after a snapshot and timeouts restore correctly' => {
+    my $app = fresh;
+    workflow().^load.^emit-snapshot;
+    repair().finish(:cost(190.0));
+    repair().pay-contractor;
+    $app.tick;
+    is workflow().^load.payment-id.chars > 0, True, 'success after snapshot is restored';
+    is repair().^load.status, 'paid', 'payment is complete';
+    $app.tick(:now(DateTime.now.later(:seconds(86410))));
+    ok $app.chat('r-window').first(*.<body>.contains('still open')), 'open repair timeout posts a reminder';
+    nok $app.chat('r-boiler').first(*.<body>.contains('still open')), 'completion cancelled that instance timeout';
+};
+subtest 'Inspector is generic, filtered and free of effects' => {
+    my $app = fresh;
+    my $before = StoredEvent.^all.elems;
+    my %report = inspector().report(:limit(5));
+    is %report<types>.elems, 10, 'all application types are registered';
+    is %report<types>.grep(*.<kind> eq 'aggregate').elems, 4, 'aggregate types';
+    is %report<types>.grep(*.<kind> eq 'projection').elems, 5, 'projection types';
+    is %report<types>.grep(*.<kind> eq 'saga').elems, 1, 'saga type';
+    is %report<events>.elems, 5, 'bounded event history';
+    is %report<commands>.elems, 5, 'bounded command history';
+    ok %report<instances>.first({ .<stream> eq workflow().^stream-name && .<data><repair-id> eq 'r-boiler' }), 'saga without a snapshot is discovered';
+    ok %report<instances>.first({ .<type> eq Portfolio.^name }), 'projection without a snapshot is watched';
+    is StoredEvent.^all.elems, $before, 'inspection emits no events';
+    my @events = inspector().events(:stream(property().^stream-name), :limit(100));
+    ok @events.elems > 0 && @events.all.<stream> eq property().^stream-name, 'event filter is isolated by stream';
+    my @commands = inspector().commands(:stream(property().^stream-name), :limit(100));
+    ok @commands.elems > 0 && @commands.all.<stream> eq property().^stream-name, 'command filter is isolated by stream';
+    my $revision = inspector().revision;
+    dies-ok { property().receive-rent(:period<2026-01>, :amount(1.0), :reference<bad>) }, 'failed command';
+    isnt inspector().revision, $revision, 'command-only changes invalidate the console';
+    is inspector().commands.head<state>, 'Failed', 'failed commands are visible';
+    ok inspector().commands.head<error>.chars, 'errors are visible';
+    dies-ok { RedSourcing::Inspector.new.register(Str) }, 'plain classes are rejected';
+    dies-ok { RedSourcing::Inspector.new.watch(property()) }, 'unregistered instances are rejected';
+    # A broken aggregate stream is reported instead of crashing the whole console.
+    my $inspector = RedSourcing::Inspector.new.register(Property, property('missing'));
+    like $inspector.instances.head<error>, /'No snapshot'/, 'per-instance load failure is reported';
+};
+subtest 'Web actions exercise the same aggregate commands' => {
+    my $app = fresh(:!seed);
+    $app.execute('tenant', %(name => 'Test Tenant', email => 'test@example.test', phone => ''));
+    $app.execute('property', %(name => 'Test House', address => '1 Example Road', kind => 'Townhouse', bedrooms => '2', monthly-rent => '1200.10'));
+    my %m = $app.read-model;
+    my $property-id = %m<properties>.keys.head;
+    my $tenant-id = %m<tenants>.keys.head;
+    $app.execute('tenancy', %(:$property-id, :$tenant-id));
+    $app.execute('charge-rent', %(:$property-id, period => '2026-10'));
+    $app.execute('receive-rent', %(:$property-id, period => '2026-10', amount => '1200.10', reference => 'web-ref'));
+    $app.execute('end-tenancy', %(:$property-id));
+    $app.execute('repair', %(:$property-id, title => 'Leaking tap', description => '<b>Not HTML</b>', priority => 'normal'));
+    my $repair-id = $app.read-model<repairs>.keys.head;
+    $app.execute('message', %(:$repair-id, author => 'Tenant', body => 'Could you arrange access?'));
+    dies-ok { $app.execute('message', %(:$repair-id, author => 'Impersonator', body => 'Hi')) }, 'unknown chat role is rejected';
+    $app.execute('schedule', %(:$repair-id, contractor => 'Example Plumbing', estimate => '40.20'));
+    $app.execute('cancel-repair', %(:$repair-id, reason => 'Work is no longer needed'));
+    $app.tick;
+    is $app.read-model<received>, 1200.10, 'web form decimals stay exact';
+    is $app.read-model<repairs>{$repair-id}<status>, 'cancelled', 'cancellation is projected';
+    $app.tick(:now(DateTime.now.later(:seconds(86410))));
+    nok $app.chat($repair-id).first(*.<body>.contains('still open')), 'cancellation removes the follow-up deadline';
+    lives-ok { $app.execute('checkpoint', {}) }, 'read models and sagas can be checkpointed';
+    my $p = Conversation.^with-ids(:$repair-id);
+    $p.post-message(:author<Agency>, :body<once>, :message-id<idempotent>);
+    $p.post-message(:author<Agency>, :body<once>, :message-id<idempotent>);
+    is $app.chat($repair-id).grep(*.<message-id> eq 'idempotent').elems, 1, 'notification acknowledgements can be retried';
+    dies-ok { $app.execute('unknown', {}) }, 'unknown actions are rejected';
+};
+subtest 'Idle work is skipped and cached read models retain exact values' => {
+    my $app = fresh;
+    my $before = StoredEvent.^all.elems;
+    my $boiler-version = workflow().^load.^version;
+    my $window-version = workflow('r-window').^load.^version;
+    $app.tick;
+    $app.tick;
+    is StoredEvent.^all.elems, $before, 'idle ticks emit no work';
+    $app.execute('message', %(repair-id => 'r-boiler', author => 'Agency', body => 'No workflow effect'));
+    $app.tick;
+    is workflow().^load.^version, $boiler-version, 'chat leaves workflow state unchanged';
+    $app.execute('schedule', %(repair-id => 'r-window', contractor => 'Test contractor', estimate => '30.00'));
+    $app.tick;
+    ok workflow('r-window').^load.^version > $window-version, 'repair event advances its own workflow';
+    is workflow().^load.^version, $boiler-version, 'other workflow remains unchanged';
+    my %first = $app.read-model;
+    %first<properties><p-cedar><name> = 'Changed outside the app';
+    is $app.read-model<properties><p-cedar><name>, 'Cedar House', 'cached model is isolated from caller mutations';
+    ok $app.read-model<properties><p-cedar><monthly-rent> ~~ Rat, 'view caching preserves Rat';
+    $app.execute('checkpoint', {});
+    $app.tick;
+    is $app.controller-error, '', 'external checkpoints do not break scheduling';
+};
+subtest 'An empty inspector reports zero work and retains explicit identities' => {
+    my $app = fresh(:!seed);
+    my $inspector = RedSourcing::Inspector.new;
+    is $inspector.revision, '0:', 'empty store revision';
+    is-deeply $inspector.report<instances>, [], 'no implicit instances';
+    is-deeply $inspector.events, [], 'empty journal';
+    is-deeply $inspector.commands, [], 'empty command history';
+    ok $inspector.register(RepairChat) === $inspector, 'registration returns inspector';
+    my $chat = RepairChat.^with-ids(:repair-id<uncheckpointed>);
+    ok $inspector.watch($chat) === $inspector, 'watching returns inspector';
+    is $inspector.instances.head<data><repair-id>, 'uncheckpointed', 'uncheckpointed projection retains proxy identity';
+    class Unrelated does Event { has Str $.note }
+    Unrelated.new(:note<ignored>).emit(:stream<unregistered>, :version(1));
+    is $inspector.instances.elems, 1, 'unregistered event streams are not entity instances';
+};
+done-testing;

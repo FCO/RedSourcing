@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "description": "Browser verification for the RedSourcing monitor and examples",
+  "scripts": {
+    "test:browser": "node t/web/browser.mjs",
+    "test:console": "node t/web/console.mjs",
+    "test:details": "node t/web/details.mjs",
+    "test:operations": "node t/web/operations.mjs",
+    "test:flows": "node t/web/flows.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}

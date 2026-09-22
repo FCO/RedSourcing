@@ -1,0 +1,8 @@
+use RedSourcing::Config;
+config {
+    .flow-tracing = True;
+    .driver = 'SQLite'; .database = 'counter.db';
+    .includes = <lib>; .modules = <CounterDemo>;
+    .monitor: { .host = '127.0.0.1'; .port = 3001; .minutes = 60; .allow-new-store = True }
+    .worker: { .limit = 100; .interval = 1; .watch = False }
+}

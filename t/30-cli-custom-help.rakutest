@@ -1,0 +1,124 @@
+use Test;
+use File::Temp;
+use RedSourcing::CLI::Help;
+
+proto operation(|) {*}
+multi operation('init', Str :f(:$file), Str :$driver, Str :$database, Bool :$debug) { }
+multi operation('load', Str $entity, :I(:@includes), :M(:@modules), :id(:@identity),
+                Str :$ids, Bool :$json, Int :$limit = do { die 'Help ran a default' }) { }
+multi operation('inspect', UInt :$limit = 60) { }
+multi operation('work', UInt :$limit = 100) { }
+multi operation('advance', UInt :$limit = 100) { }
+multi operation('list-events', UInt :$limit = 0) { }
+
+subtest 'help selects a command without mistaking option values for commands' => {
+    my @candidates = &operation.candidates;
+    is cli-help-target(['--help'], @candidates), '', 'standalone help selects the overview';
+    is cli-help-target(['--database', 'load', 'init', '--help'], @candidates), 'init',
+        'separate option values are skipped';
+    is cli-help-target(['--database=load', 'init', '--help'], @candidates), 'init',
+        'equals option values are skipped';
+    is cli-help-target(['-I', 'load', '-M', 'init', 'load', '--help'], @candidates), 'load',
+        'repeatable short option values are skipped';
+    is cli-help-target(['--debug', 'load', 'init', '-h'], @candidates), 'load',
+        'booleans do not consume a command and entity names do not change the target';
+    is cli-help-target(['--'], @candidates), '', 'end-of-options with no target selects the overview';
+    is cli-help-target(['--', 'load'], @candidates), 'load', 'end-of-options is honored';
+    is cli-help-target(['--database', 'unused'], @candidates), '', 'options without a command select the overview';
+};
+
+subtest 'focused help uses declared options and static defaults without evaluating them' => {
+    my @candidates = &operation.candidates;
+    my $text = format-cli-help(@candidates, :command<load>);
+    like $text, / 'Common options' .* 'Shared options for load' .* 'Command options' .* 'Command' /,
+        'common, shared and specific options precede the command explanation';
+    like $text, / '--id=FIELD=VALUE (repeatable)' /, 'identity syntax and repetition are documented';
+    unlike $text, / '<Str>' | '<Any>' | 'Bool::False' /, 'native type boilerplate is absent';
+    for <inspect work advance list-events load> -> $name {
+        my $help = format-cli-help(@candidates, :command($name));
+        like $help, / 'Default:' /, "$name explains its defaults";
+    }
+    ok $text.lines.grep({ !.starts-with('      red-sourcing') }).all.chars <= 80,
+        'prose and option descriptions fit 80 columns';
+    throws-like { format-cli-help(@candidates, :command<unknown>) }, X::AdHoc,
+        message => / 'Unknown command' /, 'unknown help targets are diagnosed';
+    sub undocumented('future-command') { }
+    throws-like { format-cli-help([&undocumented]) }, X::AdHoc,
+        message => / 'Missing CLI command documentation' /, 'new commands must have documentation';
+    sub unknown-option('load', Str :$undocumented) { }
+    throws-like { format-cli-help([&unknown-option], :command<load>) }, X::AdHoc,
+        message => / 'Missing CLI option documentation' /, 'new options must have documentation';
+};
+
+my $tmp = tempdir.IO;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+sub cli(*@args) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, |@args, :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+
+subtest 'overview lists every operation in functional groups with examples' => {
+    my %help = cli('--help');
+    is %help<code>, 0, 'overview succeeds';
+    is %help<err>, '', 'overview uses stdout';
+    my $position = -1;
+    for 'Common options', 'Output (', 'Application imports (', 'Entity identity (',
+        'Database maintenance', 'Discovery and inspection', 'Event and command history',
+        'Entity state', 'Command execution and workers', 'Saga workflows', 'Monitoring' -> $section {
+        my $next = %help<out>.index($section) // -1;
+        ok $next > $position, "$section appears in order";
+        $position = $next;
+    }
+    is %help<out>.lines.grep(*.starts-with('  --driver=')).elems, 1,
+        'universal flags are not repeated under each command';
+    for <init update types list-entities list-aggregates list-projections list-sagas describe inspect
+         streams list-events list-commands create load snapshot command run-command work
+         saga-status advance resolve-action stats web-monitor> -> $name {
+        my %page = cli($name, '--help');
+        is %page<code>, 0, "$name focused help succeeds";
+        is %page<err>, '', "$name focused help has no diagnostics";
+        like %page<out>, / 'Examples:' /, "$name includes usage examples";
+        like %page<out>, / 'Common options' /, "$name includes universal options";
+        unlike %page<out>, / 'Discovery and inspection' /, "$name does not repeat the full command catalog";
+    }
+    unlike cli('init', '--help')<out>, / '--json' | '--includes' /,
+        'focused help does not advertise unsupported shared flags';
+    like cli('resolve-action', '--help')<out>.words.join(' '),
+        / 'exactly one of --result' .* '--error' /, 'reconciliation explains mutually exclusive outcomes';
+};
+
+subtest 'help is read-only even with complete arguments, imports and broken configuration' => {
+    $tmp.add('red-sourcing.rakuconf').spurt('die "Help must not execute config"');
+    $tmp.add('HelpEffects.rakumod').spurt(q|unit module HelpEffects; BEGIN spurt 'imported', 'unexpected';|);
+    for ['load', 'Account', '--id=account-id=a1', '--help'],
+        ['command', 'Account', 'rename', '--data={"name":"Ana"}', '-h'],
+        ['--database', 'load', 'describe', 'Account', '--help'],
+        ['web-monitor', '--database=events.db', '--help'],
+        ['load', 'Account', "-I=$tmp", '-M=HelpEffects', '--help'],
+        ['--file=missing.rakuconf', 'load', '--help'], [] -> @args {
+        my %help = cli(|@args);
+        is %help<code>, 0, 'help bypasses execution';
+        is %help<err>, '', 'help does not evaluate configuration or imports';
+    }
+    nok $tmp.add('imported').e, 'application modules were not imported';
+    nok $tmp.add('events.db').e || $tmp.add('a.db').e, 'help did not create a database';
+    like cli('--database', 'load', 'describe', 'Account', '--help')<out>,
+        / 'Usage:' .* 'describe ENTITY' /, 'actual command wins over a database value matching another command';
+    my %unknown = cli('unknown', '--help');
+    isnt %unknown<code>, 0, 'unknown help target fails';
+    like %unknown<err>, / "Unknown command 'unknown'" /, 'unknown target has a concise diagnostic';
+    $tmp.add('red-sourcing.rakuconf').unlink;
+};
+
+subtest 'dispatch errors also use our help and retain failure exit codes' => {
+    for ['load'], ['load', 'Account', '--unsupported'], ['unknown'] -> @args {
+        my %failure = cli(|@args);
+        isnt %failure<code>, 0, 'invalid invocation fails';
+        is %failure<out>, '', 'invalid invocation does not print successful output';
+        like %failure<err>, / 'Common options' /, 'dispatch failure uses custom usage on stderr';
+        unlike %failure<err>, / '[-I|--includes=<Any>' /, 'native signatures do not leak into error usage';
+    }
+};
+
+done-testing;

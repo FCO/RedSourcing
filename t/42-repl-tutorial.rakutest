@@ -1,0 +1,119 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $repo = $?FILE.IO.parent.parent.absolute.IO;
+my $script = $repo.add('examples/simple-flow/repl.raku').slurp;
+my $tutorial = $repo.add('docs/tutorials/simple-flow.md').slurp;
+
+sub executable-lines(Str $source) {
+    $source.lines.grep({ .trim.chars && !.trim.starts-with('#') }).Array
+}
+subtest 'the tutorial and copyable script contain the same ordered REPL lines' => {
+    my @lines;
+    my $in-code = False;
+    for $tutorial.split('## Use a persistent store', 2).head.lines -> $line {
+        if $line eq '```raku' { $in-code = True }
+        elsif $line eq '```' { $in-code = False }
+        elsif $in-code { @lines.push($line) }
+    }
+    is-deeply executable-lines(@lines.join("\n")), executable-lines($script),
+        'every walkthrough line matches the runnable source, in order';
+};
+
+subtest 'the complete walkthrough runs in the actual line-at-a-time REPL' => {
+    my $process = Proc::Async.new($*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        "-I{$repo.add('examples/simple-flow/lib')}", '--repl-mode=process', :w);
+    my ($output, $errors) = '', '';
+    $process.stdout.tap(-> $chunk { $output ~= $chunk });
+    $process.stderr.tap(-> $chunk { $errors ~= $chunk });
+    my $finished = $process.start(:cwd($repo.add('examples/simple-flow')));
+    my $checks = q:to/CHECKS/;
+        say 'CHECK order=' ~ $order.^load.status;
+        say 'CHECK card=' ~ $view.^load.status;
+        say 'CHECK saga=' ~ $saga.^status;
+        say 'CHECK commands=' ~ $order.^list-commands.elems;
+        say 'CHECK actions=' ~ $saga.^state<actions>.elems;
+        say 'CHECK snapshots=' ~ StoredEvent.^all.grep(*.class eq Confirmation.^name).elems;
+        $saga = $workflow.^advance; say 'CHECK advance=' ~ $order.^list-commands.elems;
+        CHECKS
+    await $process.write(($script ~ "\n" ~ $checks).encode);
+    $process.close-stdin;
+    my $result = await $finished;
+    is $result.exitcode, 0, 'REPL exits successfully';
+    is $result.signal, 0, 'REPL exits without a native crash';
+    is $errors, '', 'no compilation or execution errors on any line';
+    ok $output.contains('Welcome to Rakudo'), 'process uses the REPL rather than compiling stdin as one program';
+
+    my @milestones =
+        'C1 place Pending',
+        'Pizza: placed',
+        'confirm-order: pending; attempts=0; source=E3; command=not submitted',
+        'confirm-order: pending; attempts=0; source=E3; command=not submitted',
+        'Saga: completed; confirmed: True',
+        'confirm-order: done; attempts=1; source=E3; command=C2',
+        'Pizza: confirmed',
+        'C2 confirm Done',
+        'E3 -> confirm-order -> C2',
+        'C2 -> E6 (emitted)',
+        'E6 -> SimpleFlow::OrderCard: order-id = demo-1 (applied-projection)',
+        'E3 -> SimpleFlow::OrderCard: order-id = demo-1 (applied-projection)';
+    my $position = 0;
+    for @milestones -> $expected {
+        my $found = $output.index($expected, $position);
+        ok $found.defined, "observe in sequence: $expected";
+        $position = $found + $expected.chars if $found.defined;
+    }
+    for <order=confirmed card=confirmed saga=completed commands=2 actions=1 snapshots=1 advance=2> -> $expected {
+        ok $output.contains("CHECK $expected"), "final state and replay: $expected";
+    }
+};
+
+subtest 'the configured store recovers a pending decision in another process' => {
+    my $tmp = tempdir.IO;
+    my $database = $tmp.add('flow.db').Str;
+    my $config = $repo.add('examples/simple-flow/red-sourcing.rakuconf').Str;
+    my $bootstrap = $script.split('# Restore the decision', 2).head.subst(
+        q[red-sourcing-defaults(:database(%*ENV<REDSOURCING_EXAMPLE_DATABASE> // ':memory:'));],
+        'red-sourcing-defaults(:file(@*ARGS[0]), :database(@*ARGS[1]));');
+    my $first = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        "-I{$repo.add('examples/simple-flow/lib')}", '-e', $bootstrap, $config, $database, :out, :err;
+    is $first.exitcode, 0, 'first process records the pending saga decision';
+    is $first.signal, 0, 'first process exits normally';
+    is $first.err.slurp(:close), '', 'configured bootstrap has no diagnostics';
+    ok $first.out.slurp(:close).contains('command=not submitted'), 'decision remains pending at shutdown';
+
+    my $status = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        $repo.add('bin/red-sourcing.raku').Str, "-f=$config", "--database=$database",
+        'saga-status', 'Confirmation', '--id=order-id=demo-1', '--json', :out, :err;
+    is $status.exitcode, 0, 'CLI imports the module through the supplied example configuration';
+    is $status.signal, 0, 'CLI exits normally';
+    is $status.err.slurp(:close), '', 'cross-process inspection has no diagnostics';
+    my %report = from-json($status.out.slurp(:close));
+    is %report<status>, 'running', 'saved workflow is running';
+    is %report<pending-actions>.elems, 1, 'inspector sees one recoverable pending action';
+
+    my $resume = q:to/RESUME/;
+        use RedSourcing;
+        use SimpleFlow;
+        red-sourcing-defaults(:file(@*ARGS[0]), :database(@*ARGS[1]));
+        my $workflow = Confirmation.^with-ids(:order-id<demo-1>);
+        my $saga = $workflow.^load;
+        show-actions($saga);
+        $saga = $workflow.^advance(:limit(1));
+        show-actions($saga);
+        say OrderCard.^with-ids(:order-id<demo-1>).^load.status;
+        say StoredCommand.^all.elems;
+        RESUME
+    my $second = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        "-I{$repo.add('examples/simple-flow/lib')}", '-e', $resume, $config, $database, :out, :err;
+    is $second.exitcode, 0, 'fresh application process finishes the restored action';
+    is $second.signal, 0, 'resumed process exits normally';
+    is $second.err.slurp(:close), '', 'recovery has no diagnostics';
+    my $output = $second.out.slurp(:close);
+    ok $output.contains('confirm-order: pending; attempts=0; source=E3; command=not submitted'),
+        'control replay restores the original source and pending decision';
+    ok $output.contains('Saga: completed; confirmed: True'), 'recovered action completes the saga';
+    ok $output.ends-with("confirmed\n2\n"), 'projection catches up and only one confirm command is submitted';
+};
+done-testing;

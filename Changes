@@ -1,0 +1,12 @@
+Revision history for RedSourcing
+
+{{$NEXT}}
+    - Public Raku event-sourcing API with aggregates, projections, typed identity,
+      event emission helpers, snapshots, persisted commands and SQL-derived filters
+    - Sagas with durable intents, retries, compensation, reconciliation and timeouts
+    - Shared Configuration files for applications, CLI workers and the web monitor
+    - CLI discovery, inspection, command execution, migrations and saga diagnosis
+    - Standalone Cro / HTMX monitor with charts, detail views and Operations jobs
+    - SQLite and PostgreSQL workflows, installed-consumer checks and coverage gate
+    - Counter, bank, cart, food delivery, order, commerce and real-estate examples
+    - Current public README, API/configuration/operations guides and tutorial

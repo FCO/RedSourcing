@@ -1,0 +1,85 @@
+{
+  "Metamodel/RedSourcing/AggregateHOW.rakumod": [
+    {"source": "use Metamodel::RedSourcing::EntityHOW;", "reason": "Compile-time import of the shared metaclass; inheritance and aggregate behavior are exercised by command and replay tests."}
+  ],
+  "Metamodel/RedSourcing/ProjectionHOW.rakumod": [
+    {"source": "use RedSourcing::Utils;", "reason": "Compile-time import; signature-based projection replay is exercised by replay and installed-consumer tests."},
+    {"source": "use RedSourcing::Context;", "reason": "Compile-time import; replay tests and saga guard tests exercise the imported execution scope."}
+  ],
+  "Metamodel/RedSourcing/CommandContainer.rakumod": [
+    {"source": "has %!commands;", "reason": "Attribute declaration without a runtime initializer."}
+  ],
+  "Metamodel/RedSourcing/ProxyHOW.rakumod": [
+    {"source": "has %!command-classes;", "reason": "Attribute declaration without a runtime initializer."},
+    {"source": "has $!entity-type;", "reason": "Attribute declaration without a runtime initializer; installed-consumer tests verify the proxy entity type."}
+  ],
+  "Metamodel/RedSourcing/EntityIdContainer.rakumod": [
+    {"source": "use RedSourcing::IsEntityId;", "reason": "Compile-time import."}
+  ],
+  "RedSourcing/StoredCommand.rakumod": [
+    {"source": "enum State <Pending Processing Done Failed>;", "reason": "Compile-time enum declaration."},
+    {"source": "has Json     $.data       is column{ :nullable };", "reason": "Column declaration; payload persistence is exercised by command tests."},
+    {"source": "has Any      $.result     is column{ :nullable, :type<jsonb>, :inflate(&from-json), :deflate(&to-json) } is rw;", "reason": "Column declaration; JSON round trips are exercised by command tests."},
+    {"source": "has Str      $.error      is column{ :nullable } is rw;", "reason": "Column declaration; error persistence is exercised by rollback tests."},
+    {"source": "True", "reason": "Constant at the end of the transaction block; successful execution is exercised but MoarVM records no hit here."}
+  ],
+  "RedSourcing/Command.rakumod": [
+    {"source": "has $!StoredCommand;", "reason": "Attribute declaration without a runtime initializer."}
+  ],
+  "RedSourcing/C.rakumod": [
+    {"source": "class C {...}", "reason": "Compile-time forward declaration; it contains no runtime implementation."},
+    {"source": "has $.json;", "reason": "Attribute declaration without a runtime initializer; JSON access is exercised by the signature-rule tests."}
+  ],
+  "RedSourcing/Utils.rakumod": [
+    {"source": "has Signature $.sub-signature;", "reason": "Attribute declaration without a runtime initializer; nested Capture binding is exercised by the signature-rule tests."},
+    {"source": "my $signature := nqp::clone($original);", "reason": "Inline VM operation without a recorded MoarVM coverage hit; tests verify the adapted signature and unchanged original binding."},
+    {"source": "nqp::bindattr($param, Parameter, '$!type', C);", "reason": "Inline VM operation without a recorded MoarVM coverage hit; SQL binding accepts C while the original Parameter retains its event type."},
+    {"source": "nqp::bindpos($params, $index, $param);", "reason": "Inline VM operation without a recorded MoarVM coverage hit; tests verify that only the cloned parameter list accepts the query view."},
+    {"source": "nqp::bindattr($signature, Signature, '@!params', $params);", "reason": "Inline VM operation without a recorded MoarVM coverage hit; SQL binding and original signature isolation are exercised by the signature-rule tests."}
+  ],
+  "RedSourcing/Entity.rakumod": [
+    {"source": "has      $!stream;", "reason": "Attribute declaration without a runtime initializer."},
+    {"source": "method APPLY {...}", "reason": "Abstract role requirement; concrete entities must implement APPLY."}
+  ],
+  "RedSourcing/Event.rakumod": [
+    {"source": "has $!StoredEvent;", "reason": "Attribute declaration without a runtime initializer."}
+  ],
+  "RedSourcing/Traits.rakumod": [
+    {"source": "use RedSourcing::IsCommand;", "reason": "Compile-time import."}
+  ],
+  "RedSourcing/X/OptimisticLockFailed.rakumod": [
+    {"source": "has UInt $.version;", "reason": "Attribute declaration without a runtime initializer."}
+  ],
+  "Metamodel/RedSourcing/EntityHOW.rakumod": [
+    {"source": "~ [", "reason": "Continuation of the MRO expression; its map, grep and join execute on surrounding measured lines."},
+    {"source": "has $!stream-attr;", "reason": "Attribute declaration without a runtime initializer; command and saga tests verify restored stream identity."}
+  ],
+  "RedSourcing.rakumod": [
+    {"source": "constant aggregate = Metamodel::RedSourcing::AggregateHOW;", "reason": "Compile-time declarator registration."},
+    {"source": "constant projection = Metamodel::RedSourcing::ProjectionHOW;", "reason": "Compile-time declarator registration."},
+    {"source": "constant saga = Metamodel::RedSourcing::SagaHOW;", "reason": "Compile-time declarator registration; saga and installed-consumer tests use the declaration."}
+  ],
+  "Metamodel/RedSourcing/SagaHOW.rakumod": [
+    {"source": "has %!handlers;", "reason": "Attribute declaration without a runtime initializer; saga tests verify original compensation signature binding."}
+  ],
+  "RedSourcing/Saga.rakumod": [
+    {"source": "serial => 0, status => 'running', actions => [],", "reason": "Continuation of the default state initializer; the VM records its hit on the has declaration. Saga tests verify independent initial state and subsequent action IDs."},
+    {"source": "compensations => [], timers => {},", "reason": "Continuation of the same default state initializer; saga tests verify empty initial collections, populated snapshots and isolated reloads."},
+    {"source": "has Str $.message = 'Operation rejected';", "reason": "Attribute declaration with a literal default compiled into generated BUILD code; saga tests verify default and supplied exception messages, but MoarVM records no declaration hit."},
+    {"source": "has Str $.message = 'External outcome is unknown';", "reason": "Attribute declaration with a literal default compiled into generated BUILD code; saga tests verify default and supplied exception messages, but MoarVM records no declaration hit."},
+    {"source": "has Str $.message = 'Operation failed without taking effect';", "reason": "Attribute declaration with a literal default compiled into generated BUILD code; saga tests verify default and supplied exception messages, but MoarVM records no declaration hit."}
+  ],
+  "RedSourcing/IsEntityIdMap.rakumod": [
+    {"source": "has %.event-entity-id-map;", "reason": "Attribute declaration without a runtime initializer; aggregate mapping and installed-consumer tests verify the stored mapping."}
+  ],
+  "RedSourcing/Config.rakumod": [
+    {"source": "has Bool $.watch = False;", "reason": "Literal attribute default compiled into generated BUILD code; configuration tests verify default false and worker CLI behavior, but MoarVM records no declaration hit."},
+    {"source": "has Bool $.debug = False;", "reason": "Literal attribute default compiled into generated BUILD code; configuration tests verify default false, configured true and CLI false override, but MoarVM records no declaration hit."}
+  ],
+  "RedSourcing/StoredEvent.rakumod": [
+    {"source": "has UInt     $.replay-cursor        is column{ :nullable };", "reason": "Column declaration without a runtime initializer; projection and saga checkpoint tests verify zero and nonzero cursors."}
+  ],
+  "RedSourcing/Inspector.rakumod": [
+    {"source": "has %!proxies;", "reason": "Attribute declaration without a runtime initializer; inspector tests verify watched instances, explicit identity, unregistered-type rejection and projection discovery through this registry."}
+  ]
+}

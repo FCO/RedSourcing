@@ -1,0 +1,125 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $tmp = tempdir.IO;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+$tmp.add('IdentityApp.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module IdentityApp;
+    #| A repair assigned to a tenant.
+    #| Tracks the repair description.
+    aggregate Repair is export {
+        has Str $.repair-id is entity-id;
+        has Str $.tenant-id is entity-id;
+        has Str $.description = '';
+        method APPLY() { }
+        #| Read the repair description.
+        method summary is command { %(description => $!description) }
+    }
+    #| Lists repairs for a tenant.
+    projection Repairs is export {
+        has Str $.tenant-id is entity-id;
+        method APPLY() { }
+    }
+    #| Coordinates repair notifications.
+    saga Notifications is export {
+        has Str $.repair-id is entity-id;
+        method APPLY() { }
+        method REACT() { }
+    }
+    aggregate NumericIdentity is export {
+        has Int $.id is entity-id;
+        has Bool $.active is entity-id;
+        has Str $.code is entity-id;
+        method APPLY() { }
+    }
+    MODULE
+$tmp.add('TrailingRepairs.rakumod').spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit projection TrailingRepairs; #= Lists repairs for a tenant.
+    has Str $.tenant-id is entity-id;
+    method APPLY() { }
+    MODULE
+$tmp.add('red-sourcing.rakuconf').spurt(q:to/CONF/);
+    use RedSourcing::CLI::Config;
+    config { .database = 'identities.db'; .includes = ['.']; .modules = <IdentityApp> }
+    CONF
+sub cli(*@args) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, |@args, :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+sub decoded(*@args) {
+    my %result = cli(|@args, '--json');
+    die %result<err> if %result<code>;
+    from-json(%result<out>)
+}
+
+subtest 'usage describes every command and supports focused help' => {
+    my %help = cli('--help');
+    is %help<code>, 0, 'general help succeeds';
+    for <init streams command list-events list-commands update web-monitor types list-entities
+         list-aggregates list-projections list-sagas inspect stats describe create load snapshot
+         run-command work advance resolve-action saga-status> -> $command {
+        my $line = %help<out>.lines.first({ .starts-with("  $command") });
+        ok $line.defined, "$command is listed in a functional group";
+    }
+    my %load = cli('load', '--help');
+    like (%load<out> ~ %load<err>).words.join(' '), /'replay events without writing records'/, 'focused help explains load';
+    like %load<out> ~ %load<err>, /'--id'/, 'repeatable identity option is listed';
+    isnt cli('load', 'Repair', '--unsupported')<code>, 0, 'unknown options remain errors';
+};
+
+subtest 'describe reads native declarator documentation for entities and commands' => {
+    my %repair = decoded('describe', 'Repair');
+    is %repair<description>, 'A repair assigned to a tenant. Tracks the repair description.',
+        'leading documentation is retained';
+    is %repair<commands>.first(*.<name> eq 'summary')<description>, 'Read the repair description.',
+        'command documentation is retained with its original signature';
+    like cli('describe', 'Repair')<out>, /'A repair assigned to a tenant.' .* 'Read the repair description.'/,
+        'human output displays the descriptions';
+    is decoded('describe', 'TrailingRepairs', '-M=TrailingRepairs')<description>, 'Lists repairs for a tenant.',
+        'trailing documentation on a unit entity declaration is retained';
+    is decoded('describe', 'Notifications')<description>, 'Coordinates repair notifications.',
+        'saga documentation is retained';
+    nok decoded('describe', 'NumericIdentity')<description>:exists,
+        'undocumented entities retain their existing JSON shape';
+};
+
+is cli('init')<code>, 0, 'initialize identity store';
+subtest 'repeatable identity flags preserve types, values and JSON compatibility' => {
+    my @ids = '--id=repair-id=rboiler', '--id=tenant-id=001=ana';
+    my %created = decoded('create', 'Repair', |@ids, '--data={"description":"Boiler repair"}');
+    is %created<data><tenant-id>, '001=ana', 'string IDs preserve leading zeros and further equals signs';
+    my %loaded = decoded('load', 'Repair', |@ids.reverse);
+    is %loaded<data><description>, 'Boiler repair', 'composite identity order does not affect load';
+    is decoded('command', 'Repair', 'summary', |@ids)<description>, 'Boiler repair',
+        'commands use the same identity syntax';
+    is decoded('snapshot', 'Repair', |@ids)<stream>, %created<stream>, 'snapshot targets the same stream';
+    is decoded('load', 'Repair', '--ids={"repair-id":"rboiler","tenant-id":"001=ana"}')<stream>,
+        %created<stream>, 'legacy JSON identity targets the same stream';
+    my %numeric = decoded('create', 'NumericIdentity', '--id=id=003', '--id=active=true', '--id=code=003');
+    is %numeric<data><id>, 3, 'numeric IDs become native numbers';
+    is-deeply %numeric<data><active>, True, 'boolean IDs become native booleans';
+    is-deeply %numeric<data><code>, '003', 'text IDs retain their declared type';
+    is decoded('load', 'NumericIdentity', '--id=id=3', '--id=active=TRUE', '--id=code=003')<stream>,
+        %numeric<stream>, 'typed IDs round-trip through storage';
+    decoded('create', 'NumericIdentity', '--id=id=-1', '--id=active=false', '--id=code=');
+    is-deeply decoded('load', 'NumericIdentity', '--id=id=-1', '--id=active=false', '--id=code=')<data><active>,
+        False, 'false and empty string IDs remain valid values';
+    my $before = decoded('list-events').elems;
+    for ['--id=repair-id'], ['--id==rboiler'], ['--id=repair-id=rboiler'],
+        ['--id=repair-id=rboiler', '--id=repair-id=other', '--id=tenant-id=001=ana'],
+        ['--id=repair-id=rboiler', '--id=tenant-id=001=ana', '--id=unknown=1'],
+        ['--id=repair-id=rboiler', '--ids={"tenant-id":"001=ana"}'] -> @invalid {
+        isnt cli('create', 'Repair', |@invalid)<code>, 0, 'invalid or ambiguous identity is rejected';
+    }
+    for ['--id=id=oops', '--id=active=true', '--id=code=x'],
+        ['--id=id=3.5', '--id=active=true', '--id=code=x'],
+        ['--id=id=3', '--id=active=maybe', '--id=code=x'] -> @invalid {
+        isnt cli('create', 'NumericIdentity', |@invalid)<code>, 0, 'invalid typed identity is rejected';
+    }
+    is decoded('list-events').elems, $before, 'rejected identities write no events';
+};
+done-testing;

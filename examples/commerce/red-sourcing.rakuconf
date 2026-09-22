@@ -1,0 +1,10 @@
+use RedSourcing::Config;
+config {
+    .flow-tracing = True;
+    .driver = 'SQLite';
+    .database = 'commerce.db';
+    .includes = <lib>;
+    .modules = <Commerce::Inventory Commerce::Order Commerce::Shipment Commerce::Workflows Commerce::Webhooks Commerce::ReadModels Commerce::Providers>;
+    .monitor: { .host = '127.0.0.1'; .port = 3001; .minutes = 60; .allow-new-store = True }
+    .worker: { .limit = 100; .interval = 1; .watch = False }
+}

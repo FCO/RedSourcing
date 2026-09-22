@@ -1,0 +1,220 @@
+use Test;
+use File::Temp;
+use lib $?FILE.IO.parent.parent.add('examples/commerce/lib').Str;
+use RedSourcing;
+use Commerce::App;
+use Commerce::Events;
+use Commerce::Inventory;
+use Commerce::Workflows;
+use Commerce::ReadModels;
+use Commerce::Providers;
+
+my $*RED-DB;
+my $shop;
+my $clock;
+sub fresh(UInt :$coffee = 10, UInt :$mug = 10, Bool :$replenish = False) {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    clear-provider-faults;
+    $shop = Shop.new.initialize;
+    $shop.product('coffee', :name<Coffee>, :price(12.50), :quantity($coffee), :$replenish);
+    $shop.product('mug', :name<Mug>, :price(8.90), :quantity($mug), :$replenish);
+    $clock = DateTime.now;
+}
+sub drain(Numeric $seconds = 0) { $shop.drain(:now($clock.later(:$seconds))) }
+sub stock(Str $sku = 'coffee') { Commerce::Inventory.^with-ids(:warehouse-id<main>, :$sku).^load }
+sub purchase(Str $id = 'one', :%items = {:coffee(2), :mug(1)}) { $shop.purchase($id, :%items) }
+sub facts(Mu:U $type) { StoredEvent.list-events(:types[$type]).Array }
+sub workflow(Mu:U $type, Str $id = 'one') { $type.^with-ids(:order-id($id)).^load }
+sub deliver(Str $id = 'one') {
+    $shop.order($id).authorize-dispatch; drain;
+    $shop.shipment($id).deliver; drain;
+}
+
+subtest 'purchase reserves quoted goods and all money remains exact through delivery' => {
+    fresh; purchase; drain;
+    is $shop.order('one').^load.status, 'paid', 'purchase confirms payment';
+    is-deeply $shop.order('one').^load.total, 38.90, 'quote includes exact prices and five-unit shipping';
+    is stock().reservations<one>, 2, 'coffee is held without leaving the warehouse';
+    is stock().on-hand, 10, 'reservations do not reduce physical on-hand stock';
+    is $shop.shipment('one').^load.status, 'booked', 'fulfillment books a carrier';
+    is workflow(PurchaseSaga).^status, 'completed', 'purchase hands ownership to later workflows';
+    deliver;
+    is $shop.order('one').^load.status, 'delivered', 'shipment callback completes the order';
+    is stock().on-hand, 8, 'physical stock is consumed after handoff';
+    is stock().reservations.elems, 0, 'dispatch clears the hold';
+    is workflow(ShippingSaga).^status, 'completed', 'delivery workflow completes';
+    is facts(PaymentCaptured).elems, 1, 'one payment fact is recorded';
+    is facts(PaymentRefunded).elems, 0, 'normal delivery does not refund';
+    my $before = StoredEvent.^all.elems;
+    drain;
+    is StoredEvent.^all.elems, $before, 'an idle controller emits no new facts or controls';
+};
+subtest 'partial reservation failure releases earlier holds and never captures money' => {
+    fresh(:mug(0)); purchase; drain;
+    is $shop.order('one').^load.status, 'cancelled', 'failed purchase is explicitly cancelled';
+    is workflow(PurchaseSaga).^status, 'compensated', 'reservation saga performs its inverse';
+    is stock().reservations.elems, 0, 'the first line is released';
+    is stock().on-hand, 10, 'failed purchase never moves physical goods';
+    is facts(PaymentCaptured).elems, 0, 'payment is not reached';
+    is facts(StockReleased).elems, 1, 'one successful reservation is reversed';
+};
+subtest 'definite payment rejection compensates all product reservations' => {
+    fresh; provider-fault('payments', 'charge', :kind<permanent>); purchase; drain;
+    is $shop.order('one').^load.status, 'cancelled', 'decline aborts the order';
+    is stock().available, 10, 'coffee holds are released';
+    is stock('mug').available, 10, 'mug holds are released';
+    is facts(PaymentCaptured).elems, 0, 'definite rejection takes no money';
+    is-deeply facts(StockReleased).map(*.sku).Array, ['mug', 'coffee'], 'compensation follows reverse reservation order';
+};
+subtest 'carrier refusal refunds a paid order and frees stock through cooperating sagas' => {
+    fresh; provider-fault('carrier', 'book', :kind<permanent>); purchase; drain;
+    is $shop.order('one').^load.status, 'cancelled', 'carrier failure reaches business cancellation';
+    is workflow(FulfillmentSaga).^status, 'compensated', 'failed fulfillment aborts';
+    is workflow(CancellationSaga).^status, 'completed', 'cancellation finishes the refund and releases';
+    is facts(PaymentRefunded).elems, 1, 'the captured payment is refunded';
+    is stock().available, 10, 'stock is available again';
+};
+subtest 'paid cancellation cancels the booking before refunding and releasing' => {
+    fresh; purchase; drain;
+    $shop.order('one').request-cancellation(:reason('Wrong address')); drain;
+    is $shop.shipment('one').^load.status, 'cancelled', 'booking cleanup reaches shipment state';
+    is $shop.order('one').^load.status, 'cancelled', 'cancellation completes';
+    is facts(CarrierBookingCancelled).elems, 1, 'one carrier inverse is recorded';
+    is facts(PaymentRefunded).elems, 1, 'one payment inverse is recorded';
+    is stock().on-hand, 10, 'cancellation does not fake a stock return';
+    is stock().available, 10, 'holds are released';
+    my @rows = StoredEvent.^all.sort(*.id);
+    my $cancelled = @rows.first(*.class eq CarrierBookingCancelled.^name).id;
+    my $refund = @rows.first(*.class eq PaymentRefunded.^name).id;
+    cmp-ok $cancelled, '<', $refund, 'carrier cancellation precedes the refund';
+};
+subtest 'dispatch authorization excludes cancellation and protects reservations' => {
+    fresh; purchase; drain;
+    $shop.order('one').authorize-dispatch;
+    dies-ok { $shop.order('one').request-cancellation(:reason('Too late')) }, 'authorization closes the paid cancellation path';
+    dies-ok { Commerce::Inventory.^with-ids(:warehouse-id<main>, :sku<coffee>).release(:order-id<one>) },
+        'a dispatch-authorized hold cannot be released';
+    drain;
+    is $shop.order('one').^load.status, 'shipped', 'authorized goods still ship';
+    dies-ok { $shop.shipment('one').cancel(:reason('Undo delivery')) }, 'physical handoff is irreversible';
+    is facts(PaymentRefunded).elems, 0, 'shipping is not undone by an automatic refund';
+};
+subtest 'full returns require warehouse receipt before restocking and refunding' => {
+    fresh; purchase; drain; deliver;
+    $shop.order('one').request-return(:reason('Changed my mind')); drain;
+    is stock().on-hand, 8, 'return request does not restore physical stock';
+    is facts(PaymentRefunded).elems, 0, 'return request does not refund yet';
+    $shop.order('one').receive-return; drain;
+    is $shop.order('one').^load.status, 'returned', 'acknowledged goods complete the return';
+    is stock().on-hand, 10, 'received goods restore on-hand stock';
+    is facts(StockReturned).elems, 2, 'each product is restocked once';
+    is facts(PaymentRefunded).elems, 1, 'full refund includes the quoted shipping fee';
+    is-deeply $shop.summary.refunded, 38.90, 'refund keeps exact rational totals';
+    dies-ok { $shop.order('one').request-return(:reason('Again')) }, 'one full return is permitted per order';
+    is workflow(ReturnSaga).^status, 'completed', 'return saga completes';
+};
+subtest 'return recovery resumes after an exhausted refund without restocking twice' => {
+    fresh; purchase; drain; deliver;
+    $shop.order('one').request-return(:reason('Return')); drain;
+    provider-fault('payments', 'refund', :kind<permanent>);
+    $shop.order('one').receive-return; drain;
+    is $shop.order('one').^load.status, 'return-received', 'failed refund leaves received return unfinished';
+    is stock().on-hand, 10, 'physical return remains recorded despite financial failure';
+    $shop.checkpoint;
+    $shop = Shop.new.initialize;
+    $shop.order('one').resume-return; drain;
+    is $shop.order('one').^load.status, 'returned', 'operator request continues from persisted progress';
+    is facts(StockReturned).elems, 2, 'successful stock steps are not repeated';
+    is facts(PaymentRefunded).elems, 1, 'recovered payment is refunded once';
+};
+subtest 'lost payment acknowledgement retries the same effect after checkpoint recovery' => {
+    fresh; provider-fault('payments', 'charge', :kind<uncertain>); purchase; drain;
+    is facts(PaymentCaptured).elems, 1, 'provider accepted payment before losing the response';
+    is $shop.order('one').^load.status, 'submitted', 'uncertain response has not confirmed the order';
+    my $action = workflow(PurchaseSaga).^state<actions>.first(*.<step> eq 'charge-payment');
+    is $action<status>, 'retry', 'retry is persisted';
+    my $id = $action<id>;
+    $shop.checkpoint; $shop = Shop.new.initialize; drain(10);
+    is $shop.order('one').^load.status, 'paid', 'new controller acknowledges the durable provider receipt';
+    is facts(PaymentCaptured).elems, 1, 'retry does not capture another payment';
+    is workflow(PurchaseSaga).^state<actions>.first(*.<id> eq $id)<attempts>, 2, 'the original action key is reused';
+};
+subtest 'uncertain work at the purchase deadline blocks rollback until reconciliation' => {
+    fresh; provider-fault('payments', 'charge', :kind<uncertain>); purchase; drain;
+    drain(1000);
+    my $saga = workflow(PurchaseSaga);
+    is $saga.^status, 'compensating', 'deadline starts rollback';
+    my $action = $saga.^state<actions>.first(*.<step> eq 'charge-payment');
+    is $action<status>, 'blocked', 'unknown payment is not treated as a rejection';
+    is stock().reservations<one>, 2, 'holds remain until the payment outcome is confirmed';
+    my $payment = facts(PaymentCaptured).head;
+    $saga.^resolve-action($action<id>, :result{:payment-id($payment.payment-id), :amount($payment.amount)});
+    drain(1001);
+    is $shop.order('one').^load.status, 'cancelled', 'confirmed accepted payment is compensated then cancelled';
+    is facts(PaymentRefunded).elems, 1, 'reconciled payment is refunded';
+    is stock().available, 10, 'stock is released after settlement';
+};
+subtest 'warehouse and delivery timeouts have different business consequences' => {
+    fresh; purchase; drain;
+    drain(2 * 86400);
+    is $shop.order('one').^load.status, 'cancelled', 'warehouse no-show cancels a pre-handoff order';
+    is facts(PaymentRefunded).elems, 1, 'pre-handoff timeout refunds';
+    fresh; purchase; drain; $shop.order('one').authorize-dispatch; drain;
+    drain(3 * 86400 + 2);
+    is $shop.order('one').^load.status, 'shipped', 'late delivery does not undo physical shipment';
+    like $shop.shipment('one').^load.issue, /'Delivery deadline'/, 'late delivery requires investigation';
+    is facts(PaymentRefunded).elems, 0, 'late shipment is not automatically refunded';
+    $shop.shipment('one').deliver; drain(3 * 86400 + 3);
+    is $shop.order('one').^load.status, 'delivered', 'late carrier confirmation still completes';
+};
+subtest 'replenishment uses actual low-stock facts and idempotent supplier receipts' => {
+    fresh(:replenish);
+    purchase(:items{:coffee(9)}); drain;
+    is stock().available, 12, 'supplier restores target available stock';
+    is stock().on-hand, 21, 'received goods are distinct from reserved goods';
+    is facts(SupplierStockDelivered).elems, 1, 'one supplier effect is recorded';
+    $shop.checkpoint; $shop = Shop.new.initialize; drain;
+    is facts(SupplierStockDelivered).elems, 1, 'restored saga does not order the same stock again';
+    my $board = WarehouseBoard.^with-ids.^load;
+    is $board.products<main/coffee><held>, 9, 'warehouse read model tracks holds';
+    is $board.products<main/coffee><available>, stock().available, 'read model agrees with aggregate';
+};
+subtest 'notification retries do not roll back purchases and other orders stay isolated' => {
+    fresh; provider-fault('email', 'send', :kind<retryable>); purchase; drain;
+    purchase('two', :items{:mug(1)}); drain;
+    is $shop.order('one').^load.status, 'paid', 'email failure does not abort the first purchase';
+    is $shop.order('two').^load.status, 'paid', 'second order progresses independently';
+    is stock().reservations.elems, 1, 'only the coffee order reserves coffee';
+    drain(10);
+    my @emails = facts(NotificationSent);
+    is @emails.grep(*.order-id eq 'one').elems, 2, 'first order receives its own two notifications';
+    is @emails.grep(*.order-id eq 'two').elems, 2, 'second order receives its own two notifications';
+};
+subtest 'the controller resumes a persisted store in a fresh process' => {
+    my $repo = $?FILE.IO.parent.parent;
+    my $tmp = tempdir.IO;
+    my $database = $tmp.add('shop.db');
+    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('examples/commerce/lib')}", '-e', q:to/CODE/,
+        use RedSourcing; use Commerce::App;
+        red-defaults 'SQLite', :database(@*ARGS[0]);
+        my $shop = Shop.new.initialize;
+        $shop.product('coffee', :name<Coffee>, :price(0.10), :replenish(False));
+        $shop.purchase('restart', :items{:coffee(3)});
+        CODE
+        $database.Str, :cwd($tmp), :out, :err;
+    is $p.exitcode, 0, 'first process persists pending source facts';
+    is $p.err.slurp(:close), '', 'setup is quiet'; $p.out.slurp(:close);
+    $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('examples/commerce/lib')}", '-e', q:to/CODE/,
+        use RedSourcing; use Commerce::App;
+        red-defaults 'SQLite', :database(@*ARGS[0]);
+        my $shop = Shop.new.initialize;
+        $shop.drain;
+        say $shop.order('restart').^load.status;
+        say $shop.order('restart').^load.total;
+        CODE
+        $database.Str, :cwd($tmp), :out, :err;
+    is $p.exitcode, 0, 'fresh process discovers and advances persisted saga identities';
+    is $p.err.slurp(:close), '', 'recovery is quiet';
+    is $p.out.slurp(:close), "paid\n5.3\n", 'restart preserves exact prices and completes payment';
+};
+done-testing;

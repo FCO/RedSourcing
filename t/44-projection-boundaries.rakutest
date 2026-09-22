@@ -1,0 +1,70 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Web;
+use RedSourcing::Inspector;
+use RedSourcing::Web::HTML;
+use Cro::HTTP::Router;
+use Cro::HTTP::Request;
+
+my $repo = $?FILE.IO.parent.parent.absolute.IO;
+subtest 'is command is rejected when a projection is composed' => {
+    my $source = q:to/CODE/;
+        use RedSourcing;
+        projection InvalidProjection {
+            method APPLY($event) { }
+            method write is command { 42 }
+        }
+        CODE
+    my $process = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", '-e', $source, :out, :err;
+    isnt $process.exitcode, 0, 'invalid declaration cannot compile';
+    is $process.signal, 0, 'compiler exits normally';
+    like $process.err.slurp(:close), /'Projections cannot declare commands: InvalidProjection'/,
+        'diagnostic names the invalid projection';
+    is $process.out.slurp(:close), '', 'no application code runs';
+};
+
+class BoundaryFact does Event { has Int $.id; has Int $.amount }
+my $applies = 0;
+projection BoundaryReadModel {
+    has Int $.id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(BoundaryFact $event where { .id eqv $!id }) { $!amount += $event.amount; $applies++ }
+    method total { $!amount }
+}
+my $*RED-DB = database 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+subtest 'projection queries consume aggregate facts without creating commands or owning events' => {
+    BoundaryFact.emit(:id(1), :amount(3), :stream<source>, :version(1));
+    my $proxy = BoundaryReadModel.^with-ids(:id(1));
+    is $proxy.^load.total, 3, 'ordinary query returns reconstructed data';
+    is $proxy.^list-commands.elems, 0, 'queries create no command records';
+    is StoredEvent.list-events(:row, :stream($proxy.^stream-name)).elems, 0,
+        'source replay creates no domain events in the projection stream';
+    is BoundaryReadModel.^commands.elems, 0, 'projection has no command registry entries';
+    my $view = $proxy.^load;
+    $view.^emit-snapshot;
+    is $proxy.^load.total, 3, 'read model can still checkpoint its derived state';
+    my $supplier = Supplier.new;
+    my $routes = route { include monitor => inspector-routes(RedSourcing::Inspector.new(:stored-only),
+        :updates(-> { Supply.empty }), :operations-url('/monitor/operations')); };
+    my $responses = $routes.transformer($supplier.Supply).Channel;
+    my $request = Cro::HTTP::Request.new(:method<GET>, :target(detail-url('stream', $proxy.^stream-name)));
+    $request.append-header('Host', 'localhost'); $supplier.emit($request);
+    my $response = $responses.receive;
+    is $response.status, 200, 'projection detail is accessible';
+    my $html = $response.body-byte-stream.list.map(*.decode).join;
+    nok $html.contains('Send command'), 'monitor offers no command action on a projection';
+    ok $html.contains('Load current state'), 'read-only replay remains available';
+    $supplier.done;
+};
+subtest 'a forged or legacy stored command cannot invoke a projection query as a command' => {
+    my $proxy = BoundaryReadModel.^with-ids(:id(1));
+    BoundaryFact.emit(:id(1), :amount(7), :stream<source>, :version(2));
+    my $before = $applies;
+    my $command = StoredCommand.^create(:entity(BoundaryReadModel.^name),
+        :entity-ids{:id(1)}, :stream($proxy.^stream-name), :method<total>, :data{});
+    throws-like { $command.run }, X::AdHoc, message => 'Commands cannot target projections';
+    is $command.state, StoredCommand::Failed, 'invalid target is recorded as failed';
+    is $applies, $before, 'invalid target is rejected before projection reconstruction';
+};
+done-testing;

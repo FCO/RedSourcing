@@ -1,0 +1,23 @@
+use RedSourcing::Config;
+
+config {
+    .flow-tracing = True;
+    .driver = 'Pg';
+    .database = %*ENV<PGDATABASE> // 'hearth';
+    .connection = %(host => %*ENV<PGHOST> // '127.0.0.1',
+        port => (%*ENV<PGPORT> // '5432').Int,
+        user => %*ENV<PGUSER> // %*ENV<USER> // 'postgres');
+    .includes = <lib>;
+    .modules = <Estate::Domain>;
+
+    .monitor: {
+        .host = '127.0.0.1';
+        .port = 3001;
+        .minutes = 60;
+        .app-url = 'http://127.0.0.1:3000/';
+    }
+    .worker: {
+        .limit = 100;
+        .interval = 1;
+    }
+}

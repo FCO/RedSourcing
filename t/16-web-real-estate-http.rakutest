@@ -1,0 +1,104 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/real-estate/lib').Str;
+use RedSourcing;
+use Estate::App;
+use Estate::Routes;
+use Cro::HTTP::Request;
+use Cro::HTTP::Router;
+use RedSourcing::Inspector;
+use RedSourcing::Web;
+use RedSourcing::Web::HTML;
+use JSON::Fast;
+
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite', :database(':memory:');
+my $app = App.new.initialize;
+my $assets = $?FILE.IO.parent.parent.add('resources');
+my $source = Supplier.new;
+my $responses = estate-routes($app, :$assets).transformer($source.Supply).Channel;
+my $monitor-source = Supplier.new;
+my $monitor = RedSourcing::Inspector.new(:stored-only);
+my $monitor-routes = route {
+    include monitor => inspector-routes($monitor, :updates(-> {
+        supply { emit "event: refresh\ndata: connected\n\n" }
+    }));
+};
+my $monitor-responses = $monitor-routes.transformer($monitor-source.Supply).Channel;
+sub request(Str $target, Str :$method = 'GET', :%data) {
+    my $r = Cro::HTTP::Request.new(:$method, :$target);
+    $r.append-header('Host', '127.0.0.1');
+    $r.append-header('HX-Request', 'true');
+    if %data {
+        # JSON and standard URL-encoded forms both use Cro's body parser.
+        my $body = to-json(%data).encode('utf-8');
+        $r.append-header('Content-Type', 'application/json');
+        $r.append-header('Content-Length', $body.bytes.Str);
+        $r.set-body-byte-stream(supply { emit $body });
+    }
+    if $target.starts-with('/monitor') {
+        $monitor-source.emit($r);
+        $monitor-responses.receive
+    } else {
+        $source.emit($r);
+        $responses.receive
+    }
+}
+sub body($response) { $response.body-byte-stream.list.map(*.decode('utf-8')).join }
+
+for '/', '/properties', '/tenants', '/rent', '/repairs', '/repairs/r-boiler', '/monitor', '/monitor?kind=saga' -> $path {
+    my $r = request($path);
+    is $r.status, 200, "$path renders";
+    like body($r), /'htmx-4.0.0.min.js'/, "$path loads HTMX 4 locally";
+    like $r.header('Content-Security-Policy'), /"script-src 'self'"/, 'scripts are same-origin';
+}
+my $console-html = body(request('/monitor'));
+nok $console-html.contains('Hearth Bristol'), 'generic console has no example-specific profile';
+my $fragment = request('/fragments/repair/r-boiler');
+is $fragment.status, 200, 'chat fragment exists';
+nok body($fragment).contains('<!doctype'), 'fragment does not duplicate the document';
+is request('/repairs/missing').status, 404, 'unknown repair gives 404';
+is request('/fragments/repair/missing').status, 404, 'unknown repair fragment gives 404';
+is request('/assets/vendor/htmx-4.0.0.min.js').status, 200, 'vendored HTMX is served';
+is request('/assets/../META6.json').status, 403, 'static handler rejects traversal';
+my $report = from-json(body(request('/monitor/report')));
+is $report<types>.elems, 5, 'generic report discovers persisted types without application registration';
+ok $report<stored-only>, 'monitor uses database-only inspection';
+ok $report<metrics><series>.elems == 60, 'report includes minute-level metrics';
+is $report<instances>.grep(*.<kind> eq 'saga').elems, 2, 'sagas discovered before first snapshot';
+is $report<instances>.grep({ .<error>:exists }).elems, 0, 'all instances load';
+my $before = StoredEvent.^all.elems;
+body(request('/monitor/fragment?kind=saga'));
+my $property-stream = 'Estate::Domain::Property: property-id = p-park';
+my $property-detail = request(detail-url('stream', $property-stream));
+is $property-detail.status, 200, 'reported Property detail URL resolves';
+ok body($property-detail).contains($property-stream), 'Property details retain the complete stream name';
+my $saga-stream = $report<instances>.first(*.<kind> eq 'saga')<stream>;
+my $saga-detail = request(detail-url('stream', $saga-stream));
+is $saga-detail.status, 200, 'saga detail resolves';
+ok body($saga-detail).contains('compensations'), 'saga detail includes persisted runtime state';
+is StoredEvent.^all.elems, $before, 'console GET never emits effects';
+
+my %message = %(repair-id => 'r-boiler', author => 'Tenant', body => '<script>alert("x")</script>');
+is request('/actions/message', :method<POST>, :data(%message)).status, 403, 'CSRF token is required';
+my $posted = request('/actions/message', :method<POST>, :data(%(|%message, csrf => $app.csrf-token)));
+is $posted.status, 200, 'command posted';
+is $posted.header('HX-Trigger'), 'redsourcing:update', 'successful command invalidates fragments';
+my $chat = body(request('/fragments/repair/r-boiler'));
+ok $chat.contains('&lt;script&gt;'), 'chat text is HTML-escaped';
+nok $chat.contains('<script>alert'), 'user text cannot create script tags';
+is request('/actions/finish', :method<POST>, :data(%(csrf => $app.csrf-token, repair-id => 'r-window', cost => '30.00'))).status, 422,
+    'domain validation is returned as a visible form error';
+is request('/actions/unknown', :method<POST>, :data(%(csrf => $app.csrf-token))).status, 422, 'unknown actions fail';
+
+my $stream = request('/live');
+is $stream.status, 200, 'SSE route exists';
+is $stream.header('Content-Type'), 'text/event-stream', 'SSE MIME type';
+my $first = await $stream.body-byte-stream.head;
+ok $first ~~ Blob, 'Cro receives byte chunks';
+like $first.decode('utf-8'), /'event: refresh'/, 'initial invalidation arrives immediately';
+my $console-stream = request('/monitor/live');
+my $console-first = await $console-stream.body-byte-stream.head;
+like $console-first.decode('utf-8'), /'event: refresh'/, 'generic console SSE uses the same contract';
+$source.done;
+$monitor-source.done;
+done-testing;

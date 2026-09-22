@@ -1,0 +1,95 @@
+use Test;
+use RedSourcing;
+use JSON::Fast;
+
+my $*RED-FALLBACK = False;
+red-defaults 'SQLite';
+schema(StoredEvent, StoredCommand).create;
+class Recorded does Event { has Str $.name is required }
+class BusinessDated does Event { has Str $.name; has Str $.timestamp }
+
+subtest 'emission time is journal metadata attached only after a successful write' => {
+    my $event = Recorded.new(:name<one>);
+    nok $event.emitted-at.defined, 'unemitted event has no emission time';
+    nok $event.StoredEvent.defined, 'unemitted event has no record';
+    my $before = DateTime.now.Instant;
+    my $row = $event.emit(:stream<events>, :1version);
+    isa-ok $event.emitted-at, DateTime;
+    is $event.emitted-at.Instant, $row.created.Instant, 'original object gets the journal emission time';
+    ok $event.emitted-at.Instant >= $before, 'emission time reflects the write';
+    ok $event.emitted-at.Instant <= DateTime.now.Instant, 'emission time does not lie in the future';
+    ok $event.StoredEvent === $row, 'emit still returns the attached stored row';
+    is-deeply from-json(to-json($row.data)), %(name => 'one'), 'metadata is not duplicated into the payload';
+    my $conflict = Recorded.new(:name<conflicting>);
+    throws-like { $conflict.emit(:stream<events>, :1version) }, RedSourcing::X::OptimisticLockFailed;
+    nok $conflict.emitted-at.defined, 'failed emission does not fabricate an emission timestamp';
+    nok $conflict.StoredEvent.defined, 'failed emission leaves the original object unpersisted';
+};
+
+subtest 'reconstruction uses the stored timestamp rather than the replay clock' => {
+    my $date = DateTime.new('2020-03-02T01:02:03.123Z');
+    # Simulate an existing journal entry written before the accessor was added.
+    my $row = StoredEvent.^create(:class<Recorded>, :stream<old>, :1version,
+        :mro('|Recorded|Event|'), :created($date), :data{ :name<old> });
+    my $loaded = StoredEvent.list-events(:stream<old>).head;
+    is $loaded.emitted-at.Instant, $date.Instant, 'replay preserves the historical emission timestamp';
+    ok $loaded.StoredEvent.id == $row.id, 'loaded event retains the original record';
+    is-deeply from-json(to-json($loaded.StoredEvent.data)), %(name => 'old'), 'historical payload needs no migration';
+    my $next = $loaded.emit(:stream<re-emitted>, :1version);
+    is $loaded.emitted-at.Instant, $next.created.Instant, 'a new emission updates the instance metadata';
+    isnt $loaded.emitted-at.Instant, $date.Instant, 'new emission has its own timestamp';
+    is $row.COERCE.emitted-at.Instant, $date.Instant, 'the earlier journal record is unchanged';
+    is Recorded.emit(:stream<class-emitted>, :1version, :name<typed>).COERCE.emitted-at.Instant,
+        StoredEvent.^all.grep(*.stream eq 'class-emitted').head.created.Instant,
+        'type-object emit reconstructs with the same emission metadata';
+};
+
+subtest 'business timestamps and saga controls coexist with emission metadata' => {
+    my $event = BusinessDated.new(:name<transaction>, :timestamp<2025-01-01T12:00:00Z>);
+    my $row = $event.emit(:stream<dated>, :1version);
+    is $event.timestamp, '2025-01-01T12:00:00Z', 'business timestamp is preserved';
+    is $row.COERCE.timestamp, $event.timestamp, 'business timestamp survives replay';
+    is $row.COERCE.emitted-at.Instant, $event.emitted-at.Instant, 'journal timestamp survives independently';
+    isnt $event.emitted-at.Instant, DateTime.new($event.timestamp).Instant, 'emission clock is independent of business date';
+    my $control = RedSourcing::Saga::StateChanged.new(:state{ :status<running> }, :values{}, :cursor(0));
+    my $saved = $control.emit(:stream<workflow>, :1version);
+    is $saved.COERCE.emitted-at.Instant, $control.emitted-at.Instant, 'native saga control inherits emission metadata';
+};
+
+subtest 'custom initialization hooks retain journal metadata during reconstruction' => {
+    my $hooks = 0;
+    class HookedEvent does Event {
+        has Str $.name;
+        submethod BUILD(:$name, |) { $!name = $name }
+        submethod TWEAK(|) { ++$hooks }
+    }
+    class InheritedHook is Recorded { submethod TWEAK(|) { ++$hooks } }
+    for HookedEvent, InheritedHook -> $type {
+        my $event = $type.new(:name<hooked>);
+        my $row = $event.emit(:stream($type.^name), :1version);
+        my $before = $hooks;
+        my $loaded = $row.COERCE;
+        is $hooks, $before + 1, 'custom TWEAK still runs during reconstruction';
+        is $loaded.name, 'hooked', 'constructor receives the persisted payload';
+        is $loaded.StoredEvent.id, $row.id, 'stored reference survives custom hooks';
+        is $loaded.emitted-at.Instant, $row.created.Instant, 'custom hooks retain the emission timestamp';
+    }
+};
+
+class Applied does Event { has Int $.amount is required }
+aggregate Counter {
+    has Str $.id is entity-id;
+    has Str $.seen-at = '';
+    multi method APPLY(Applied $event) { $!seen-at = $event.emitted-at.Str }
+    method add(Int :$amount!) is command { self.applied(:$amount); $!seen-at }
+}
+subtest 'aggregate handlers receive the recorded emission time on execution and replay' => {
+    my $proxy = Counter.^with-ids(:id<counter>);
+    $proxy.^create;
+    my $seen = $proxy.add(:3amount);
+    my $row = StoredEvent.^all.grep(*.class eq 'Applied').head;
+    is DateTime.new($seen).Instant, $row.created.Instant, 'live APPLY sees journal timestamp';
+    is $proxy.^load.seen-at, $seen, 'replayed APPLY sees the same timestamp';
+};
+
+done-testing;

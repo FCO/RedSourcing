@@ -1,0 +1,94 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+
+my $tmp = tempdir.IO.add('source (with spaces)');
+$tmp.mkdir;
+my $lib = $*CWD.add('lib').Str;
+my $script = $*CWD.add('bin/red-sourcing.raku').Str;
+my $module = $tmp.add('DescribeFilters.rakumod');
+$module.spurt(q:to/MODULE/);
+    use RedSourcing;
+    unit module DescribeFilters;
+    aggregate Account is export {
+        has Int $.id is entity-id;
+        method APPLY() { }
+        #| Validate the amount and label before recording them.
+        method record(
+            Int :value(:$amount)! where { $_ > 0 && $_ < 100 },
+            Str :$label where { .chars > 2 } = 'a ), ] and }',
+            Int :$later = do { die 'Describe must not run defaults' },
+            Int :$guard where { die 'Describe must not run predicates' } = 8
+        ) is command { die 'Describe must not run handlers' }
+        method quoted(Str :$name = "a ) and \" quote", # ) ignored comment
+                      Int :$count where { $_ %% 2 } = 2) is command { }
+        method regex(Str :$name! where / ^ <[a..z]>+ $ /) is command { }
+        method quote-operator(Str :$name = q |a ), ] and }|) is command { }
+        method angles(:@items = <1 ) 2>) is command { }
+        method empty is command { }
+    }
+    MODULE
+
+sub cli(Str $entity = 'Account', Bool :$json = False, *@imports) {
+    my $p = run $*EXECUTABLE.Str, "-I$lib", $script, 'describe', $entity,
+        "--database={$tmp.add('describe.db')}", |(@imports || ["-I=$tmp", '-M=DescribeFilters']),
+        |('--json' if $json), :cwd($tmp), :out, :err;
+    my $out = $p.out.slurp(:close);
+    my $err = $p.err.slurp(:close);
+    die $err if $p.exitcode || $p.signal;
+    $out
+}
+
+subtest 'describe shows the actual multiline declaration without executing it' => {
+    my %description = from-json(cli(:json));
+    my %record = %description<commands>.first(*.<name> eq 'record');
+    like %record<signature>, / 'where { ... }' /, 'original reflection field remains compatible';
+    like %record<declaration>, / 'Int :value(:$amount)! where { $_ > 0 && $_ < 100 }' /,
+        'both comparison predicates and the named alias are visible';
+    ok %record<declaration>.contains(q|Str :$label where { .chars > 2 } = 'a ), ] and }'|),
+        'quoted delimiters do not terminate the signature';
+    like %record<declaration>, / 'Int :$later = do { die' /,
+        'default expressions are displayed without running them';
+    like %record<declaration>, / 'Describe must not run predicates' /,
+        'predicates are displayed without running them';
+    unlike %record<declaration>, / 'Describe must not run handlers' /, 'handler body is not included';
+    unlike %record<declaration>, / '$::' | '*%_' /, 'generated invocant and slurpy are not in the declaration';
+    is %record<source><file>, $module.Str, 'paths with spaces and parentheses are preserved';
+    is %record<source><line>, 7, 'original declaration line is reported';
+    is-deeply %record<parameters>.head<aliases>.sort.Array, ['amount', 'value'],
+        'structured parameter metadata remains available';
+    my $human = cli();
+    like $human, / 'Commands' .* 'record' .* '$_ > 0 && $_ < 100' /,
+        'human output includes the executable filter text';
+    like $human, / 'Validate the amount and label' /, 'handler documentation remains visible';
+    like $human, / 'Source: ' /, 'source provenance is explicit';
+    my %quoted = %description<commands>.first(*.<name> eq 'quoted');
+    like %quoted<declaration>, / 'Int :$count where { $_ %% 2 } = 2' /,
+        'escaped quotes and comments containing parentheses are handled';
+    my %empty = %description<commands>.first(*.<name> eq 'empty');
+    ok %empty<signature>.defined, 'methods without explicit signatures retain reflection output';
+};
+
+subtest 'unsupported quoting falls back honestly instead of guessing the predicate' => {
+    my %description = from-json(cli(:json));
+    my %regex = %description<commands>.first(*.<name> eq 'regex');
+    nok %regex<declaration>:exists, 'complex regex syntax is not misparsed';
+    my %quoted = %description<commands>.first(*.<name> eq 'quote-operator');
+    nok %quoted<declaration>:exists, 'spaced quote operators containing delimiters are not misparsed';
+    my %angles = %description<commands>.first(*.<name> eq 'angles');
+    nok %angles<declaration>:exists, 'a closing parenthesis inside a word list is not mistaken for the command signature';
+    is %regex<source><file>, $module.Str, 'fallback still points to the original source';
+    like cli(), / 'Exact declaration unavailable; Raku hides predicate bodies in this signature.' /,
+        'fallback explicitly explains hidden predicates';
+};
+
+subtest 'the Conversation declaration includes both nonempty text filters' => {
+    my $estate = $*CWD.add('examples/real-estate/lib');
+    my $human = cli('Conversation', "-I=$estate", '-M=Estate::Domain');
+    like $human, / 'Str :$author! where *.trim.chars > 0' /, 'author filter is visible';
+    like $human, / 'Str :$body! where *.trim.chars > 0' /, 'body filter is visible';
+    like $human, / 'Bool :$notification = False' /, 'default is displayed as written';
+    unlike $human, / 'where { ... }' /, 'no hidden predicate placeholders remain for Conversation';
+};
+
+done-testing;

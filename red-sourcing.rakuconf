@@ -1,0 +1,26 @@
+use RedSourcing::Config;
+
+# Use Hearth, the real-estate example, as this checkout's default CLI target.
+# Relative database and library paths are resolved from this file's directory.
+config {
+    .flow-tracing = True;
+    .driver = 'Pg';
+    .database = %*ENV<PGDATABASE> // 'hearth';
+    .connection = %(host => %*ENV<PGHOST> // '127.0.0.1',
+        port => (%*ENV<PGPORT> // '5432').Int,
+        user => %*ENV<PGUSER> // %*ENV<USER> // 'postgres');
+    .includes = <examples/real-estate/lib>;
+    .modules = <Estate::Domain>;
+
+    .monitor: {
+        .host = '127.0.0.1';
+        .port = 3001;
+        .minutes = 60;
+        .app-url = 'http://127.0.0.1:3000/';
+    }
+    .worker: {
+        .limit = 100;
+        .interval = 1;
+        .watch = False;
+    }
+}

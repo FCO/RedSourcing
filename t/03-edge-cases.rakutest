@@ -1,0 +1,152 @@
+use Test;
+use Red;
+use RedFactory;
+use RedSourcing;
+use RedSourcing::Event;
+use RedSourcing::X::OptimisticLockFailed;
+
+my $*RED-DB = factory-db;
+StoredEvent.^create-table;
+
+class PayloadEvent does Event {
+    has Str $.name;
+    has Str $!secret = 'private';
+}
+
+subtest 'record references and public payload attributes' => {
+    my $event = PayloadEvent.new(:name<Jane>);
+    nok $event.StoredEvent.defined, 'a new event has no stored record';
+    my $row = $event.emit(:stream<payload>, :version(0));
+    is-deeply $row.data.Hash, %(name => 'Jane'),
+        'private attributes and the record reference are not serialized';
+    my $loaded = StoredEvent.list-events(:types[PayloadEvent]).head;
+    is $loaded.StoredEvent.id, $row.id, 'loaded event points to its stored row';
+
+    class RecordReference does Event { }
+    my $reference = RecordReference.new(:StoredEvent($row));
+    ok $reference.StoredEvent === $row, 'Event retains the supplied record';
+    nok RecordReference.new.StoredEvent.defined, 'Event permits an unset reference';
+    nok Event.new.StoredEvent.defined, 'the standalone role has no record by default';
+};
+
+subtest 'key predicates and unavailable event classes' => {
+    my @matching = StoredEvent.list-events:
+        (PayloadEvent) => -> $event { $event<name> eq 'Jane' };
+    is @matching.elems, 1, 'key lookup predicates match the stored JSON';
+    is @matching.head.name, 'Jane', 'the matching row is coerced to the domain event';
+    is StoredEvent.list-events(
+        (PayloadEvent) => -> $event { $event<name> eq 'Other' }
+    ).elems, 0, 'key lookup predicates reject different values';
+
+    my $row = StoredEvent.^create(:class<UnavailableEvent>,
+        :mro<|UnavailableEvent|Any|Mu|>, :stream<unavailable>, :version(0),
+        :data(%(name => 'Unloaded')));
+    my $loaded = StoredEvent.list-events(:stream<unavailable>).head;
+    isa-ok $loaded, StoredEvent, 'an unavailable class returns the stored row';
+    is $loaded.id, $row.id, 'fallback preserves the record identity';
+    is $loaded.data<name>, 'Unloaded', 'fallback preserves the payload';
+    throws-like { $row.COERCE(PayloadEvent) }, X::AdHoc,
+        message => /'Cannot coerce row'/, 'coercion rejects a different event class';
+};
+
+subtest 'coercion uses bless without invoking a custom event new method' => {
+    my $new-calls = 0;
+    my $build-calls = 0;
+    class HydratedEvent does Event {
+        has Str $.name;
+        method new(|c) {
+            ++$new-calls;
+            callsame
+        }
+        submethod BUILD(:$name, |) {
+            ++$build-calls;
+            $!name = $name;
+        }
+    }
+    my $event = HydratedEvent.new(:name<Stored>);
+    my $row = $event.emit(:stream<hydration>, :version(0));
+    is $new-calls, 1, 'explicit construction calls the custom new method';
+    is $build-calls, 1, 'explicit construction initializes the event';
+    my $loaded = $row.COERCE;
+    isa-ok $loaded, HydratedEvent, 'coercion restores the requested event type';
+    is $new-calls, 1, 'restoration bypasses the custom new method';
+    is $build-calls, 2, 'bless still invokes BUILD during restoration';
+    is $loaded.name, 'Stored', 'BUILD receives the persisted payload';
+    is $loaded.StoredEvent.id, $row.id,
+        'the Event TWEAK still attaches the stored record';
+};
+
+subtest 'row mode preserves filters and returns stored records without reconstruction' => {
+    my @rows = StoredEvent.list-events(:row, :stream<payload>, :types[PayloadEvent]);
+    is @rows.elems, 1, 'row mode retains the stream and type filters';
+    isa-ok @rows.head, StoredEvent, 'row mode returns the database record';
+    is @rows.head.class, 'PayloadEvent', 'the stored class is available without coercion';
+    is @rows.head.version, 0, 'the stored version is available';
+    is @rows.head.data<name>, 'Jane', 'the JSON payload is available';
+    my $event = @rows.head.COERCE;
+    isa-ok $event, PayloadEvent, 'a row can be explicitly coerced later';
+    is $event.StoredEvent.id, @rows.head.id, 'explicit coercion retains the row reference';
+    isa-ok StoredEvent.list-events(:!row, :stream<payload>).head, PayloadEvent,
+        'disabling row mode restores the default domain objects';
+    is StoredEvent.list-events(:row, :stream<payload>, :from-id(@rows.head.id)).elems, 0,
+        'row mode preserves the exclusive ID boundary';
+    is StoredEvent.list-events(:row, :stream<payload>,
+        (PayloadEvent) => %(name => 'Other')).elems, 0,
+        'row mode preserves payload rules';
+
+    class ConstructorSensitiveEvent does Event {
+        has Str $.name;
+        submethod TWEAK(:$StoredEvent, |) {
+            die 'domain reconstruction attempted' with $StoredEvent;
+        }
+    }
+    my $stored = ConstructorSensitiveEvent.emit(:stream<rows-only>, :version(0), :name<Stored>);
+    my $raw = StoredEvent.list-events(:row, :stream<rows-only>).head;
+    is $raw.id, $stored.id, 'row mode does not invoke the domain constructor';
+    throws-like { StoredEvent.list-events(:stream<rows-only>).head }, X::AdHoc,
+        message => /'domain reconstruction attempted'/,
+        'default mode still reconstructs the domain object';
+};
+
+subtest 'optimistic locking exposes conflict details' => {
+    nok RedSourcing::X::OptimisticLockFailed.new.version.defined,
+        'an exception without conflict details has no version';
+    throws-like {
+        PayloadEvent.emit(:stream<payload>, :version(0), :name<Duplicate>);
+    }, RedSourcing::X::OptimisticLockFailed,
+        event-class => 'PayloadEvent', stream => 'payload', version => 0,
+        'the conflict identifies the event class, stream and version';
+    is StoredEvent.list-events(:stream<payload>).elems, 1,
+        'the conflict does not append an event';
+};
+
+subtest 'schema versions and inherited payloads survive replay' => {
+    class BaseEvent does Event { has Str $.name; }
+    class VersionedEvent:api<3> is BaseEvent { has UInt $.count; }
+    my $row = VersionedEvent.new(:name<Versioned>, :count(2))
+        .emit(:stream<schema>, :version(0));
+    is $row.event-schema-version, 3, 'the event API sets the stored schema version';
+    is-deeply $row.data.Hash, %(name => 'Versioned', count => 2),
+        'both inherited and direct public attributes are stored';
+    my @base = StoredEvent.list-events(:stream<schema>, :types[BaseEvent]);
+    is @base.elems, 1, 'a base type filter matches its derived event';
+    isa-ok @base.head, VersionedEvent, 'replay retains the concrete event type';
+    my $replayed = @base.head.emit(:stream<schema>, :version(1));
+    is $replayed.event-schema-version, 3, 'reemission retains the schema version';
+    is-deeply $replayed.data.Hash, $row.data.Hash,
+        'reemission retains the payload and excludes the stored record reference';
+};
+
+subtest 'loader filters and snapshot dates are retained' => {
+    my &load = StoredEvent.map-list-events:
+        (PayloadEvent) => %(name => 'name'), :data(%(name => 'Jane'));
+    is load(:stream<payload>).elems, 1, 'a mapped loader accepts a stream filter';
+    is load(:stream<missing>).elems, 0, 'a loader excludes another stream';
+    is load(:from-id(0)).elems, 1, 'a loader forwards an exclusive ID boundary';
+    is StoredEvent.list-events(:stream<payload>,
+        :from-snapshot-of-type(PayloadEvent),
+        :after(DateTime.now.later(:hours(1)))).elems, 0,
+        'the after filter still excludes a snapshot';
+};
+
+done-testing;

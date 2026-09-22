@@ -1,0 +1,153 @@
+use Test;
+use lib $?FILE.IO.parent.parent.add('examples/commerce/lib').Str;
+use RedSourcing;
+use Commerce::App;
+use Commerce::Events;
+use Commerce::ReadModels;
+use Commerce::Webhooks;
+use Commerce::Providers;
+use Cro::HTTP::Router;
+use Cro::HTTP::Client;
+use RedSourcing::Web::Server;
+temp %*ENV<COMMERCE_WEBHOOK_URL> = 'simulated://commerce';
+
+my $*RED-DB;
+my $clock;
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    .^create-table for StoredEvent, StoredCommand;
+    clear-provider-faults;
+    register-commerce-providers;
+    $clock = DateTime.now;
+}
+sub facts(Mu:U $type) { StoredEvent.list-events(:types[$type]).Array }
+sub submitted(Str $id) {
+    OrderSubmitted.emit(:stream("test/order/$id"), :version(1), :order-id($id),
+        :warehouse-id<main>, :email<ana@example.test>, :address<Test>, :items([]), :total(5.0));
+}
+sub webhook(Str $id = 'one') { WebhookSaga.^with-ids(:order-id($id)) }
+sub advance(Numeric $seconds = 0, Str $id = 'one') {
+    webhook($id).^advance(:now($clock.later(:$seconds)))
+}
+
+subtest 'in-app notifications and webhooks accompany the delivery lifecycle' => {
+    fresh;
+    my $shop = Shop.new.initialize;
+    $shop.product('coffee', :name<Coffee>, :price(12.50), :replenish(False));
+    $shop.purchase('one', :items{:coffee(1)}); $shop.drain;
+    $shop.order('one').authorize-dispatch; $shop.drain;
+    $shop.shipment('one').deliver; $shop.drain;
+    is-deeply $shop.notifications('one').messages.map(*.<message>).Array,
+        ['Order received', 'Payment confirmed', 'Order shipped', 'Order delivered'], 'ordered inbox follows committed facts';
+    is facts(NotificationSent).elems, 4, 'email remains an independent delivery channel';
+    is facts(WebhookDelivered).elems, 4, 'partner receives four domain updates';
+    my $paid = facts(WebhookDelivered).first(*.payload<type> eq OrderPaid.^name);
+    is $paid.payload<data><payment-id>, 'payment/one', 'payload contains the original fact';
+    is $paid.payload<event-id>, $paid.source-id, 'envelope identifies the source journal row';
+    is $paid.payload<delivery-id>, $paid.delivery-id, 'envelope identifies this logical delivery';
+    is $paid.payload<stream>, $shop.order('one').^stream-name, 'original stream is preserved';
+    ok $paid.payload<emitted-at>.chars, 'emission timestamp is present';
+    my $inbox = $shop.notifications('one'); $inbox.^emit-snapshot;
+    $shop.checkpoint;
+    is-deeply $shop.notifications('one').messages, $inbox.messages, 'checkpoint replay does not duplicate notifications';
+    $shop.drain;
+    is facts(WebhookDelivered).elems, 4, 'idle replay does not resend deliveries';
+};
+subtest 'email and webhook outages leave purchase and the inbox available' => {
+    fresh;
+    provider-fault('email', 'send', :kind<retryable>);
+    provider-fault('webhook', 'deliver', :kind<retryable>);
+    my $shop = Shop.new.initialize;
+    $shop.product('coffee', :name<Coffee>, :price(1.0), :replenish(False));
+    $shop.purchase('one', :items{:coffee(1)}); $shop.drain(:now($clock));
+    is $shop.order('one').^load.status, 'paid', 'channel outages do not compensate a purchase';
+    is $shop.notifications('one').messages.elems, 2, 'in-app facts are immediately readable';
+    is facts(WebhookDelivered).elems, 0, 'failed head delivery waits for its retry';
+    $shop.drain(:now($clock.later(:seconds(10))));
+    is facts(NotificationSent).elems, 2, 'email catches up';
+    is facts(WebhookDelivered).elems, 2, 'webhook catches up independently';
+};
+subtest 'lost acknowledgements recover from durable receipts after a snapshot' => {
+    fresh;
+    webhook.^create; webhook('two').^create;
+    submitted('one'); submitted('two');
+    provider-fault('webhook', 'deliver', :kind<uncertain>);
+    my $saga = advance;
+    is facts(WebhookDelivered).elems, 1, 'provider accepted the first delivery before losing its reply';
+    is $saga.^state<actions>[0]<status>, 'retry', 'uncertain outcome retains a durable retry';
+    $saga.^emit-snapshot;
+    $saga = advance(2);
+    is $saga.delivered, 1, 'saved receipt completes the original action';
+    is facts(WebhookDelivered).elems, 1, 'retry does not repeat the accepted effect';
+    is $saga.^state<actions>[0]<attempts>, 2, 'same action has two attempts';
+    advance(2, 'two');
+    is facts(WebhookDelivered).grep(*.order-id eq 'two').elems, 1, 'second saga consumes only its own order';
+    is OrderNotifications.^with-ids(:order-id<one>).^load.messages.elems, 1, 'inbox is identity filtered';
+};
+subtest 'exhausted rejection is inspectable and later notifications can progress' => {
+    fresh; webhook.^create;
+    submitted('one');
+    OrderPaid.emit(:stream<test/order/one>, :version(2), :order-id<one>, :payment-id<pay-1>);
+    provider-fault('webhook', 'deliver', :kind<retryable>, :times(5));
+    advance($_) for 0, 100, 200, 300, 400;
+    my $saga = advance(500);
+    is $saga.failures.elems, 1, 'exhausted failure remains in snapshot state';
+    is $saga.^state<actions>[0]<status>, 'failed', 'original action is terminal';
+    is $saga.^state<actions>[0]<attempts>, 5, 'policy bounds attempts';
+    is facts(WebhookDelivered).elems, 1, 'next paid notification progresses after known failure';
+    is facts(WebhookDelivered)[0].payload<type>, OrderPaid.^name, 'later source payload remains correct';
+};
+subtest 'webhooks can be disabled and invalid endpoints fail before creating an order' => {
+    fresh; my $shop = Shop.new(:webhook-url('')).initialize;
+    $shop.product('coffee', :name<Coffee>, :price(1.0), :replenish(False));
+    dies-ok { $shop.purchase('bad', :items{:coffee(1)}, :webhook-url<ftp://example.test>) }, 'unsupported scheme is rejected';
+    is StoredEvent.^all.grep(*.stream eq $shop.order('bad').^stream-name).elems, 0, 'invalid request creates no order';
+    $shop.purchase('one', :items{:coffee(1)}); $shop.drain;
+    is facts(WebhookDelivered).elems, 0, 'empty endpoint disables delivery';
+    is $shop.notifications('one').messages.elems, 2, 'in-app notifications remain enabled';
+};
+subtest 'real HTTP retries keep the original payload and delivery key' => {
+    fresh;
+    temp %*ENV<COMMERCE_WEBHOOK_TOKEN> = 'local-test-token';
+    my @requests;
+    my %accepted;
+    my $reply = 503;
+    my $port = 41000 + (^14000).pick;
+    my $routes = route {
+        post -> 'hooks' {
+            request-body -> %payload {
+                @requests.push(%(key => request.header('Idempotency-Key'),
+                    authorization => request.header('Authorization'), payload => %payload));
+                %accepted{%payload<delivery-id>} //= %payload;
+                response.status = $reply;
+                content 'application/json', {accepted => True};
+            }
+        }
+    };
+    my $server = web-server(:host<127.0.0.1>, :$port, :application($routes));
+    $server.start;
+    LEAVE $server.stop;
+    webhook.^create(:endpoint("http://127.0.0.1:$port/hooks"));
+    submitted('one');
+    my $saga = advance;
+    is $saga.^state<actions>[0]<status>, 'retry', 'HTTP 503 schedules another attempt';
+    is $saga.^state<actions>[0]<error>, 'Webhook returned HTTP 503', 'retry is caused by the receiver response';
+    $saga.^emit-snapshot;
+    $reply = 202;
+    $saga = advance(2);
+    is $saga.delivered, 1, 'HTTP 202 completes delivery';
+    is @requests.elems, 2, 'receiver sees both transport attempts';
+    is-deeply @requests[0], @requests[1], 'snapshot and retry preserve headers and complete envelope';
+    is %accepted.elems, 1, 'receiver can deduplicate an acceptance followed by an error response';
+    is @requests[0]<key>, @requests[0]<payload><delivery-id>, 'header and envelope use the same stable key';
+    is @requests[0]<authorization>, 'Bearer local-test-token', 'optional token is delivered as a header';
+    nok facts(WebhookDelivered)[0].payload.values.grep(*.Str.contains('local-test-token')),
+        'token is excluded from the saved payload';
+    $reply = 400;
+    OrderPaid.emit(:stream<test/order/one>, :version(2), :order-id<one>, :payment-id<pay-1>);
+    $saga = advance(3);
+    is $saga.^state<actions>[1]<status>, 'failed', 'HTTP 400 is a definite rejection';
+    is $saga.failures.elems, 1, 'rejection can be inspected through saga state';
+    is facts(WebhookDelivered).elems, 1, 'rejected HTTP requests do not produce success receipts';
+};
+done-testing;

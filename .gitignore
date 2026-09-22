@@ -1,0 +1,12 @@
+.precomp/
+.racoco/
+/RedStoredEvent-*
+/RedSourcing-*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/node_modules/
+
+# Keep runnable example configurations in the distribution.
+!examples/**/red-sourcing.rakuconf

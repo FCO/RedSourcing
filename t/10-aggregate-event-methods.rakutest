@@ -1,0 +1,237 @@
+use Test;
+use MONKEY-SEE-NO-EVAL;
+use Red;
+use RedSourcing;
+use RedSourcing::Traits;
+use RedSourcing::Event;
+use RedSourcing::StoredCommand;
+
+class FundsAdded does Event {
+    has Int $.tenant-id is required;
+    has Int $.owner-id is required;
+    has Int $.amount is required;
+    has Str $.label = 'default';
+}
+class HTTPOrderRecorded does Event { has Int $.amount is required; }
+class PositionalCredited does Event {
+    has Int $.owner-id is required;
+    has Int $.amount is required;
+    method new(Int $amount, *%args) { self.bless(|%args, :$amount) }
+}
+class ConstructorChangedId does Event {
+    has Int $.owner-id is required;
+    method new(*%args) { self.bless(|%args, :owner-id(999)) }
+}
+class ApplicationRejected does Event { }
+class InheritedAdded does Event {
+    has Int $.id is required;
+    has Str $.scope-id is required;
+    has Int $.amount is required;
+}
+aggregate ParentEmitter {
+    has Int $.id is entity-id;
+    has Int $.total = 0;
+    method APPLY(InheritedAdded $event) { $!total += $event.amount }
+}
+aggregate ChildEmitter is ParentEmitter {
+    has Str $.scope-id is entity-id;
+}
+
+aggregate EmittingAccount {
+    has Int $.tenant-id is entity-id;
+    has Int $.account-id is entity-id;
+    has Int $.balance = 0;
+    has @.seen;
+    multi method APPLY(FundsAdded $event where { 0 < .amount <= 10 })
+        is entity-id-map(:owner-id<account-id>) {
+        $!balance += $event.amount;
+        @!seen.push: $event.StoredEvent.id;
+    }
+    multi method APPLY(FundsAdded $event where { .amount > 10 })
+        is entity-id-map(:owner-id<account-id>) {
+        $!balance += $event.amount;
+        @!seen.push: $event.StoredEvent.id;
+    }
+    multi method APPLY(HTTPOrderRecorded $event) { $!balance += $event.amount }
+    multi method APPLY(PositionalCredited $event) is entity-id-map(:owner-id<account-id>) {
+        $!balance += $event.amount;
+    }
+    multi method APPLY(ConstructorChangedId $event) is entity-id-map(:owner-id<account-id>) { }
+    multi method APPLY(ApplicationRejected $event) { die 'application rejected' }
+    method deposit(Int :$amount!) is command {
+        self.funds-added(:$amount);
+        $!balance
+    }
+    method twice is command {
+        self.funds-added(:amount(3));
+        self.funds-added(:amount(4));
+        $!balance
+    }
+    method fail-after-apply is command {
+        self.funds-added(:amount(100));
+        die 'failure after application';
+    }
+}
+
+projection EmittingProjection {
+    method APPLY(FundsAdded $event) { }
+}
+aggregate BroadAggregate {
+    method APPLY($event) { }
+}
+aggregate RoleOnlyAggregate {
+    method APPLY(Event $event) { }
+}
+
+sub account { EmittingAccount.^with-ids(:tenant-id(3), :account-id(42)) }
+sub fresh-store {
+    red-defaults 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    account().^create;
+}
+
+subtest 'event methods belong to aggregates and construct mapped IDs and defaults' => {
+    fresh-store;
+    my $proxy = account();
+    my $entity = $proxy.^load;
+    ok $entity.^can('funds-added'), 'a concrete APPLY event creates a kebab-case method';
+    ok !$proxy.^can('funds-added'), 'the proxy exposes commands rather than event methods';
+    ok !EmittingProjection.^can('funds-added'), 'projections do not gain emission methods';
+    ok !(BroadAggregate.^method_table<any>:exists), 'an untyped APPLY does not generate an Any emitter';
+    ok !(RoleOnlyAggregate.^method_table<event>:exists), 'an event role alone does not generate an emitter';
+    my $row = $entity.funds-added(:amount(5));
+    isa-ok $row, StoredEvent, 'emission returns its stored row';
+    is $row.data<tenant-id>, 3, 'an identically named identity is filled automatically';
+    is $row.data<owner-id>, 42, 'a mapped event field receives its entity ID';
+    is $row.data<label>, 'default', 'the event constructor supplies omitted defaults';
+    is $row.stream, $proxy.^stream-name, 'emission uses the loaded aggregate stream';
+    is $entity.balance, 5, 'the persisted event is applied immediately';
+    is $entity.^version, $row.version, 'the live version advances';
+    is $entity.^current-id, $row.id, 'the live cursor advances';
+    is-deeply $entity.seen.Array, [$row.id], 'APPLY receives an event attached to its row';
+    $entity.^replay;
+    is $entity.balance, 5, 'incremental replay does not apply the emitted event twice';
+    is $proxy.^load.balance, 5, 'another load reconstructs the same state';
+    lives-ok { $entity.funds-added(:amount(20), :tenant-id(3), :owner-id(42)) },
+        'identical explicit IDs are accepted and another APPLY candidate works';
+    is $entity.balance, 25, 'multiple candidates share one generated event method';
+};
+
+subtest 'identity and event validation run before persistence' => {
+    fresh-store;
+    my $entity = account().^load;
+    my $before = StoredEvent.^all.elems;
+    throws-like { $entity.funds-added(:amount(5), :tenant-id(4)) }, X::AdHoc,
+        message => /'Cannot override entity ID'/, 'same-name IDs cannot be overridden';
+    throws-like { $entity.funds-added(:amount(5), :owner-id(99)) }, X::AdHoc,
+        message => /'Cannot override entity ID'/, 'mapped IDs cannot be overridden';
+    dies-ok { $entity.funds-added(:amount<wrong>) }, 'constructor type constraints apply';
+    dies-ok { $entity.funds-added }, 'required event fields remain required';
+    throws-like { $entity.funds-added(:amount(0)) }, X::AdHoc,
+        message => /'does not match any APPLY candidate'/, 'APPLY constraints reject inadmissible events';
+    throws-like { $entity.constructor-changed-id }, X::AdHoc,
+        message => /'Event constructor changed entity ID'/, 'a custom constructor cannot replace identity';
+    is StoredEvent.^all.elems, $before, 'invalid emissions persist no rows';
+    is $entity.balance, 0, 'invalid emissions do not change state';
+    is $entity.^version, 1, 'invalid emissions do not advance the version';
+};
+
+subtest 'Capture forwarding and acronym conversion preserve constructor behavior' => {
+    fresh-store;
+    my $entity = account().^load;
+    my $positional = $entity.positional-credited(7);
+    is $positional.data<amount>, 7, 'positionals reach a custom event constructor';
+    is $positional.data<owner-id>, 42, 'identity is supplied alongside positionals';
+    $entity.http-order-recorded(:amount(2));
+    is $entity.balance, 9, 'acronyms are converted into whole kebab-case words';
+    is account().^load.balance, 9, 'replay bypasses custom new and matches live application';
+};
+
+subtest 'commands see applied state and can emit multiple consecutive versions' => {
+    fresh-store;
+    is account().deposit(:amount(5)), 5, 'a command returns updated state';
+    is account().twice, 12, 'two emissions in one command apply both changes';
+    my @rows = StoredEvent.list-events(:row, :stream(account().^stream-name));
+    is-deeply @rows.map(*.version).Array, [1, 2, 3, 4], 'every emission reserves the next stream version';
+    my $pending = account().deposit(:amount(2), :!sync);
+    is $pending.run, 14, 'deferred execution uses the same emitter';
+    is $pending.run, 14, 'a completed command still reuses its saved result';
+    my $before = StoredEvent.^all.elems;
+    throws-like { account().fail-after-apply }, X::AdHoc,
+        message => 'failure after application', 'failure after live application propagates';
+    is StoredEvent.^all.elems, $before, 'the executor rolls back the emitted event';
+    is account().^load.balance, 14, 'retry/loading reconstructs state from committed events';
+};
+
+subtest 'persistence and APPLY failures do not acknowledge unsuccessful emissions' => {
+    fresh-store;
+    my $first = account().^load;
+    my $stale = account().^load;
+    $first.funds-added(:amount(3));
+    throws-like { $stale.funds-added(:amount(4)) },
+        RedSourcing::X::OptimisticLockFailed, 'a stale emitter propagates an optimistic conflict';
+    is $stale.balance, 0, 'a failed insert does not invoke APPLY';
+    is $stale.^version, 1, 'a failed insert does not advance the live version';
+    my $before = StoredEvent.^all.elems;
+    my $cursor = $first.^current-id;
+    throws-like {
+        red-do :transaction, { $first.application-rejected }
+    }, X::AdHoc, message => 'application rejected', 'application failure propagates to the owning transaction';
+    is StoredEvent.^all.elems, $before, 'the transaction rolls back a row rejected by APPLY';
+    is $first.^version, 2, 'APPLY failure does not acknowledge a new version';
+    is $first.^current-id, $cursor, 'APPLY failure does not acknowledge a new cursor';
+};
+
+subtest 'inherited event helpers incorporate the child identity' => {
+    fresh-store;
+    my $proxy = ChildEmitter.^with-ids(:id(7), :scope-id<child>);
+    $proxy.^create;
+    my $entity = $proxy.^load;
+    my $row = $entity.inherited-added(:amount(5));
+    is $row.data<id>, 7, 'the inherited identity is preserved';
+    is $row.data<scope-id>, 'child', 'generation incorporates identity fields added by the child';
+    is $entity.total, 5, 'the inherited APPLY handles the event';
+    is $proxy.^load.total, 5, 'the child reconstructs its emitted state';
+};
+
+subtest 'composition rejects invalid mappings and ambiguous generated names' => {
+    my @cases =
+        ['BadSourceMapping', q[aggregate BadSourceMapping {
+            has Int $.id is entity-id;
+            method APPLY(FundsAdded $e) is entity-id-map(:owner-id<missing>) { }
+        }], /'Unknown entity ID'/],
+        ['BadTargetMapping', q[aggregate BadTargetMapping {
+            has Int $.id is entity-id;
+            method APPLY(FundsAdded $e) is entity-id-map(:missing<id>) { }
+        }], /'Unknown event field'/],
+        ['BadCandidateMapping', q[aggregate BadCandidateMapping {
+            has Int $.tenant-id is entity-id;
+            has Int $.account-id is entity-id;
+            multi method APPLY(FundsAdded $e where { .amount < 10 })
+                is entity-id-map(:owner-id<account-id>) { }
+            multi method APPLY(FundsAdded $e where { .amount >= 10 })
+                is entity-id-map(:owner-id<tenant-id>) { }
+        }], /'Conflicting entity-id-map'/],
+        ['BadExistingName', q[aggregate BadExistingName {
+            method APPLY(HTTPOrderRecorded $e) { }
+            method http-order-recorded { }
+        }], /'conflicts with an existing method'/],
+        ['BadEventName', q[class A::SameEvent does Event { }; class B::SameEvent does Event { };
+            aggregate BadEventName {
+                multi method APPLY(A::SameEvent $e) { }
+                multi method APPLY(B::SameEvent $e) { }
+            }
+        ], /'conflicts with an existing method'/],
+        ['BadTraitMethod', q[class BadTraitMethod {
+            method other is entity-id-map(:a<b>) { }
+        }], /'only supported on APPLY'/],
+        ['BadTraitValue', q[class BadTraitValue {
+            method APPLY($e) is entity-id-map(:a(42)) { }
+        }], /'requires event-field'/];
+    for @cases -> ($name, $source, $message) {
+        throws-like { EVAL 'use RedSourcing; use RedSourcing::Traits; ' ~ $source },
+            Exception, :$message, "$name fails explicitly";
+    }
+};
+
+done-testing;

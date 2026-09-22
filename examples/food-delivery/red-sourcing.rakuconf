@@ -1,0 +1,24 @@
+use RedSourcing::Config;
+
+# Paths are relative to this configuration, including when selected with -f.
+config {
+    .flow-tracing = True;
+    .driver = 'SQLite';
+    .database = 'food-delivery.db';
+    .includes = <.>;
+    .modules = <Restaurant DeliveryOrder CustomerOrders RestaurantBoard DeliveryTotals>;
+
+    .monitor: {
+        .host = '127.0.0.1';
+        .port = 3001;
+        .minutes = 60;
+        .app-url = '';
+        # Opening a new store does not create tables; run init explicitly.
+        .allow-new-store = True;
+    }
+    .worker: {
+        .limit = 100;
+        .interval = 1;
+        .watch = False;
+    }
+}

@@ -1,0 +1,166 @@
+name: test
+
+on:
+  push:
+    branches:
+      - '*'
+    tags-ignore:
+      - '*'
+  pull_request:
+
+jobs:
+  raku:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        raku-version:
+          - 'latest'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Raku/setup-raku@v1
+        with:
+          raku-version: ${{ matrix.raku-version }}
+      - name: Install native libraries on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev libsqlite3-dev libssl-dev uuid-dev
+      - name: Install and expose native libraries on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install libpq sqlite openssl@3
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix libpq)/lib:$(brew --prefix sqlite)/lib:$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
+      - name: Expose native libraries on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:PGBIN/libpq.dll")) {
+            throw "The runner's PostgreSQL client library was not found in PGBIN"
+          }
+          $nativeDir = Join-Path $env:RUNNER_TEMP 'redsourcing-native'
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          # Zef checks pq:from<native>; PostgreSQL ships the name libpq.dll.
+          Copy-Item "$env:PGBIN/libpq.dll" "$nativeDir/pq.dll"
+          $sqliteZip = Join-Path $env:RUNNER_TEMP 'sqlite-dll.zip'
+          Invoke-WebRequest -Uri 'https://www.sqlite.org/2025/sqlite-dll-win-x64-3500400.zip' -OutFile $sqliteZip
+          if ((Get-FileHash -Path $sqliteZip -Algorithm SHA256).Hash -ne '56b8751cdbf6dcd8ac9a35508039e456692a402bc5ddf576c2b0eddb0fed8536') {
+            throw 'Unexpected SQLite DLL archive checksum'
+          }
+          Expand-Archive -Path $sqliteZip -DestinationPath $nativeDir -Force
+          $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $nativeDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify native database libraries
+        shell: bash
+        run: |
+          raku -e 'use NativeCall; sub PQlibVersion(--> int32) is native("pq", v5) { * }; say "libpq: " ~ PQlibVersion()'
+          raku -e 'use NativeCall; sub sqlite3_libversion(--> Str) is native("sqlite3") { * }; say "SQLite: " ~ sqlite3_libversion()'
+      - name: Install Dependencies
+        run: zef install --/test --test-depends --deps-only .
+      - name: Install App::Prove6
+        run: zef install --/test App::Prove6
+      - name: Run Tests
+        run: prove6 --exec="raku -Ilib" t
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Raku/setup-raku@v1
+        with:
+          raku-version: '2026.09'
+      - name: Install native libraries
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev libsqlite3-dev libssl-dev uuid-dev
+      - name: Install dependencies and coverage tools
+        run: |
+          zef install --/test --test-depends --deps-only .
+          zef install --/test App::Prove6 'App::RaCoCo:ver<2.0.1>'
+      - name: Prevent coverage regressions
+        run: raku -I. xt/coverage.rakutest
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .racoco/
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: hearth_test
+          POSTGRES_USER: estate_test
+          POSTGRES_PASSWORD: estate-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U estate_test -d hearth_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: estate_test
+      PGPASSWORD: estate-test
+      RED_SOURCING_TEST_PG_DATABASE: hearth_test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Raku/setup-raku@v1
+        with:
+          raku-version: '2026.09'
+      - name: Install native libraries
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev libsqlite3-dev libssl-dev uuid-dev
+      - name: Install dependencies
+        run: zef install --/test --test-depends --deps-only . && zef install --/test DB::Pg
+      - name: Check CLI database selection
+        run: |
+          raku -Ilib bin/red-sourcing.raku init --driver=Pg --database=hearth_test
+          raku -Ilib bin/red-sourcing.raku streams --driver=Pg --database=hearth_test --json
+      - name: Run real-estate PostgreSQL workflows
+        run: raku -Ilib t/14-real-estate-example.rakutest
+      - name: Run PostgreSQL saga controller checks
+        run: raku -Ilib t/43-saga-controller.rakutest
+      - name: Run concurrent PostgreSQL command checks
+        run: raku -Ilib t/45-command-conflicts-pg.rakutest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the shared runtime image
+        run: docker build -t redsourcing:local .
+      - name: Validate every example stack
+        run: |
+          for file in examples/*/compose.yaml; do
+            docker compose -f "$file" config --quiet
+          done
+      - name: Run the SQLite walkthroughs through their actual Compose arguments
+        run: |
+          for example in counter bank shopping-cart food-delivery order-saga simple-flow; do
+            docker compose -p "rs-ci-$example" -f "examples/$example/compose.yaml" run --rm demo
+          done
+      - name: Check the standalone SQLite monitor
+        run: |
+          docker compose -p rs-ci-simple-flow -f examples/simple-flow/compose.yaml up -d
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://127.0.0.1:3001/monitor/flow -o /tmp/simple-flow.html
+      - name: Check the PostgreSQL app and independent monitor
+        env:
+          APP_PORT: 33110
+          MONITOR_PORT: 33111
+        run: |
+          docker compose -p rs-ci-estate -f examples/real-estate/compose.yaml up -d --wait --wait-timeout 360
+          curl --fail http://127.0.0.1:33110/ -o /tmp/hearth.html
+          for asset in app.css live.js vendor/htmx-4.0.0.min.js; do
+            curl --fail "http://127.0.0.1:33110/assets/$asset" -o /dev/null
+          done
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://127.0.0.1:33111/monitor/flow -o /tmp/hearth-flow.html
+      - name: Show stack logs on failure
+        if: failure()
+        run: |
+          docker compose -p rs-ci-simple-flow -f examples/simple-flow/compose.yaml logs
+          docker compose -p rs-ci-estate -f examples/real-estate/compose.yaml logs
