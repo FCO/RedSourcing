@@ -1,0 +1,81 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Web::Operations;
+use JSON::Fast;
+
+my $repo = $*CWD;
+my $tmp = tempdir.IO;
+my $file = $tmp.add('red-sourcing.rakuconf');
+$file.spurt(q:to/CONFIG/);
+    use RedSourcing::Config;
+    config {
+        .driver = 'SQLite';
+        .database = 'events.db';
+        .auto-snapshot = False;
+        .entities = {
+            'SnapshotDomain::DefaultBatch' => { retained => True, auto-snapshot => { :2count } },
+            'SnapshotDomain::Batch' => { auto-snapshot => False },
+        };
+    }
+    CONFIG
+sub execute(Str $code) {
+    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('t/lib')}",
+        '-e', $code, :cwd($tmp), :out, :err;
+    %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
+}
+subtest 'file False remains explicit and native bootstrap applies flags and complete policies' => {
+    my %r = execute(q:to/CODE/);
+        use RedSourcing;
+        use SnapshotDomain;
+        my $settings = red-sourcing-defaults;
+        say $settings.auto-snapshot === False;
+        say DefaultBatch.^lifecycle;
+        say DefaultBatch.^auto-snapshot<count>;
+        say Batch.^auto-snapshot.defined;
+        my $p = DefaultBatch.^with-ids(:id(1)); $p.^create; $p.add(:n(2));
+        say StoredEvent.^all.grep(*.class eq DefaultBatch.^name).elems;
+        CODE
+    is %r<code>, 0, 'native startup succeeds';
+    is %r<err>, '', 'no diagnostics';
+    is %r<out>, "True\nRetained\n2\nFalse\n2\n", 'file choices govern declaration and runtime';
+};
+subtest 'web operation subprocesses preserve global False and per-type policy' => {
+    my %loaded = load-config(:$file);
+    my $ops = RedSourcing::Web::Operations.new(:directory($tmp),
+        :settings(%loaded<settings>.clone(:database($tmp.add('events.db').Str),
+            :includes([$repo.add('t/lib').Str]), :modules(['SnapshotDomain']))));
+    LEAVE $ops.close;
+    my %job = $ops.submit('command', :positionals(['SnapshotDomain::DefaultBatch', 'policy']),
+        :options{ identity => ['id=1'], json => True });
+    my $deadline = now + 60;
+    repeat {
+        await Promise.in(0.05);
+        %job = $ops.job(%job<id>);
+    } while %job<state> eq 'running' && now < $deadline;
+    is %job<state>, 'succeeded', 'CLI job finishes';
+    diag %job.raku unless %job<state> eq 'succeeded';
+    is %job<stderr>, '', 'subprocess has no diagnostics';
+    is-deeply (%job<stdout>.chars ?? from-json(%job<stdout>) !! {}), { count => 2 },
+        'operation sees the configured policy';
+};
+subtest 'omission inherits the built-in default; global Nil can disable an undeclared type' => {
+    my $disabled = $tmp.add('disabled.rakuconf');
+    $disabled.spurt('use RedSourcing::Config; config { .driver = "SQLite"; .database = ":memory:"; .auto-snapshot = Nil }');
+    my %r = execute('use RedSourcing; use SnapshotDomain; red-sourcing-defaults(:file(' ~ $disabled.Str.raku
+        ~ ')); say DefaultBatch.^auto-snapshot.defined; say Batch.^auto-snapshot<count>;');
+    is %r<code>, 0, 'disabled global policy loads';
+    is %r<out>, "False\n2\n", 'explicit declaration overrides global Nil';
+    is-deeply Settings.new.auto-snapshot.Hash, { count => 100 }, 'omission inherits the default';
+};
+subtest 'invalid policies and conflicting lifecycle flags fail when reading configuration' => {
+    for '.auto-snapshot = { :0count }', '.auto-snapshot = { seconds => Inf }',
+        '.entities = { "App::T" => { retained => "yes" } }',
+        '.entities = { "App::T" => { retained => True, lifecycle => "OnDemand" } }' -> $setting {
+        my $bad = $tmp.add('bad.rakuconf');
+        $bad.spurt('use RedSourcing::Config; config { ' ~ $setting ~ ' }');
+        dies-ok { load-config(:file($bad)) }, 'invalid startup setting is rejected';
+    }
+};
+done-testing;

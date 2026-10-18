@@ -127,6 +127,13 @@ jobs:
         run: raku -Ilib t/43-saga-controller.rakutest
       - name: Run concurrent PostgreSQL command checks
         run: raku -Ilib t/45-command-conflicts-pg.rakutest
+      - name: Run concurrent transactional projection checks
+        run: raku -Ilib t/47-transactional-projections-pg.rakutest
+      - name: Run PostgreSQL journal savepoint and index checks
+        run: |
+          raku -Ilib t/34-postgres-json.rakutest
+          raku -Ilib t/52-journal-savepoints.rakutest
+          raku -Ilib t/53-storage-indexes.rakutest
 
   docker:
     runs-on: ubuntu-latest

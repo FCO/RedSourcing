@@ -1,5 +1,56 @@
 # Sagas
 
+## Sequence: durable intent, external effect and recovery
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Aggregate command
+    participant J as Journal
+    participant C as External saga controller
+    participant S as Saga
+    participant E as Service adapter
+    A->>J: Commit source domain event
+    C->>S: advance
+    S->>J: Read matching source events after its cursor
+    S->>S: APPLY domain state, REACT plans action and compensation name
+    S->>J: Commit state, source cursor and pending action
+    C->>J: Commit running claim with stable action key
+    opt Automatic snapshot is due
+        S->>J: Checkpoint action, timers and compensation stack in claim<br/>transaction
+    end
+    C->>E: Execute outside the claim transaction
+    alt Confirmed success
+        E-->>C: Result
+        C->>S: APPLY and REACT StepSucceeded
+        S->>J: Commit result and push inverse invocation
+    else Definite retryable failure with attempts remaining
+        E-->>C: Retryable failure
+        S->>J: Commit retry state and next due time
+        C->>E: Retry on a later advance
+    else Unknown outcome
+        S->>J: Persist blocked action for reconciliation
+    end
+    Note over S,E: A crash after acceptance but<br/>before acknowledgement<br/>leaves a running action
+    C->>S: load after restart
+    S->>J: Restore snapshot and later committed controls
+    S-->>C: State only, no REACT or external request
+    C->>S: advance recovered running action
+    C->>E: Reconcile or repeat using the same idempotency key
+    opt Workflow must compensate
+        S->>J: Persist compensating state
+        loop Inverse operations in reverse success order
+            C->>E: Execute inverse with arguments selected from saved result
+            S->>J: Commit inverse outcome before popping its stack entry
+        end
+    end
+```
+
+Child aggregate commands use a persisted command row and reuse its completed
+result on recovery. External providers need idempotency/reconciliation across the
+acceptance/acknowledgement boundary. See [automatic snapshots](auto-snapshot.md)
+and [the order example](../examples/order-saga/README.md).
+
 A `saga` consumes domain events across streams and coordinates aggregate commands
 and external services. Its own stream stores control events, domain state,
 source cursor, action descriptors, compensation invocations and named deadlines.

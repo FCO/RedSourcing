@@ -5,6 +5,9 @@ use RedSourcing::C;
 use RedSourcing::Utils;
 use RedSourcing::Event;
 use RedSourcing::Command;
+use RedSourcing::Projection;
+use RedSourcing::Lifecycle;
+use RedSourcing::Declaration;
 use RedSourcing::Traits;
 use RedSourcing::StoredCommand;
 use RedSourcing::X::OptimisticLockFailed;
@@ -27,11 +30,16 @@ my package EXPORTHOW {
 }
 
 sub EXPORT {
-	Map(
+	install-entity-declarations();
+	my $exports = Map(
 		Red.exports([]),
 		RedSourcing::Traits::EXPORT::ALL::,
 		RedSourcing::Utils::EXPORT::ALL::,
 		RedSourcing::Saga::EXPORT::ALL::,
+		'ProjectionLifecycle' => ProjectionLifecycle,
+		'EntityLifecycle' => EntityLifecycle,
+		'OnDemand' => OnDemand,
+		'Retained' => Retained,
 		'&config' => &config,
 		'&red-sourcing-defaults' => &red-sourcing-defaults,
 		'&enable-flow-tracing' => &enable-flow-tracing,
@@ -44,7 +52,8 @@ sub EXPORT {
 		# Preserve the merged dispatchers for Red and the event-store candidates.
 		'&trait_mod:<is>' => &trait_mod:<is>,
 		'&infix:<eqv>' => &infix:<eqv>,
-	)
+	);
+	$exports
 }
 
 =begin pod
@@ -88,6 +97,25 @@ C<use RedSourcing> imports C<aggregate>, C<projection>, C<saga>, the C<Event> an
 C<Command> roles, C<is entity-id>, C<is entity-id-map>, C<is command>, storage aliases
 C<StoredEvent>/C<StoredCommand>, saga helpers, configuration and Red database/schema
 helpers. Import Red separately when declaring custom Red models or experimentals.
+
+C<is transactional> marks projection C<APPLY> candidates that trigger an ordered
+advance and checkpoint of the whole projection in the event's transaction.
+Equalities infer target IDs without a mapping. C<EntityLifecycle> exposes
+C<OnDemand> and C<Retained> for aggregates, projections and sagas. Declare
+C<aggregate Account[:retained] { ... }>, C<projection MyView[:retained] { ... }> or
+C<saga Workflow[:retained] { ... }> to reuse loaded instances. Configuration
+C<entities> entries override declaration defaults on the selected connection/pool.
+Their state is published after outer commit. All proxies support C<.^release>;
+projections and sagas also support C<.^advance>. See C<docs/lifecycle.md> and
+C<docs/projections.md> for supported predicates and concurrency boundaries.
+
+All entity kinds automatically snapshot after 100 applied records by default.
+Use C<:auto-snapshot{ :100count, :300seconds }> in declaration brackets to choose
+count/time limits, or C<:!auto-snapshot> (also C<:auto-snapshot(Nil)>) to disable
+optional snapshots.
+Configuration C<auto-snapshot> sets a global policy and C<entities> overrides
+policies by full class name. Plain loading never writes a snapshot or runs effects.
+See C<docs/auto-snapshot.md> for operation boundaries and required checkpoints.
 
 Aggregates replay their own stream from a required initial snapshot. Projections
 select domain events across streams using SQL-translatable C<APPLY> signatures

@@ -7,6 +7,7 @@ use RedSourcing::Web::Operations;
 use RedSourcing::Web::Console;
 use RedSourcing::Config;
 use RedSourcing::Flow;
+use RedSourcing::Lifecycle;
 use Cro::HTTP::Router;
 unit module RedSourcing::Web::Monitor;
 
@@ -25,6 +26,7 @@ sub run-monitor(Str :$driver = 'SQLite', Str :$database!, Str :$host = '127.0.0.
     my $uninitialized = $allow-new-store && $driver eq 'SQLite' && !$database.IO.f;
     my $connected = !$uninitialized;
     red-defaults :default(store-driver($driver, $database, :%connection)) if $connected;
+    configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot)) if $connected;
     my $inspector = RedSourcing::Inspector.new(:stored-only);
     my $lock = Lock.new;
     my $changes = Supplier.new;
@@ -40,6 +42,7 @@ sub run-monitor(Str :$driver = 'SQLite', Str :$database!, Str :$host = '127.0.0.
         return 'uninitialized' if $uninitialized && !$database.IO.f;
         unless $connected {
             red-defaults :default(store-driver($driver, $database, :%connection));
+            configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot));
             $connected = True;
         }
         if $allow-new-store {

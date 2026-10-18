@@ -448,11 +448,12 @@ subtest 'policy, target and timeout validation fail before persisting an intent'
 };
 
 subtest 'normalized aggregate arguments freeze aliases and defaults across retries' => {
+    my $*REDSOURCING-NOW = DateTime.new('2026-01-01T00:00:00Z');
     fresh; my $p = proxy(); my $s = $p.^load;
     my $id = $s.^command(SagaInventory, 'defaulted', \(), :retry{:2max,:1delay});
     is $defaults, 1, 'defaults are evaluated when planning';
     is $s.^state<actions>.head<args><named><value>, 1, 'the canonical default is persisted';
-    my $now = DateTime.now.later(:seconds(1));
+    my $now = $*REDSOURCING-NOW.later(:seconds(1));
     advance($p, $now);
     $s = advance($p, $now.later(:seconds(1)));
     is $s.^state<actions>.head<result>, 1, 'a retry retains the first default value';

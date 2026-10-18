@@ -22,6 +22,9 @@ includes a CLI and an independent **Cro / HTMX 4** web monitor.
 
 ## Install and run
 
+RedSourcing requires **Red 0.2.7 or newer**, including its savepoint and declarative
+index support.
+
 From a checkout, install the distribution and its dependencies:
 
 ```sh
@@ -219,6 +222,25 @@ or own/emit domain events: load them and call ordinary query methods, such as
 `$projection-proxy.^load.summary`. Sagas call aggregate commands to change domain
 state; their native control events are managed by the runtime.
 
+Use `is transactional` on a projection's `APPLY` candidate to advance and
+checkpoint the whole projection in the emitting command's transaction. Target
+IDs are inferred from equalities such as `.account-id eq $!id`; no mapping is
+needed. Pending events handled by other candidates are applied first, in journal
+order. `.^advance` catches up a projection explicitly. Declare
+`projection MyView[:retained] { ... }` to keep loaded
+instances in memory; matching instances receive committed state after the outer
+transaction completes. See [projections and transactional updates](docs/projections.md)
+for routing limits, lifecycle, rollback and cross-stream ordering.
+
+Lifecycle also applies to aggregates and sagas: declare
+`aggregate Account[:retained] { ... }` or `saga PurchaseWorkflow[:retained] { ... }`.
+`EntityLifecycle` exposes `OnDemand` (the default) and `Retained`. Override a type
+in configuration with `.entities = { 'App::Account' => { retained => True } }`.
+These settings apply to the selected connection/pool before first use. Retained
+aggregates fold new events before commands; sagas restore passively and keep their
+explicit advance/controller behavior. See [entity lifecycle](docs/lifecycle.md)
+for configuration precedence, commit publication and release.
+
 Events expose `.emitted-at`, the journal's recorded timestamp, and `.StoredEvent`
 for their storage metadata. [The library API](docs/api.md) covers low-level
 emission, identity maps, filters, command scheduling and snapshot semantics.
@@ -358,6 +380,23 @@ by default and can be shown when needed. Enable
 `.flow-tracing = True` in shared configuration, or call `enable-flow-tracing`
 after selecting a database. [The flow guide](docs/flows.md) covers recording and
 the limits of historical data.
+
+## Automatic snapshots
+
+Aggregates, projections and sagas checkpoint after 100 applied records by default.
+Configure retention and snapshot frequency independently on the declaration:
+
+```raku
+saga PurchaseWorkflow[:retained, :auto-snapshot{ :100count, :300seconds }] { ... }
+aggregate Account[:!auto-snapshot] { ... }
+```
+
+`count` and `seconds` use OR and are checked at successful operation boundaries.
+A plain load never writes a snapshot or executes saga effects. Configuration can
+set `.auto-snapshot` globally and override `retained`/`auto-snapshot` by class in
+`.entities`; `False` or `Nil` disables optional snapshots. Initial aggregate snapshots
+and transactional projection checkpoints remain required. See
+[automatic snapshots](docs/auto-snapshot.md) for policies and transaction behavior.
 
 ## Examples
 

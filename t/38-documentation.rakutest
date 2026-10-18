@@ -4,28 +4,42 @@ use File::Temp;
 my $repo = $?FILE.IO.parent.parent.absolute.IO;
 my $tmp = tempdir.IO;
 my $readme = $repo.add('README.md').slurp;
-sub raku-block(Str $section) {
-    my $start = $section.index("```raku\n");
-    die 'Missing Raku documentation block' unless $start.defined;
-    my $body = $section.substr($start + "```raku\n".chars);
-    $body.substr(0, $body.index("\n```"))
+sub readme-section(Str $heading) {
+    my $marker = "## $heading\n";
+    my $start = $readme.index($marker);
+    die "Missing README section '$heading'; preserve the maintained README with [ReadmeFromPod] enabled = false in dist.ini"
+        unless $start.defined;
+    my $body = $readme.substr($start + $marker.chars);
+    my $end = $body.index("\n## ");
+    $end.defined ?? $body.substr(0, $end) !! $body
 }
-sub execute(Str $code, *@args) {
-    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", '-e', $code, |@args, :cwd($tmp), :out, :err;
+sub fenced-block(Str $section, Str $language) {
+    my $fence = "```$language\n";
+    my $start = $section.index($fence);
+    die "Missing $language documentation block" unless $start.defined;
+    my $body = $section.substr($start + $fence.chars);
+    my $end = $body.index("\n```");
+    die "Unterminated $language documentation block" unless $end.defined;
+    $body.substr(0, $end)
+}
+sub raku-block(Str $section) { fenced-block($section, 'raku') }
+sub execute(Str $code, IO::Path :$directory = tempdir.IO, *@args) {
+    my $p = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", '-e', $code, |@args, :cwd($directory), :out, :err;
     %(code => $p.exitcode || $p.signal, out => $p.out.slurp(:close), err => $p.err.slurp(:close))
 }
 subtest 'the README quick start runs as printed' => {
-    my $section = $readme.split('## Quick start', 2).tail;
+    my $section = readme-section('Quick start');
     my %result = execute(raku-block($section));
     is %result<code>, 0, 'complete inline program compiles and runs';
     is %result<err>, '', 'no missing imports or API diagnostics';
     is %result<out>, "2\nPending\n5\n5\n5\n", 'documented command and projection results agree';
 };
 subtest 'the README configuration is usable by application code' => {
-    my $section = $readme.split('## Application configuration', 2).tail;
-    my $file = $tmp.add('red-sourcing.rakuconf');
+    my $section = readme-section('Application configuration');
+    my $directory = tempdir.IO;
+    my $file = $directory.add('red-sourcing.rakuconf');
     $file.spurt(raku-block($section));
-    my %result = execute(q:to/CODE/);
+    my %result = execute(q:to/CODE/, :$directory);
         use RedSourcing;
         my $settings = red-sourcing-defaults;
         say $settings.driver;
@@ -36,11 +50,10 @@ subtest 'the README configuration is usable by application code' => {
     is %result<out>, "SQLite\n0\n", 'file config selects the store and initializes its schema';
 };
 subtest 'the documented CLI counter flow works in an isolated store' => {
-    my $start = $readme.index('A complete counter flow');
-    my $section = $readme.substr($start);
-    my $fence = $section.index("```sh\n");
-    my $body = $section.substr($fence + "```sh\n".chars);
-    $body = $body.substr(0, $body.index("\n```"));
+    my $section = readme-section('CLI');
+    my $start = $section.index('A complete counter flow');
+    die 'Missing README counter CLI flow' unless $start.defined;
+    my $body = fenced-block($section.substr($start), 'sh');
     my $database = $tmp.add('cli-counter.db');
     for $body.lines -> $line {
         my @args = $line.words.skip(3).map(-> $arg {

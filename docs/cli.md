@@ -468,6 +468,19 @@ return their stored result. A failed command reports its persisted error.
 The worker executes queued commands; it does not discover or advance sagas.
 An application controller must advance the relevant saga instances.
 
+`advance-sagas` is the CLI controller for every persisted running or compensating
+saga in the selected store. Import its domain and service modules through configuration
+or `-I`/`-M`; entity lifecycle overrides are applied before these types are used.
+`--limit` bounds actions per saga; `--now=ISO-DATETIME` fixes the evaluation time.
+One-shot mode reports each status/error, continues after an isolated failure, and
+exits nonzero if any saga failed. `--watch --interval=2` repeats passes until Ctrl-C;
+`--json` prints one report per pass.
+
+```sh
+red-sourcing advance-sagas -f=red-sourcing.rakuconf --limit=50
+red-sourcing advance-sagas -M=MyApp::Domain -M=MyApp::Services --watch --interval=2
+```
+
 `advance --now=ISO-DATETIME` supplies the evaluation time for due saga work;
 `--limit` bounds action processing in a pass, following the saga API. Modules
 registering service adapters must be imported explicitly. External effects use

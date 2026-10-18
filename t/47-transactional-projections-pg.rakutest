@@ -1,0 +1,102 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use lib $?FILE.IO.parent.add('lib').Str;
+use TransactionalDomain;
+
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+unless $database.defined {
+    skip 'Set RED_SOURCING_TEST_PG_DATABASE for independent transactional projection writers';
+    done-testing;
+    exit;
+}
+die 'Use a simple PostgreSQL test database name' unless $database ~~ /^ <[\w\-]>+ $/;
+require ::('DB::Pg'); require ::('RedSourcing::PgJSON');
+my $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+my $schema = 'rs_projection_order_' ~ $*PID;
+$admin.execute("CREATE SCHEMA $schema");
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE");
+my $pool = ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+    :converters(<DateTime UUID Geometric>));
+my $*RED-DB = (database 'Pg', :dbh($pool)) but ::('RedSourcing::PgJSON');
+schema(StoredEvent, StoredCommand).create;
+
+my $directory = tempdir.IO;
+my $script = $directory.add('worker.raku');
+$script.spurt(q:to/WORKER/);
+use RedSourcing;
+use TransactionalDomain;
+use DB::Pg;
+use RedSourcing::PgJSON;
+my ($database, $schema, $id, $sequence, $automatic, $barrier, $application) = @*ARGS;
+my $pool = DB::Pg.new(:conninfo("dbname=$database application_name=$application options='-csearch_path=$schema -cclient_min_messages=warning'"),
+    :converters(<DateTime UUID Geometric>));
+my $*RED-DB = (database 'Pg', :dbh($pool)) but RedSourcing::PgJSON;
+($barrier ~ '.attempt').IO.spurt('attempt') if $barrier.chars && $sequence == 2;
+say JournalOrderSource.^with-ids(:source-id($id)).record(:sequence($sequence.Int),
+    :automatic($automatic eq 'yes'), :barrier($sequence == 1 ?? $barrier !! ''));
+WORKER
+
+sub spawn(Str $id, Int $sequence, Bool $automatic, Str $barrier, Str $application) {
+    my $process = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-It/lib', $script.Str,
+        $database, $schema, $id, $sequence.Str, ($automatic ?? 'yes' !! 'no'), $barrier, $application);
+    my ($out, $err) = '', '';
+    $process.stdout.tap(-> $chunk { $out ~= $chunk });
+    $process.stderr.tap(-> $chunk { $err ~= $chunk });
+    my $finished = $process.start;
+    %( :$process, :$finished, output => -> { $out }, errors => -> { $err } )
+}
+sub wait-until(&condition, @workers) {
+    my $deadline = now + 40;
+    until condition() {
+        for @workers -> %worker {
+            die "Writer exited before its barrier (exit { %worker<finished>.result.exitcode }): output={%worker<output>()}; errors={%worker<errors>()}"
+                if %worker<finished>.status !~~ Planned;
+        }
+        die 'Timed out waiting for a writer barrier' if now > $deadline;
+        await Promise.in(0.02);
+    }
+}
+
+for False, True -> $first-triggers {
+    subtest ($first-triggers ?? 'earlier transactional trigger' !! 'earlier unannotated event') => {
+        my $prefix = $first-triggers ?? 'trigger' !! 'ordinary';
+        my $first = JournalOrderSource.^with-ids(:source-id("{$prefix}-a"));
+        my $second = JournalOrderSource.^with-ids(:source-id("{$prefix}-b"));
+        $first.^create; $second.^create;
+        my $barrier-a = $directory.add("{$prefix}-a").Str;
+        my $barrier-b = $directory.add("{$prefix}-b").Str;
+        my %a = spawn("{$prefix}-a", 1, $first-triggers, $barrier-a, "rs_{$*PID}_{$prefix}_a");
+        LEAVE %a<process>.kill if %a<finished>.defined && %a<finished>.status ~~ Planned;
+        wait-until({ ($barrier-a ~ '.ready').IO.e }, [%a.item]);
+        my $a-id = ($barrier-a ~ '.ready').IO.slurp.Int;
+        my $application-b = "rs_{$*PID}_{$prefix}_b";
+        my %b = spawn("{$prefix}-b", 2, True, $barrier-b, $application-b);
+        LEAVE %b<process>.kill if %b<finished>.defined && %b<finished>.status ~~ Planned;
+        wait-until({ ($barrier-b ~ '.attempt').IO.e }, [%a.item, %b.item]);
+        wait-until({
+            $admin.query(q:to/SQL/, $application-b).value > 0
+                SELECT COUNT(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                WHERE l.locktype = 'advisory' AND NOT l.granted AND a.application_name = $1
+                SQL
+        }, [%a.item, %b.item]);
+        pass 'independent writer waits on the append gate before reserving an event ID';
+        nok StoredEvent.^all.grep(*.id == $a-id).head.defined, 'first writer remains uncommitted';
+        nok StoredEvent.^all.grep(*.stream eq $second.^stream-name).grep(*.class eq JournalOrderFact.^name).head.defined,
+            'second stream cannot append ahead of the earlier writer';
+        ($barrier-a ~ '.resume').IO.spurt('resume');
+        await Promise.anyof(Promise.allof(%a<finished>, %b<finished>), Promise.in(40));
+        die 'Writers did not finish after releasing the gate' if %a<finished>.status ~~ Planned || %b<finished>.status ~~ Planned;
+        is (await %a<finished>).exitcode, 0, 'first writer commits';
+        is (await %b<finished>).exitcode, 0, 'second writer commits after the first';
+        is %a<errors>(), '', 'first writer has no transaction diagnostics';
+        is %b<errors>(), '', 'second writer has no transaction diagnostics';
+        my $last = StoredEvent.^all.grep(*.class eq JournalOrderProjection.^name).sort(*.id).tail;
+        is-deeply $last.data<seen>.Array, $first-triggers ?? [1, 2, 1, 2] !! [1, 2],
+            'latest checkpoint contains both streams in committed journal order';
+        my $b-row = StoredEvent.^all.grep(*.stream eq $second.^stream-name).grep(*.class eq JournalOrderFact.^name).head;
+        cmp-ok $b-row.id, '>', $a-id, 'the later writer allocates its event ID after the earlier writer';
+        is $last.replay-cursor, $b-row.id, 'cursor includes both writers without skipping the earlier event';
+    };
+}
+done-testing;

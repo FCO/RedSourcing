@@ -111,8 +111,9 @@ types that *could* match a signature. A projection the application never loads
 does not appear as a proven consumer. Observation metadata contains type, kind
 and IDs; it is not a checkpoint or current domain state.
 Queued child commands can execute after their parent commits. Synchronous nesting
-still follows Red's existing transaction limitations; tracing does not add
-savepoints or change that execution policy.
+still propagates conflicts to the transaction owner for batch-level retry.
+Explicit Red savepoints also roll back their provisional telemetry; tracing
+does not change command execution policy.
 
 ## Limits
 

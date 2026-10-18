@@ -26,6 +26,47 @@ raku -I../../lib -Ilib repl.raku
 The tutorial also explains how to use [red-sourcing.rakuconf](red-sourcing.rakuconf)
 and view this REPL session in the standalone web monitor.
 
+## Sequence: the REPL walkthrough
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor REPL
+    participant O as Order
+    participant J as Journal
+    participant C as Confirmation saga
+    participant X as Saga controller
+    participant P as OrderCard
+    REPL->>O: create
+    O->>J: Initial Order snapshot
+    REPL->>C: create with the same order-id
+    C->>J: Initial saga snapshot
+    REPL->>O: place asynchronously
+    O->>J: Persist pending place command
+    REPL->>J: Inspect pending command and unchanged history
+    REPL->>O: Run pending command
+    O->>J: Append OrderPlaced and commit saved result
+    REPL->>P: load
+    P->>J: Select this order's facts
+    P-->>REPL: status placed
+    REPL->>X: advance Confirmation with limit 0
+    X->>J: Read OrderPlaced after the saga cursor
+    X->>C: REACT plans confirm-order
+    C->>J: Persist action intent and source cursor
+    REPL->>X: advance again
+    X->>J: Persist running claim and child command row
+    X->>O: Execute confirm
+    O->>J: Append OrderConfirmed and save child result
+    X->>C: APPLY and REACT StepSucceeded
+    C->>J: Persist confirmed state and completed status
+    REPL->>P: load again
+    P->>J: Restore optional checkpoint and fold matching facts
+    P-->>REPL: status confirmed
+    REPL->>C: load
+    C-->>REPL: Completed state, without another confirm command
+    Note over C,J: Optional snapshots preserve<br/>pending actions and the<br/>source cursor
+```
+
 ## Docker stack
 
 From the repository root:

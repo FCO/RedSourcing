@@ -6,9 +6,21 @@ test databases.
 
 ## Unit and integration suite
 
+`t/48-entity-lifecycle.rakutest` covers retained aggregates and sagas, freshness,
+commit/rollback publication, timers, retries, release and store-scoped overrides.
+`t/49-lifecycle-config.rakutest` covers native configuration, late modules,
+CLI/monitor forwarding and the `advance-sagas` CLI controller.
+
+`t/52-journal-savepoints.rakutest` covers explicit nested Red transactions,
+rollback of provisional callbacks and retained state, manual guards, projection
+cursors and automatic snapshots. `t/53-storage-indexes.rakutest` covers new and
+existing stores, idempotent initialization and legacy tracing index migration.
+Both accept `RED_SOURCING_TEST_PG_DATABASE` to repeat the checks on PostgreSQL.
+The JSON checks in `t/34-postgres-json.rakutest` use Red's native translator and
+also execute against PostgreSQL when that variable is set.
+
 ```sh
 zef install --test-depends --deps-only .
-zef install App::Prove6 'App::RaCoCo:ver<2.0.1>'
 prove6 --exec='raku -Ilib' t
 ```
 
@@ -144,7 +156,12 @@ existing Chromium executable. Browser checks do not replace the Raku suite.
 ## Documentation and examples
 
 The README is maintained as Markdown; distribution generation must not overwrite
-it from the shorter module POD. The POD points to the public guides. Runnable
+it from the shorter module POD. `dist.ini` disables `ReadmeFromPod`, including
+the build that `mi6 test` performs before running tests. `mi6 test t` runs the
+regular suite; plain `mi6 test` also includes `xt/coverage.rakutest`, which runs
+the suite again with coverage instrumentation. Install the declared test
+dependencies first; these include App::Prove6 and App::RaCoCo 2.0.1.
+The POD points to the public guides. Runnable
 snippets and local Markdown links are checked alongside the published examples.
 `t/42-repl-tutorial.rakutest` executes the [simple flow tutorial](tutorials/simple-flow.md)
 in Raku's process REPL, checks each documented stage and resumes a pending saga
@@ -161,3 +178,8 @@ Run a specific demo using the command in its README. In-memory demonstrations
 and persistent CLI stores are separate unless the example explicitly shares its
 configured store. Do not infer multi-process safety from an in-memory test; the
 [roadmap](next-steps.md) records the remaining validation work.
+
+Automatic snapshot regression coverage is in `t/50-auto-snapshot.rakutest`
+and `t/51-auto-snapshot-config.rakutest`: count/time thresholds, explicit Nil,
+batch boundaries, restoration, optimistic conflicts, rollback, saga acknowledgement
+recovery and CLI/web configuration forwarding.

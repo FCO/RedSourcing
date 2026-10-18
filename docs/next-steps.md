@@ -88,6 +88,24 @@ state belong in the loaded command handler, not only in payload normalization.
 
 ## Snapshots and transaction boundaries
 
+`is transactional` now triggers an ordered advance and checkpoint of a whole
+projection in the emitting transaction. See [the projection guide](projections.md)
+for equality-based identity discovery and retained lifecycle, and
+[the implementation plan](plans/transactional.md) for the design and follow-ups.
+PostgreSQL journal appends use a transaction-scoped gate to protect cross-stream
+cursor order; a more concurrent per-projection ownership protocol remains future
+work. Retained caches still need optional cross-process invalidation and a defined
+API for synchronized access from multiple threads.
+
+All three entity kinds now support `OnDemand`/`Retained` declaration lifecycles
+and connection/pool-scoped overrides through configuration `entities` entries.
+See [entity lifecycle](lifecycle.md). Remaining cache work includes automatic
+eviction and synchronized reads. Automatic snapshots now support count/time policies on declarations and in
+configuration, with a default of 100 applied records and explicit `Nil` to disable.
+See [automatic snapshots](auto-snapshot.md). A future idle checkpoint controller
+would need identity discovery and bounded scheduling; current time policies are
+checked during operations.
+
 - Define consistent snapshot lookup/replay reads across concurrent transactions.
   A selected snapshot must remain the first and only snapshot in a snapshot query.
 - Specify `:after` combined with snapshot selection: the current date filter can
@@ -98,8 +116,9 @@ state belong in the loaded command handler, not only in payload normalization.
   IDs and commit order are not interchangeable under all concurrency patterns.
 - Specify recovery after a handler mutates an object and then throws. Restore a
   fresh instance rather than reusing that partly changed in-memory object.
-- Respect Red's lack of savepoints in the current execution path. Nested
-  transactions require dependency support or a deliberate transaction owner.
+- Preserve deliberate transaction ownership for retries. Red 0.2.7 supports
+  explicit savepoints, including journal state rollback, but nested commands
+  continue to propagate conflicts for complete-batch retry.
 
 Database rollback does not undo an HTTP request. Provider adapters need durable
 idempotency/reconciliation; physical shipping and returns need explicit domain

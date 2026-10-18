@@ -4,6 +4,7 @@ use JSON::Fast;
 use RedSourcing::Inspector;
 use RedSourcing::Web::Metrics;
 use RedSourcing::Config;
+use RedSourcing::Lifecycle;
 use RedSourcing::CLI::Output;
 use RedSourcing::CLI::Help;
 
@@ -84,6 +85,7 @@ sub with-store(Str $driver, Str $database, Bool $debug, &work) {
     my $path = config-database($driver, $database, $cli-config-directory,
         :explicit(so %*CLI-OPTIONS<database>:exists));
     red-defaults :default(store-driver($driver, $path, :connection($cli-config.connection)));
+    configure-lifecycles($cli-config.entities, :auto-snapshot($cli-config.auto-snapshot));
     work()
 }
 
@@ -274,6 +276,7 @@ multi MAIN('init', Str :f(:$file), Str :$driver = $cli-config.driver // 'SQLite'
         enable-flow-tracing if $cli-config.flow-tracing;
         StoredEvent.^create-table(:unless-exists);
         StoredCommand.^create-table(:unless-exists);
+        .^create-indexes for StoredEvent, StoredCommand;
     }
 }
 

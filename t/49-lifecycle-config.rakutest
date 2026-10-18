@@ -1,0 +1,112 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Web::Operations;
+use JSON::Fast;
+
+my $repo = $*CWD;
+my $tmp = tempdir.IO;
+my $file = $tmp.add('red-sourcing.rakuconf');
+$file.spurt(q:to/CONFIG/);
+    use RedSourcing::Config;
+    config {
+        .driver = 'SQLite';
+        .database = 'store.db';
+        .entities = {
+            'LifecycleDomain::Account' => { lifecycle => 'OnDemand' },
+            'LifecycleDomain::DefaultAccount' => { lifecycle => 'Retained' },
+            'LifecycleDomain::Total' => { lifecycle => 'OnDemand' },
+            'LifecycleDomain::Workflow' => { lifecycle => 'OnDemand' },
+        };
+    }
+    CONFIG
+
+sub execute(Str $code) {
+    my $process = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}", "-I{$repo.add('t/lib')}",
+        '-e', $code, :cwd($tmp), :out, :err;
+    %(code => $process.exitcode || $process.signal,
+        out => $process.out.slurp(:close), err => $process.err.slurp(:close))
+}
+
+subtest 'native bootstrap applies lifecycle settings to all entity kinds' => {
+    my %result = execute(q:to/CODE/);
+        use RedSourcing;
+        use LifecycleDomain;
+        my $settings = red-sourcing-defaults;
+        say $settings.entities.keys.elems;
+        say Account.^lifecycle;
+        say Total.^lifecycle;
+        say Workflow.^lifecycle;
+        my $proxy = DefaultAccount.^with-ids(:id(5)); $proxy.^create;
+        say $proxy.^load === $proxy.^load;
+        Workflow.^with-ids(:id(9)).^create;
+        CODE
+    is %result<code>, 0, 'configuration discovers the local file';
+    is %result<err>, '', 'startup is quiet';
+    is %result<out>, "4\nOnDemand\nOnDemand\nOnDemand\nTrue\n", 'all configured overrides take precedence';
+};
+
+subtest 'settings also apply to a module loaded after bootstrap' => {
+    my %result = execute(q:to/CODE/);
+        use RedSourcing;
+        red-sourcing-defaults;
+        require LifecycleDomain;
+        my $type = ::('LifecycleDomain::DefaultAccount');
+        say $type.^lifecycle;
+        my $proxy = $type.^with-ids(:id(6)); $proxy.^create;
+        say $proxy.^load === $proxy.^load;
+        CODE
+    is %result<code>, 0, 'late module loading works';
+    is %result<err>, '', 'no implicit imports or unresolved names';
+    is %result<out>, "Retained\nTrue\n", 'late types inherit the configured lifecycle';
+};
+
+subtest 'CLI and web operations preserve lifecycle configuration' => {
+    my %loaded = load-config(:$file);
+    my $ops = RedSourcing::Web::Operations.new(:directory($tmp),
+        :settings(%loaded<settings>.clone(:database($tmp.add('store.db').Str),
+            :includes([$repo.add('t/lib').Str]), :modules(['LifecycleDomain']))));
+    LEAVE $ops.close;
+    my %job = $ops.submit('command', :positionals(['LifecycleDomain::DefaultAccount', 'mode']),
+        :options{ identity => ['id=5'], json => True });
+    my $deadline = now + 60;
+    repeat {
+        await Promise.in(0.05);
+        %job = $ops.job(%job<id>);
+    } while %job<state> eq 'running' && now < $deadline;
+    is %job<state>, 'succeeded', 'web operation finishes';
+    is %job<stderr>, '', 'web operation has no diagnostics';
+    is %job<stdout>.trim, '"Retained"', 'operations subprocess preserves the lifecycle override';
+    my $process = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        $repo.add('bin/red-sourcing.raku').Str, "-f=$file", 'load',
+        'LifecycleDomain::DefaultAccount', "-I={$repo.add('t/lib')}", '-M=LifecycleDomain', '--id=id=5',
+        :cwd($tmp), :out, :err;
+    is $process.exitcode || $process.signal, 0, 'CLI loads the configured application type';
+    is $process.err.slurp(:close), '', 'CLI startup has no configuration diagnostics';
+    like $process.out.slurp(:close), /'id: 5'/, 'CLI restores the selected identity';
+};
+
+subtest 'advance-sagas CLI discovers and advances persisted sagas with configuration' => {
+    my $process = run $*EXECUTABLE.Str, "-I{$repo.add('lib')}",
+        $repo.add('bin/red-sourcing.raku').Str, "-f=$file", 'advance-sagas', '--json',
+        "-I={$repo.add('t/lib')}", '-M=LifecycleDomain', :cwd($tmp), :out, :err;
+    is $process.exitcode || $process.signal, 0, 'controller command runs successfully';
+    is $process.err.slurp(:close), '', 'controller has no diagnostics';
+    my %report = from-json $process.out.slurp(:close);
+    is %report<advanced>, 1, 'controller discovers the configured workflow';
+    is %report<failed>, 0, 'no isolated failure';
+    is %report<sagas>.head<status>, 'running', 'controller reports the committed status';
+};
+
+subtest 'invalid lifecycle values are rejected when reading configuration' => {
+    my $invalid = $tmp.add('bad.rakuconf');
+    $invalid.spurt(q:to/CONFIG/);
+        use RedSourcing::Config;
+        config { .entities = { 'App::Counter' => { lifecycle => 'Unknown' } } }
+        CONFIG
+    throws-like { load-config(:file($invalid)) }, X::AdHoc,
+        message => /'Unknown entity lifecycle'/;
+};
+
+done-testing;

@@ -22,6 +22,41 @@ and `CounterTotal`. `increment` emits an event through the generated
 `CounterTotal` filters by its own `id`. Re-running a completed deferred command
 returns the saved result without another event.
 
+## Sequence: submit, execute and read
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller
+    participant C as Counter proxy
+    participant X as Command executor
+    participant J as Journal
+    participant P as CounterTotal
+    Caller->>C: create
+    C->>J: Initial Counter snapshot at version 1
+    Caller->>C: increment amount 2
+    C->>J: Store pending command
+    C->>X: run synchronously
+    X->>J: Restore Counter snapshot and later facts
+    X->>J: Append CounterIncremented and save result 2 in one transaction
+    X-->>Caller: 2
+    Caller->>C: increment amount 3 asynchronously
+    C->>J: Store pending command
+    C-->>Caller: Pending handle
+    Caller->>X: pending.run
+    X->>J: Reload, append CounterIncremented, save result 5 and commit
+    X-->>Caller: 5
+    Caller->>X: Run the same completed command again
+    X->>J: Read saved result
+    X-->>Caller: 5, without another event
+    Caller->>P: load
+    P->>J: Read optional snapshot and matching facts for this id
+    P->>P: APPLY facts in global ID order
+    P-->>Caller: value 5
+    Note over X,J: Commands evaluate optional<br/>autosnapshot at completion
+    Note over P,J: Plain load does not write a<br/>snapshot
+```
+
 ## Persistent CLI walkthrough
 
 The demo above uses an in-memory database. The configuration selects a separate

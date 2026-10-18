@@ -1,6 +1,7 @@
 unit class Metamodel::RedSourcing::ProxyHOW;
 
 also is Metamodel::ClassHOW;
+use RedSourcing::Journal;
 
 has %!command-classes;
 has %!command-preparers;
@@ -20,13 +21,23 @@ method prepare-command(\proxy, Str $name, *%arguments) {
 method entity-type(|) { $!entity-type }
 
 method advance(\proxy, |c) {
-	die 'advance requires a saga proxy' unless $!entity-type.HOW.^can('advance');
-	my $entity = proxy.^load;
-	$entity.^advance(|c);
-	$entity
+    die 'advance requires a projection or saga proxy' unless $!entity-type.HOW.^can('advance');
+    if $!entity-type.HOW.^mro.grep(*.^name eq 'Metamodel::RedSourcing::ProjectionHOW').elems {
+        return journal-do { proxy.^load.^advance(|c) };
+    }
+    my $entity = proxy.^load;
+    $entity.^advance(|c);
+    $entity
 }
 
-method check-timeouts(\proxy, |c) { proxy.^advance(|c) }
+method check-timeouts(\proxy, |c) {
+    die 'check-timeouts requires a saga proxy' unless $!entity-type.HOW.^can('check-timeouts');
+    proxy.^advance(|c)
+}
+
+method release(\proxy) {
+    $!entity-type.^release(:stream(proxy.^stream-name))
+}
 
 method get-cmd-class($, Str $name where { %!command-classes{$name}:exists }) { %!command-classes{$name} }
 

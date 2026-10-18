@@ -1,0 +1,204 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Journal;
+use RedSourcing::Lifecycle;
+use DB::Pg;
+use RedSourcing::PgJSON;
+use lib 't/lib';
+use LifecycleDomain;
+
+my $*RED-DB;
+my $admin;
+my $pg-schema = 'rs_savepoints_' ~ $*PID;
+my $pg = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+if $pg.defined {
+    die 'Use a simple PostgreSQL test database name' unless $pg ~~ /^ <[\w\-]>+ $/;
+    $admin = DB::Pg.new(:conninfo("dbname=$pg"));
+    $admin.execute("CREATE SCHEMA $pg-schema");
+}
+LEAVE $admin.execute("DROP SCHEMA $pg-schema CASCADE") if $admin.defined;
+sub fresh {
+    if $pg.defined {
+        my $pool = DB::Pg.new(
+            :conninfo("dbname=$pg options='-csearch_path=$pg-schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>));
+        $*RED-DB = database('Pg', :dbh($pool)) but RedSourcing::PgJSON;
+    } else {
+        $*RED-DB = database('SQLite');
+    }
+    schema(StoredEvent, StoredCommand).drop.create;
+}
+
+subtest 'first journal access inside an existing savepoint hooks the physical transaction' => {
+    fresh;
+    my @published;
+    red-do :transaction, {
+        try {
+            red-do :transaction, {
+                journal-publish('aborted', { @published.push('aborted') });
+                die 'abort cold child';
+            };
+            CATCH { default { .rethrow unless .message eq 'abort cold child' } }
+        }
+        journal-publish('outer', { @published.push('outer') });
+        is @published.elems, 0, 'no publication before the physical commit';
+        True
+    };
+    is-deeply @published.Array, ['outer'], 'aborted callback is discarded on first use';
+};
+
+subtest 'rollback restores working objects, projection cursors and nested containers in place' => {
+    fresh;
+    my $p = Account.^with-ids(:id(1)); $p.^create;
+    my $total = Total.^with-ids(:id(1)); $total.^create;
+    my $view = $p.^load;
+    my $projection = $total.^load;
+    red-do :transaction, {
+        $p.add(:amount(2));
+        my $working = $p.^load;
+        my $cursor = $total.^load.^current-id;
+        try {
+            red-do :transaction, {
+                $p.add(:amount(7));
+                is $p.^load.amount, 9, 'child sees its own changes';
+                die 'abort child';
+            };
+            CATCH { default { .rethrow unless .message eq 'abort child' } }
+        }
+        ok $working === $p.^load, 'outer working object retains its identity';
+        is $working.amount, 2, 'scalar is restored';
+        is-deeply $working.seen.Array, [2], 'array is restored';
+        is-deeply $working.details<amounts>.Array, [2], 'nested hash/array is restored';
+        is $total.^load.amount, 2, 'projection is restored';
+        is $total.^load.^current-id, $cursor, 'projection cursor is restored';
+        $p.add(:amount(3));
+        is $view.amount, 0, 'retained reference waits for commit';
+        True
+    };
+    is $view.amount, 5, 'outer work publishes once';
+    is $projection.amount, 5, 'projection publishes only committed changes';
+    is-deeply $view.seen.Array, [2, 3], 'aborted event does not reach retained state';
+    $p.^release; $total.^release;
+    is $p.^load.amount, 5, 'restored aggregate agrees with retained state';
+    is $total.^load.amount, 5, 'restored projection agrees with retained state';
+};
+
+subtest 'released descendants remain provisional and an ancestor rollback discards them' => {
+    fresh;
+    journal-connection();
+    my @published;
+    red-do :transaction, {
+        journal-publish('same', { @published.push('outer') });
+        try {
+            red-do :transaction, {
+                journal-publish('same', { @published.push('child') });
+                red-do :transaction, {
+                    journal-publish('grandchild', { @published.push('grandchild') });
+                    True
+                };
+                is @published.elems, 0, 'release does not publish';
+                die 'abort ancestor';
+            };
+            CATCH { default { .rethrow unless .message eq 'abort ancestor' } }
+        }
+        True
+    };
+    is-deeply @published.Array, ['outer'], 'ancestor callback and key replacement are restored';
+};
+
+subtest 'retention and the journal gate created by a child are discarded on rollback' => {
+    fresh;
+    my $p = Account.^with-ids(:id(2)); $p.^create; $p.^release;
+    my $discarded;
+    red-do :transaction, {
+        nok journal-connection().journal-state<gated>, 'outer scope has not acquired the gate';
+        try {
+            red-do :transaction, {
+                $discarded = $p.^load;
+                $p.add(:amount(7));
+                ok journal-connection().journal-state<gated>, 'child acquires gate';
+                die 'abort retention';
+            };
+            CATCH { default { .rethrow unless .message eq 'abort retention' } }
+        }
+        nok journal-connection().journal-state<gated>, 'rolled-back acquisition is forgotten';
+        nok $discarded === $p.^load, 'aborted provisional retention is not reused';
+        is $p.^load.amount, 0, 'new load reads committed state';
+        $p.add(:amount(4));
+        True
+    };
+    is $p.^load.amount, 4, 'new emission after rollback succeeds';
+};
+
+subtest 'manual guard commits once and outer rollback discards released child work' => {
+    fresh;
+    journal-connection();
+    my @published;
+    red-do :transaction, -> :$guard {
+        journal-publish('manual', { @published.push('manual') });
+        red-do :transaction, -> :$guard {
+            journal-publish('child', { @published.push('child') });
+            $guard.commit;
+        };
+        is @published.elems, 0, 'manual child commit is only a release';
+        $guard.commit;
+    };
+    is-deeply @published.sort.Array, ['child', 'manual'], 'physical commit publishes each callback once';
+    red-do :transaction, -> :$guard {
+        red-do :transaction, {
+            journal-publish('aborted', { @published.push('aborted') });
+            True
+        };
+        $guard.rollback;
+    };
+    is @published.elems, 2, 'outer rollback discards released work';
+};
+
+subtest 'savepoint rollback restores automatic snapshot counters and discards checkpoints' => {
+    fresh;
+    configure-lifecycles({ 'LifecycleDomain::Account' => { 'auto-snapshot' => { count => 2 } } });
+    my $p = Account.^with-ids(:id(3)); $p.^create;
+    my $view = $p.^load;
+    red-do :transaction, {
+        $p.add(:amount(2));
+        try {
+            red-do :transaction, {
+                $p.add(:amount(7));
+                is StoredEvent.^all.grep(*.class eq Account.^name).elems, 2,
+                    'child crosses threshold and writes a provisional checkpoint';
+                die 'abort checkpoint';
+            };
+            CATCH { default { .rethrow unless .message eq 'abort checkpoint' } }
+        }
+        is StoredEvent.^all.grep(*.class eq Account.^name).elems, 1, 'child checkpoint is rolled back';
+        $p.add(:amount(3));
+        is StoredEvent.^all.grep(*.class eq Account.^name).elems, 2,
+            'restored counter checkpoints the next committed event';
+        True
+    };
+    is $view.amount, 5, 'checkpoint publishes only committed state';
+    $p.^release;
+    is $p.^load.amount, 5, 'checkpoint reconstruction agrees';
+};
+
+subtest 'reused driver savepoint names resolve to the innermost scope' => {
+    fresh;
+    journal-connection();
+    my @published;
+    red-do :transaction, {
+        my $connection = journal-connection();
+        journal-publish('same', { @published.push('outer') });
+        $connection.savepoint('reused');
+        journal-publish('same', { @published.push('first') });
+        $connection.savepoint('reused');
+        journal-publish('same', { @published.push('second') });
+        $connection.rollback-to-savepoint('reused');
+        $connection.release-savepoint('reused');
+        # The older savepoint must still exist after releasing its namesake.
+        $connection.rollback-to-savepoint('reused');
+        $connection.release-savepoint('reused');
+        True
+    };
+    is-deeply @published.Array, ['outer'], 'both rollbacks restore the matching callback scope';
+};
+done-testing;

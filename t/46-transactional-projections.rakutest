@@ -1,0 +1,347 @@
+use Test;
+use RedSourcing;
+
+projection TransactionExplicit[OnDemand] { method APPLY {} }
+
+
+class TransactionFact does Event {
+    has Str $.source-id;
+    has Str $.to-client;
+    has Str $.from-client;
+    has Int $.amount;
+    has Bool $.automatic;
+}
+aggregate TransactionSource {
+    has Str $.source-id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionFact $event) { $!amount += $event.amount }
+    method post(Str :$to-client!, Str :$from-client = '', Int :$amount!, Bool :$automatic = True) is command {
+        self.transaction-fact(:$to-client, :$from-client, :$amount, :$automatic);
+        $!amount
+    }
+}
+projection TransactionTotal {
+    has Str $.client-id is entity-id;
+    has Int $.amount = 0;
+    has @.seen;
+    multi method APPLY(TransactionFact $event where { .to-client eq $!client-id && !.automatic }) {
+        $!amount += $event.amount;
+        @!seen.push($event.amount);
+    }
+    multi method APPLY(TransactionFact $event where { .to-client eq $!client-id && .automatic }) is transactional {
+        $!amount += $event.amount;
+        @!seen.push($event.amount);
+    }
+}
+projection TransactionParticipants {
+    has Str $.client-id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionFact $event where {
+        .to-client eq $!client-id || .from-client eq $!client-id
+    }) is transactional { $!amount += $event.amount }
+}
+projection TransactionComposite {
+    has Str $.client-id is entity-id;
+    has Str $.source-id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionFact $event where {
+        $!client-id eq .to-client && .source-id eq $!source-id && .amount > 0
+    }) is transactional { $!amount += $event.amount }
+}
+projection TransactionComputed {
+    has Str $.client-id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionFact $event where {
+        (.to-client ~ '-copy') eq $!client-id
+    }) is transactional { $!amount += $event.amount }
+}
+projection TransactionManual {
+    has Str $.client-id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionFact $event where { .to-client eq $!client-id }) { $!amount += $event.amount }
+}
+projection TransactionMemory[Retained] {
+    has Str $.client-id is entity-id;
+    has Int $.minimum = 0;
+    has Int $.amount = 0;
+    has @.seen;
+    has Hash $.stats = { count => 0, nested => { amounts => [] } };
+    has int $.native-count = 0;
+    method APPLY(TransactionFact $event where {
+        .to-client eq $!client-id && .amount > $!minimum
+    }) is transactional {
+        $!amount += $event.amount;
+        @!seen.push($event.amount);
+        $!stats<count>++;
+        $!stats<nested><amounts>.push($event.amount);
+        $!native-count++;
+    }
+}
+
+class TransactionRejectedFact does Event { has Str $.id; has Int $.amount }
+aggregate TransactionRejectedSource {
+    has Str $.id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionRejectedFact $event) { $!amount += $event.amount }
+    method post(Int :$amount!) is command { self.transaction-rejected-fact(:$amount); $!amount }
+    method batch is command {
+        self.transaction-rejected-fact(:amount(2));
+        self.transaction-rejected-fact(:amount(13));
+    }
+}
+projection TransactionRejectedView {
+    has Str $.id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionRejectedFact $event where { .id eq $!id }) is transactional {
+        die 'Projection rejected thirteen' if $event.amount == 13;
+        $!amount += $event.amount;
+    }
+}
+
+class TransactionMissingIdentity does Event { has Str $.id }
+projection TransactionUnderSpecified {
+    has Str $.id is entity-id;
+    has Str $.other-id is entity-id;
+    method APPLY(TransactionMissingIdentity $event where { .id eq $!id }) is transactional { }
+}
+
+class TransactionNumericFact does Event { has Int $.number; has Str $.text; has Hash $.details }
+projection TransactionNumericView {
+    has Int $.id is entity-id;
+    has Int $.amount = 0;
+    method APPLY(TransactionNumericFact $event where { .number == $!id }) is transactional {
+        $!amount += $event.number;
+    }
+}
+projection TransactionStringView {
+    has Str $.id is entity-id;
+    has UInt $.count = 0;
+    method APPLY(TransactionNumericFact $event where { .number eq $!id }) is transactional { $!count++ }
+}
+projection TransactionNestedView {
+    has Str $.id is entity-id;
+    has UInt $.count = 0;
+    method APPLY(TransactionNumericFact $event where { .details<owner> eq $!id && .details<enabled> })
+        is transactional { $!count++ }
+}
+class TransactionNativeFact does Event { has Int $.number }
+projection TransactionNativeView {
+    has int $.id is entity-id;
+    method APPLY(TransactionNativeFact $event where { .number == $!id }) is transactional { }
+}
+class TransactionStateFact does Event { has Str $.id }
+projection TransactionStateView {
+    has Str $.id is entity-id;
+    has Str $.status = 'open';
+    method APPLY(TransactionStateFact $event where { .id eq $!id && $!status eq 'open' }) is transactional { }
+}
+
+my $*RED-DB = database 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $source = TransactionSource.^with-ids(:source-id<source>);
+$source.^create;
+my $total = TransactionTotal.^with-ids(:client-id<ana>);
+
+subtest 'projection declarations configure lifecycle before composition' => {
+    is TransactionExplicit.^lifecycle, OnDemand, 'explicit OnDemand is accepted';
+    is TransactionTotal.^lifecycle, OnDemand, 'omitting brackets keeps the default';
+    is TransactionMemory.^lifecycle, Retained, 'Retained is configured by the declaration';
+    is TransactionMemory.^name, 'TransactionMemory', 'lifecycle does not change the persisted type name';
+    for ^2 {
+        my $process = run $*EXECUTABLE.Str, '-Ilib', '-It/lib', '-e',
+            'use RedSourcing; use TransactionalDomain; say JournalRetainedProjection.^lifecycle;', :out, :err;
+        is $process.exitcode, 0, 'a module with a parameterized declaration loads';
+        is $process.out.slurp(:close), "Retained\n", 'lifecycle survives precompilation';
+        is $process.err.slurp(:close), '', 'module import has no diagnostics';
+    }
+    my $invalid = run $*EXECUTABLE.Str, '-Ilib', '-e',
+        'use RedSourcing; projection Bad[Int] { method APPLY {} }', :out, :err;
+    isnt $invalid.exitcode, 0, 'a value outside EntityLifecycle is rejected';
+    like $invalid.err.slurp(:close), /'entity lifecycle'/, 'error identifies invalid lifecycle configuration';
+    is $invalid.out.slurp(:close), '', 'invalid declaration runs no application code';
+};
+
+subtest 'annotated event advances every pending APPLY in order' => {
+    is $source.post(:to-client<ana>, :amount(3), :!automatic), 3, 'ordinary fact is appended';
+    is StoredEvent.list-events(:row, :stream($total.^stream-name)).elems, 0, 'unannotated candidate creates no checkpoint';
+    is $source.post(:to-client<ana>, :amount(5)), 8, 'triggering command completes';
+    my $snapshot = StoredEvent.list-events(:row, :stream($total.^stream-name)).tail;
+    is $snapshot.data<amount>, 8, 'transaction stores the folded state';
+    is-deeply $snapshot.data<seen>.Array, [3, 5], 'unannotated predecessor is folded before the trigger';
+    is $snapshot.replay-cursor, StoredEvent.^all.grep(*.class eq TransactionFact.^name).sort(*.id).tail.id,
+        'checkpoint cursor references the triggering domain event';
+    is $total.^load.amount, 8, 'loading uses the checkpoint without double application';
+};
+
+subtest 'signature routing supports OR, deduplication, composite IDs and calculations' => {
+    is $source.post(:to-client<ana>, :from-client<bob>, :amount(2)), 10, 'cross-participant fact commits';
+    is TransactionParticipants.^with-ids(:client-id<bob>).^load.amount, 2, 'OR discovers the sender target';
+    is TransactionParticipants.^with-ids(:client-id<ana>).^load.amount, 10, 'OR discovers the recipient target';
+    my $before = StoredEvent.list-events(:row, :stream(TransactionParticipants.^with-ids(:client-id<ana>).^stream-name)).elems;
+    $source.post(:to-client<ana>, :from-client<ana>, :amount(1));
+    is TransactionParticipants.^with-ids(:client-id<ana>).^load.amount, 11, 'equal sender and recipient apply once';
+    is StoredEvent.list-events(:row, :stream(TransactionParticipants.^with-ids(:client-id<ana>).^stream-name)).elems,
+        $before + 1, 'deduplicated target has one new checkpoint';
+    is TransactionComposite.^with-ids(:client-id<ana>, :source-id<source>).^load.amount, 11, 'composite identity is inferred';
+    is TransactionComputed.^with-ids(:client-id<ana-copy>).^load.amount, 11, 'Red computes the event-side expression';
+};
+
+subtest 'retained instances match signatures and publish only at the outer commit' => {
+    my $memory-proxy = TransactionMemory.^with-ids(:client-id<carol>);
+    my $memory = $memory-proxy.^load;
+    ok $memory === $memory-proxy.^load, 'repeated load returns the retained object';
+    is $memory.amount, 0, 'retained object starts empty';
+    red-do :transaction, {
+        TransactionFact.emit(:source-id<manual>, :to-client<carol>, :from-client(''),
+            :amount(4), :automatic, :stream<manual-carol>, :version(1));
+        is $memory.amount, 0, 'shared object is unchanged while the transaction is open';
+        is $memory-proxy.^load.amount, 4, 'transactional load reads its provisional state';
+        is StoredEvent.list-events(:row, :stream($memory-proxy.^stream-name)).tail.data<amount>, 4,
+            'checkpoint is visible inside its transaction';
+        True
+    }
+    is $memory.amount, 4, 'outer commit publishes into the existing retained object';
+    is-deeply $memory.seen.Array, [4], 'retained array state is published';
+    is $memory.native-count, 1, 'native non-ID state is copied and published';
+    is-deeply $memory.stats<nested><amounts>.Array, [4], 'nested hash/array state is published';
+    throws-like {
+        red-do :transaction, {
+            TransactionFact.emit(:source-id<manual>, :to-client<carol>, :from-client(''),
+                :amount(9), :automatic, :stream<manual-carol>, :version(2));
+            die 'Outer owner aborts';
+        }
+    }, X::AdHoc, message => 'Outer owner aborts';
+    is $memory.amount, 4, 'rollback does not publish provisional state';
+    is-deeply $memory.seen.Array, [4], 'provisional array changes do not leak';
+    is $memory.native-count, 1, 'provisional native state does not leak';
+    is $memory.stats<count>, 1, 'provisional hash changes do not leak';
+    is-deeply $memory.stats<nested><amounts>.Array, [4], 'nested arrays are detached from shared state';
+    is StoredEvent.list-events(:row, :stream($memory-proxy.^stream-name)).elems, 1,
+        'rollback removes the provisional checkpoint';
+    $memory-proxy.^release;
+    $source.post(:to-client<carol>, :amount(1));
+    is $memory.amount, 4, 'released object receives no further publication';
+    is $memory-proxy.^load.amount, 5, 'a new retained load reconstructs missed facts';
+};
+
+subtest 'retention inside a transaction participates immediately and publishes on commit' => {
+    my $proxy = TransactionMemory.^with-ids(:client-id<dora>);
+    my $provisional;
+    red-do :transaction, {
+        $provisional = $proxy.^load;
+        ok $provisional === $proxy.^load, 'one provisional retained instance is reused';
+        TransactionFact.emit(:source-id<manual>, :to-client<dora>, :from-client(''),
+            :amount(6), :automatic, :stream<manual-dora>, :version(1));
+        is $provisional.amount, 6, 'newly registered provisional instance receives the trigger';
+        True
+    }
+    ok $provisional === $proxy.^load, 'outer commit registers that same instance';
+    is $proxy.^load.amount, 6, 'its final committed state is retained';
+    my $aborted;
+    my $other = TransactionMemory.^with-ids(:client-id<erica>);
+    throws-like {
+        red-do :transaction, {
+            $aborted = $other.^load;
+            TransactionFact.emit(:source-id<manual>, :to-client<erica>, :from-client(''),
+                :amount(8), :automatic, :stream<manual-erica>, :version(1));
+            die 'Discard registration';
+        }
+    }, X::AdHoc, message => 'Discard registration';
+    nok $aborted === $other.^load, 'rollback discards the provisional registration';
+    is $other.^load.amount, 0, 'reloading sees no aborted facts';
+};
+
+subtest 'retained identities are isolated between connections' => {
+    my $outer = TransactionMemory.^with-ids(:client-id<carol>).^load;
+    my $outer-amount = $outer.amount;
+    {
+        my $*RED-DB = database 'SQLite', :database(':memory:');
+        schema(StoredEvent, StoredCommand).create;
+        my $proxy = TransactionMemory.^with-ids(:client-id<carol>);
+        my $other = $proxy.^load;
+        nok $other === $outer, 'same identity has a different object in another store';
+        is $other.amount, 0, 'other store starts without the original history';
+        my $source = TransactionSource.^with-ids(:source-id<other-store>);
+        $source.^create;
+        $source.post(:to-client<carol>, :amount(7));
+        is $other.amount, 7, 'its own trigger updates its retained instance';
+        is $outer.amount, $outer-amount, 'publication does not leak to the first store';
+    }
+};
+
+subtest 'projection failure rolls back a complete command batch' => {
+    my $proxy = TransactionRejectedSource.^with-ids(:id<failure>);
+    $proxy.^create;
+    is $proxy.post(:amount(1)), 1, 'initial event succeeds';
+    my $view = TransactionRejectedView.^with-ids(:id<failure>);
+    is $view.^load.amount, 1, 'initial projection checkpoint exists';
+    my $events = StoredEvent.^all.elems;
+    throws-like { $proxy.batch }, X::AdHoc, message => 'Projection rejected thirteen';
+    is StoredEvent.^all.elems, $events, 'both events and all intermediate checkpoints are rolled back';
+    is $proxy.^load.amount, 1, 'aggregate restores its pre-batch state';
+    is $view.^load.amount, 1, 'projection restores its pre-batch state';
+    is $proxy.^list-commands.tail.state.Str, 'Failed', 'domain failure is recorded on the command';
+};
+
+subtest 'ordinary advance is separate from checkpointing and saga timeout helpers' => {
+    my $loaded = $total.^load;
+    my $before = StoredEvent.list-events(:row, :stream($total.^stream-name)).elems;
+    $loaded.^advance;
+    is StoredEvent.list-events(:row, :stream($total.^stream-name)).elems, $before,
+        'explicit advance creates no checkpoint by default';
+    is $total.^advance.amount, $loaded.amount, 'proxy supports projection advance';
+    my $manual = TransactionManual.^with-ids(:client-id<ana>);
+    my $manual-stream = $manual.^stream-name;
+    is StoredEvent.list-events(:row, :stream($manual-stream)).elems, 0, 'manual projection has no automatic checkpoint';
+    is $manual.^advance(:checkpoint).amount, $loaded.amount, 'advance can persist state consumed while loading';
+    is StoredEvent.list-events(:row, :stream($manual-stream)).elems, 1, 'explicit checkpoint is written once';
+    $manual.^advance(:checkpoint);
+    is StoredEvent.list-events(:row, :stream($manual-stream)).elems, 1, 'no-op advance does not add another checkpoint';
+    throws-like { $total.^check-timeouts }, X::AdHoc, message => 'check-timeouts requires a saga proxy';
+    throws-like { TransactionTotal.^lifecycle(:lifecycle(Retained)) }, X::AdHoc,
+        message => 'Entity lifecycle must be configured before first use';
+};
+
+subtest 'incomplete inferred identities fail before any write can commit' => {
+    my $events = StoredEvent.^all.elems;
+    throws-like {
+        TransactionMissingIdentity.emit(:id<only-one>, :stream<invalid-identity>, :version(1));
+    }, X::AdHoc, message => /'Cannot infer all IDs'/;
+    is StoredEvent.^all.elems, $events, 'standalone emission and its invalid target roll back together';
+};
+
+subtest 'typed IDs and nested JSON constraints use the complete SQL predicate' => {
+    TransactionNumericFact.emit(:number(12), :text<twelve>,
+        :details{ :owner<fred>, :enabled }, :stream<numeric>, :version(1));
+    is TransactionNumericView.^with-ids(:id(12)).^load.amount, 12, 'numeric equality infers an Int ID';
+    is TransactionNestedView.^with-ids(:id<fred>).^load.count, 1, 'nested event fields determine an ID and residual filter';
+    my $stream = TransactionStringView.^with-ids(:id<12>).^stream-name;
+    my @matching = StoredEvent.list-events(:row,
+        (TransactionNumericFact) => -> $event { $event.number eq '12' });
+    is StoredEvent.list-events(:row, :$stream).elems, @matching ?? 1 !! 0,
+        'normalization does not bypass Red JSON equality semantics';
+    my $events = StoredEvent.^all.elems;
+    throws-like { TransactionNativeFact.emit(:number(12), :stream<native>, :version(1)) },
+        X::AdHoc, message => /'native attribute'/;
+    is StoredEvent.^all.elems, $events, 'unsupported native identity rolls back';
+    throws-like { TransactionStateFact.emit(:id<state>, :stream<state>, :version(1)) },
+        X::AdHoc, message => /'cannot depend on'/;
+    is StoredEvent.^all.elems, $events, 'on-demand discovery never substitutes a mutable state default';
+};
+
+subtest 'trait placement errors are reported during compilation' => {
+    my @declarations =
+        'aggregate Bad { method APPLY($event) is transactional {} }',
+        'projection Bad { method other($event) is transactional {} }',
+        'projection Bad { has $.id is transactional; method APPLY($event) {} }',
+        'class Bad { method APPLY($event) is transactional {} }',
+        'projection Bad { method APPLY($first, $second) is transactional {} }';
+    for @declarations -> $declaration {
+        my $process = run $*EXECUTABLE.Str, '-Ilib', '-e', 'use RedSourcing; ' ~ $declaration, :out, :err;
+        isnt $process.exitcode, 0, 'invalid declaration fails: ' ~ $declaration;
+        like $process.err.slurp(:close), /'transactional'/, 'diagnostic identifies the trait or signature';
+        is $process.out.slurp(:close), '', 'no application code runs';
+    }
+};
+
+done-testing;

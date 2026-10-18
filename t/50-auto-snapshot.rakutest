@@ -1,0 +1,194 @@
+use Test;
+use lib 't/lib';
+use RedSourcing;
+use RedSourcing::Lifecycle;
+use SnapshotDomain;
+my $*RED-DB;
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+}
+sub snapshots($type, $proxy) {
+    StoredEvent.^all.grep({ .class eq $type.^name && .stream eq $proxy.^stream-name }).sort(*.id).Array
+}
+
+subtest 'named declarations, default policy and negation survive module precompilation' => {
+    fresh;
+    is Batch.^lifecycle, Retained, 'named lifecycle';
+    is-deeply Batch.^auto-snapshot.Hash, { count => 2 }, 'named policy';
+    is-deeply DefaultBatch.^auto-snapshot.Hash, { count => 100 }, 'built-in default';
+    nok Disabled.^auto-snapshot.defined, 'negated aggregate option disables';
+    nok Atomic.^auto-snapshot.defined, 'projection can disable optional snapshots';
+    is Workflow.^lifecycle, Retained, 'saga accepts named lifecycle';
+    aggregate ExplicitDemand[:!retained, :auto-snapshot(Nil)] { method APPLY(Fact $) {} }
+    is ExplicitDemand.^lifecycle, OnDemand, 'negated flag chooses OnDemand';
+    nok ExplicitDemand.^auto-snapshot.defined, 'negated lifecycle is independent of policy';
+    saga DisabledSaga[:!auto-snapshot] { method APPLY(Fact $) {} }
+    nok DisabledSaga.^auto-snapshot.defined, 'negated saga option disables';
+    nok snapshot-policy(False).defined, 'explicit False normalizes to disabled';
+    nok snapshot-policy(Nil).defined, 'Nil remains equivalent';
+    saga Combined[:retained, :auto-snapshot{ :100count, :300seconds }] { method APPLY(Fact $) {} }
+    is-deeply Combined.^auto-snapshot.Hash, { count => 100, seconds => 300 }, 'both shorthand limits work';
+};
+subtest 'time and count use OR, idle commands do not write, and manual snapshots reset the counter' => {
+    fresh;
+    configure-lifecycles({ DefaultBatch.^name => { auto-snapshot => { count => 100, seconds => 100 } } });
+    my $p = DefaultBatch.^with-ids(:id(1)); $p.^create;
+    $*RED-DB.prepare('UPDATE red_sourcing_event SET created = ? WHERE id = ?')
+        .execute(DateTime.now.earlier(:seconds(300)).Str, snapshots(DefaultBatch, $p).head.id);
+    $p.read;
+    is snapshots(DefaultBatch, $p).elems, 1, 'elapsed time without changes writes nothing';
+    $p.add;
+    is snapshots(DefaultBatch, $p).elems, 2, 'elapsed time triggers below the count limit';
+    $p.add(:n(2));
+    $p.^load.^emit-snapshot;
+    $p.add(:n(98));
+    is snapshots(DefaultBatch, $p).elems, 3, 'manual checkpoint reset the count';
+    $p.add(:n(2));
+    is snapshots(DefaultBatch, $p).elems, 4, 'count triggers before time expires';
+
+    $*RED-DB.prepare('UPDATE red_sourcing_event SET created = ? WHERE class = ?')
+        .execute(DateTime.now.earlier(:seconds(300)).Str, Fact.^name);
+    my $timed = TimedView.^with-ids(:id(1));
+    $timed.^advance;
+    is snapshots(TimedView, $timed).elems, 1, 'snapshot-free projection ages from its first consumed fact';
+};
+subtest 'a command checkpoints its complete batch and reloads from that snapshot' => {
+    fresh; my $p = Batch.^with-ids(:id(1)); $p.^create;
+    my $view = $p.^load;
+    is $p.add(:n(3)), 3, 'three appends in one command';
+    is snapshots(Batch, $p).elems, 2, 'one optional snapshot after the initial snapshot';
+    is snapshots(Batch, $p).tail.version, 5, 'snapshot follows all three domain events';
+    is $view.amount, 3, 'retained reference publishes checkpointed state';
+    is $view.^snapshot-events, 0, 'committed counter resets';
+    $p.^release;
+    is $p.^load.amount, 3, 'restores the checkpoint';
+    is $p.add, 4, 'first event after snapshot';
+    is snapshots(Batch, $p).elems, 2, 'not yet due';
+    is $p.add, 5, 'second event after snapshot';
+    is snapshots(Batch, $p).elems, 3, 'counter resumes after restoration';
+};
+subtest 'the default policy snapshots at 100 domain events; negation preserves manual snapshots' => {
+    fresh; my $p = DefaultBatch.^with-ids(:id(1)); $p.^create;
+    $p.add(:n(99));
+    is snapshots(DefaultBatch, $p).elems, 1, '99 events are below default';
+    $p.add;
+    is snapshots(DefaultBatch, $p).elems, 2, '100th event crosses default';
+    my $disabled = Disabled.^with-ids(:id(2)); $disabled.^create;
+    $disabled.add(:n(101));
+    is snapshots(Disabled, $disabled).elems, 1, 'negation retains required initial snapshot only';
+    $disabled.^load.^emit-snapshot;
+    is snapshots(Disabled, $disabled).elems, 2, 'manual checkpoint remains available';
+};
+subtest 'cross-aggregate emissions checkpoint the recipient in the same command transaction' => {
+    fresh; my $p = Batch.^with-ids(:id(1)); $p.^create;
+    my $peer = Peer.^with-ids(:id(2)); $peer.^create;
+    $p.add(:to(2));
+    is snapshots(Peer, $peer).elems, 2, 'recipient policy is evaluated at command completion';
+    is $peer.^load.amount, 1, 'recipient restores its new checkpoint';
+};
+subtest 'rollback discards optional snapshots and does not reset the retained counter' => {
+    fresh; my $p = Batch.^with-ids(:id(1)); $p.^create;
+    my $view = $p.^load; $p.add;
+    throws-like { red-do :transaction, { $p.add; die 'abort owner' } }, X::AdHoc,
+        message => 'abort owner';
+    is snapshots(Batch, $p).elems, 1, 'provisional snapshot rolled back';
+    is $view.amount, 1, 'shared value is unchanged';
+    is $view.^snapshot-events, 1, 'shared counter is unchanged';
+    throws-like { $p.add(:n(2), :fail) }, X::AdHoc, message => 'Rejected batch';
+    is snapshots(Batch, $p).elems, 1, 'handler failure emits no optional checkpoint';
+    $p.add;
+    is snapshots(Batch, $p).elems, 2, 'next successful operation reaches the threshold';
+};
+subtest 'snapshot optimistic conflicts retry the whole command after rollback' => {
+    fresh; configure-lifecycles({ DefaultBatch.^name => { auto-snapshot => { count => 1 } } });
+    $SnapshotDomain::injections = 0;
+    my $p = DefaultBatch.^with-ids(:id(1)); $p.^create;
+    is $p.add(:conflict), 1, 'retry succeeds';
+    is $p.^load.amount, 1, 'first attempt left no domain changes';
+    is snapshots(DefaultBatch, $p).elems, 2, 'one committed optional snapshot';
+    is StoredCommand.^all.head.tries, 2, 'snapshot conflict counts as optimistic retry';
+};
+subtest 'projection counts matching facts, preserves its cursor and never snapshots a plain load' => {
+    fresh; my $p = DefaultBatch.^with-ids(:id(1)); $p.^create;
+    my $other = DefaultBatch.^with-ids(:id(2)); $other.^create;
+    $p.add; $other.add(:n(5)); $p.add;
+    my $proxy = View.^with-ids(:id(1));
+    is $proxy.^load.amount, 2, 'load folds only matching facts';
+    is snapshots(View, $proxy).elems, 0, 'loading is read-only';
+    $proxy.^advance;
+    my $checkpoint = snapshots(View, $proxy).tail;
+    is $checkpoint.data<amount>, 2, 'advance checkpoints matching state';
+    ok $checkpoint.replay-cursor < $checkpoint.id, 'checkpoint stores the consumed cursor';
+    $proxy.^advance;
+    is snapshots(View, $proxy).elems, 1, 'no new facts means no redundant snapshot';
+    $p.add;
+    is $proxy.^load.amount, 3, 'restored projection includes later facts once';
+    my $atomic = Atomic.^with-ids(:id(1));
+    $p.add(:n(3), :atomic);
+    ok snapshots(Atomic, $atomic).elems >= 3, 'transactional checkpoints remain mandatory with negation';
+};
+subtest 'saga checkpoints controls and resumes a claimed action without replaying effects' => {
+    fresh; my $effects = 0;
+    register-service 'autosnapshot-test', -> $, Capture $, :$idempotency-key! { $effects++; %(sent => True) };
+    my $p = Workflow.^with-ids(:id(1)); $p.^create;
+    Fact.emit(:stream<source>, :version(1), :id(1), :amount(4));
+    $p.^advance(:limit(0));
+    is $p.^load.^snapshot-events, 1, 'source progress is represented by a committed control';
+    $p.^advance;
+    is $effects, 1, 'effect executes once';
+    is snapshots(Workflow, $p).elems, 2, 'claim crosses the control threshold';
+    $p.^release;
+    my $restored = $p.^load;
+    is $effects, 1, 'snapshot and later controls restore passively';
+    is $restored.^status, 'completed', 'post-snapshot success control restores completion';
+    is $restored.amount, 4, 'domain state survived';
+};
+subtest 'a snapshot of a claimed saga action survives lost acknowledgement' => {
+    fresh; configure-lifecycles({ Workflow.^name => { auto-snapshot => { count => 1 } } });
+    my (%receipts, @keys); my $effects = 0;
+    register-service 'autosnapshot-test', -> $, Capture $, :$idempotency-key! {
+        @keys.push($idempotency-key);
+        %receipts{$idempotency-key} //= do { $effects++; %(sent => True) }
+    };
+    my $p = Workflow.^with-ids(:id(1)); $p.^create;
+    Fact.emit(:stream<source>, :version(1), :id(1), :amount(4));
+    $*RED-DB.prepare(q:to/SQL/).execute;
+        CREATE TRIGGER reject_ack BEFORE INSERT ON red_sourcing_event
+        WHEN NEW.class = 'RedSourcing::Saga::StepSucceeded'
+        BEGIN SELECT RAISE(ABORT, 'acknowledgement lost'); END
+        SQL
+    dies-ok { $p.^advance }, 'acknowledgement fails after the effect';
+    is snapshots(Workflow, $p).tail.data<saga-state><actions>.head<status>, 'running',
+        'latest automatic snapshot includes the durable claim';
+    $p.^release;
+    is $p.^load.^state<actions>.head<status>, 'running', 'restoration preserves the running action';
+    is $effects, 1, 'restoration does not call the provider';
+    $*RED-DB.prepare('DROP TRIGGER reject_ack').execute;
+    $p.^advance;
+    is $p.^load.^status, 'completed', 'controller settles the recovered result';
+    is $effects, 1, 'idempotent provider keeps one delivery';
+    is @keys.elems, 2, 'controller rechecks the unacknowledged provider outcome';
+    is @keys[0], @keys[1], 'recovery preserves the provider key';
+};
+subtest 'policies replace one another; Nil differs from omission; settings freeze after first use' => {
+    fresh;
+    configure-lifecycles({
+        Batch.^name => { auto-snapshot => Nil },
+        Disabled.^name => { auto-snapshot => { count => 3 } },
+    }, :auto-snapshot{ seconds => 300 });
+    nok Batch.^auto-snapshot.defined, 'file Nil overrides declared policy';
+    is Batch.^lifecycle, Retained, 'policy override preserves declared lifecycle';
+    is-deeply Disabled.^auto-snapshot.Hash, { count => 3 }, 'file enables declared disabled policy';
+    is-deeply DefaultBatch.^auto-snapshot.Hash, { seconds => 300 }, 'undeclared type inherits global policy';
+    is-deeply View.^auto-snapshot.Hash, { count => 2 }, 'declaration replaces global policy';
+    my $p = Batch.^with-ids(:id(1)); $p.^create;
+    throws-like { configure-lifecycles({}) }, X::AdHoc, message => /'Auto snapshot'/;
+    throws-like { Batch.^lifecycle(:auto-snapshot{ count => 4 }) }, X::AdHoc,
+        message => /'before first use'/;
+    for {}, {count => 0}, {count => 1.5}, {seconds => -1},
+        {seconds => Inf}, {wat => 1}, True -> $bad {
+        dies-ok { snapshot-policy($bad) }, 'invalid policy is rejected';
+    }
+};
+done-testing;

@@ -1,0 +1,185 @@
+use Test;
+use lib 't/lib';
+use RedSourcing;
+use RedSourcing::Lifecycle;
+use RedSourcing::Journal;
+use LifecycleDomain;
+
+my $*RED-DB;
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    schema(StoredEvent, StoredCommand).create;
+}
+
+subtest 'all entity kinds declare a lifecycle and default to OnDemand' => {
+    fresh;
+    is Account.^lifecycle, Retained, 'aggregate declaration retains';
+    is Total.^lifecycle, Retained, 'projection declaration retains';
+    is Workflow.^lifecycle, Retained, 'saga declaration retains';
+    is DefaultAccount.^lifecycle, OnDemand, 'unparameterized declaration keeps default';
+    is Account.^name, 'LifecycleDomain::Account', 'lifecycle preserves persisted names';
+};
+
+subtest 'lifecycle queries and named configuration share the same metaclass API' => {
+    fresh;
+    aggregate ConfiguredAccount { has Int $.id is entity-id; method APPLY(Added $) {} }
+    projection ConfiguredTotal { has Int $.id is entity-id; method APPLY(Added $) {} }
+    saga ConfiguredWorkflow { has Int $.id is entity-id; method APPLY(Added $) {} }
+    for ConfiguredAccount, ConfiguredTotal, ConfiguredWorkflow -> $type {
+        is $type.^lifecycle, OnDemand, 'argumentless call queries the effective lifecycle';
+        ok $type.^lifecycle(:retained, :auto-snapshot{ :2count }) === $type,
+            'configuration returns the declaration type';
+        is $type.^lifecycle, Retained, 'named option configures retention';
+        is $type.^lifecycle(:declared), Retained, 'declared query remains a getter';
+        is-deeply $type.^auto-snapshot.Hash, { count => 2 }, 'snapshot options share the declaration API';
+        $type.^lifecycle(:!retained, :!auto-snapshot);
+        is $type.^lifecycle, OnDemand, 'negated option restores OnDemand';
+        nok $type.^auto-snapshot.defined, 'negated snapshot option disables snapshots';
+        throws-like { $type.^lifecycle(:typo) }, X::AdHoc,
+            message => /'only retained, lifecycle and auto-snapshot'/;
+        throws-like { $type.^lifecycle(:declared, :retained) }, X::AdHoc,
+            message => 'Cannot combine :declared with lifecycle configuration';
+    }
+};
+
+subtest 'creating the first snapshot freezes lifecycle before the first load' => {
+    fresh;
+    aggregate CreatedAccount { has Int $.id is entity-id; method APPLY(Added $) {} }
+    projection CreatedTotal { has Int $.id is entity-id; method APPLY(Added $) {} }
+    saga CreatedWorkflow { has Int $.id is entity-id; method APPLY(Added $) {} }
+    for CreatedAccount, CreatedTotal, CreatedWorkflow -> $type {
+        $type.^with-ids(:id(1)).^create;
+        throws-like { $type.^lifecycle(Retained) }, X::AdHoc,
+            message => /'before first use'/;
+        lives-ok { $type.^lifecycle(OnDemand) }, 'same declaration choice remains valid';
+        throws-like { configure-lifecycles({ $type.^name => { lifecycle => 'Retained' } }) },
+            X::AdHoc, message => /'before first use'/;
+        is $type.^lifecycle, OnDemand, 'rejected changes preserve the effective lifecycle';
+    }
+};
+
+subtest 'commands fold new events and publish retained aggregate state after commit' => {
+    fresh;
+    my $proxy = Account.^with-ids(:id(1)); $proxy.^create;
+    my $view = $proxy.^load;
+    ok $view === $proxy.^load, 'loads share one retained aggregate';
+    is $proxy.add(:amount(2)), 2, 'command commits';
+    is $view.amount, 2, 'existing reference receives committed state';
+    Added.emit(:id(1), :amount(3), :stream($proxy.^stream-name), :version(3));
+    is $proxy.add(:amount(4)), 9, 'command folds a remote append before invoking its handler';
+    is $view.amount, 9, 'remote and local changes publish together';
+    red-do :transaction, {
+        is $proxy.add(:amount(5)), 14, 'nested command reads provisional state';
+        is $view.amount, 9, 'shared state waits for the outer owner';
+        is $proxy.^load.amount, 14, 'transactional load returns working state';
+        True
+    };
+    is $view.amount, 14, 'outer commit publishes';
+    throws-like { red-do :transaction, {
+        $proxy.add(:amount(10));
+        die 'Abort owner';
+    } }, X::AdHoc, message => 'Abort owner';
+    is $view.amount, 14, 'outer rollback discards scalar changes';
+    is-deeply $view.seen.Array, [2, 3, 4, 5], 'array changes are isolated';
+    is-deeply $view.details<amounts>.Array, [2, 3, 4, 5], 'nested changes are isolated';
+    throws-like { $proxy.add(:amount(20), :fail) }, X::AdHoc, message => 'Rejected addition';
+    is $view.amount, 14, 'failed commands never publish';
+    $view.^emit-snapshot;
+    $proxy.^release;
+    nok $view === $proxy.^load, 'release supports aggregate proxies';
+    is $proxy.^load.amount, 14, 'a new object restores the checkpoint';
+};
+
+subtest 'retained saga replay is passive and each committed control updates its owner' => {
+    fresh;
+    my $attempts = 0;
+    register-service 'lifecycle-test', -> $, Capture $, :$idempotency-key! {
+        die Retryable.new(:message<retry>) if ++$attempts == 1;
+        %(sent => True)
+    };
+    my $proxy = Workflow.^with-ids(:id(2)); $proxy.^create;
+    my $view = $proxy.^load;
+    ok $view === $proxy.^load, 'saga reference is retained';
+    Added.emit(:id(2), :amount(7), :stream<source>, :version(1));
+    $proxy.^load;
+    is $attempts, 0, 'loading does not execute REACT or services';
+    my $now = DateTime.now;
+    $proxy.^advance(:$now, :limit(0));
+    is $view.amount, 7, 'committed APPLY values publish';
+    is $view.^pending-actions.head<status>, 'pending', 'REACT intent is retained';
+    $proxy.^advance(:$now);
+    is $view.^pending-actions.head<status>, 'retry', 'retry control publishes';
+    is $attempts, 1, 'service was attempted once';
+    $view.^emit-snapshot;
+    $proxy.^release;
+    my $restored = $proxy.^load;
+    is $attempts, 1, 'checkpoint restoration does not reissue effects';
+    $proxy.^advance(:now($now.later(:seconds(2))));
+    is $restored.^status, 'completed', 'success and completion update the retained reference';
+    is $attempts, 2, 'durable retry executes once';
+};
+
+subtest 'a delayed cache publication cannot replace a newer committed aggregate version' => {
+    fresh;
+    my $proxy = Account.^with-ids(:id(4)); $proxy.^create;
+    my $view = $proxy.^load;
+    my @callbacks;
+    red-do :transaction, {
+        $proxy.^load;
+        @callbacks = journal-connection().journal-state<publish>.values.Array;
+        True
+    };
+    is $proxy.add(:amount(8)), 8, 'a newer version commits';
+    .() for @callbacks;
+    is $view.amount, 8, 'late publication leaves the newer state intact';
+};
+
+subtest 'saga plans and timeouts are provisional inside caller-owned transactions' => {
+    fresh;
+    my $proxy = Workflow.^with-ids(:id(3)); $proxy.^create;
+    my $view = $proxy.^load;
+    my ($shared-count, $working-count);
+    throws-like { red-do :transaction, {
+        $view.set-timeout('finish', 0, expire => \());
+        $shared-count = $view.^state<timers>.elems;
+        $working-count = $proxy.^load.^state<timers>.elems;
+        die 'Abort timer';
+    } }, X::AdHoc, message => 'Abort timer';
+    is $shared-count, 0, 'shared timer map is unchanged';
+    is $working-count, 1, 'transaction sees the new timer';
+    is $view.^state<timers>.elems, 0, 'aborted plan is discarded';
+    $view.set-timeout('finish', 0, expire => \());
+    is $view.^state<timers>.elems, 1, 'committed plan publishes';
+    $proxy.^advance;
+    is $view.^status, 'completed', 'native timeout updates the retained saga';
+    is $view.^state<timers>.elems, 0, 'fired timer is removed';
+};
+
+subtest 'configuration overrides are store-scoped, lazy, and frozen after first use' => {
+    fresh;
+    configure-lifecycles({
+        'LifecycleDomain::DefaultAccount' => { lifecycle => 'Retained' },
+        'LifecycleDomain::Account' => { lifecycle => 'OnDemand' },
+    });
+    is DefaultAccount.^lifecycle, Retained, 'configuration overrides the declaration default';
+    is Account.^lifecycle, OnDemand, 'configuration can disable declared retention';
+    my $proxy = DefaultAccount.^with-ids(:id(9)); $proxy.^create;
+    ok $proxy.^load === $proxy.^load, 'configured retention is effective';
+    lives-ok { configure-lifecycles({
+        'LifecycleDomain::DefaultAccount' => { lifecycle => 'Retained' },
+        'LifecycleDomain::Account' => { lifecycle => 'OnDemand' },
+    }) }, 'reapplying identical settings is allowed';
+    throws-like { configure-lifecycles({}) }, X::AdHoc,
+        message => /'before first use'/;
+    is DefaultAccount.^lifecycle, Retained, 'invalid reconfiguration is atomic';
+    fresh;
+    is DefaultAccount.^lifecycle, OnDemand, 'a different connection keeps its own settings';
+    my $plain = DefaultAccount.^with-ids(:id(9)); $plain.^create;
+    nok $plain.^load === $plain.^load, 'OnDemand loads are independent';
+    throws-like { configure-lifecycles({'X' => { lifecycle => 'Other' }}) }, X::AdHoc,
+        message => /'Unknown entity lifecycle'/;
+    throws-like { configure-lifecycles({'X' => { lifecycle => 'Retained', typo => True }}) }, X::AdHoc,
+        message => /'only retained, lifecycle and auto-snapshot'/;
+};
+
+done-testing;

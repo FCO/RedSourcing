@@ -60,6 +60,49 @@ inventory, charge a payment provider or expose an HTTP API. The tutorial explain
 how those responsibilities can be added and how the command execution policy
 affects rejected commands.
 
+## Sequence: menu, order, delivery and cancellation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller
+    participant R as Restaurant
+    participant O as DeliveryOrder
+    participant J as Journal
+    participant P as CustomerOrders and RestaurantBoard
+    participant T as DeliveryTotals
+    Caller->>R: create, set-menu-item and open-for-orders
+    R->>J: Initial snapshot and committed menu facts
+    Caller->>O: create and place-order
+    O->>R: Load current menu and availability
+    O->>O: Validate quantities, freeze names and prices, compute exact<br/>total
+    O->>J: Append OrderPlaced and save receipt
+    Caller->>O: accept, mark-ready and assign-courier
+    O->>J: Commit each lifecycle event and command result
+    Caller->>P: load customer tracking and restaurant board
+    P->>J: Select matching order facts across streams
+    P-->>Caller: Assigned order and active restaurant queue
+    Caller->>O: Save order and customer projection checkpoints
+    O->>J: Snapshots retain state and replay position
+    Caller->>O: pick-up with wrong courier
+    O-->>Caller: Reject and persist command failure, without pickup event
+    Caller->>O: pick-up with assigned courier
+    O->>J: Append pickup fact
+    Caller->>O: deliver asynchronously, then run handle
+    O->>J: Append delivery fact and save delivered result
+    Caller->>O: Run the completed handle again
+    O-->>Caller: Saved delivered result
+    Caller->>P: load after checkpoint
+    P->>J: Fold only later applicable facts
+    P-->>Caller: Delivered tracking and empty active queue
+    Caller->>O: Create a second order, place it and cancel it
+    O->>J: Commit placement and cancellation facts
+    Caller->>T: load report
+    T->>J: Fold order facts from all order streams
+    T-->>Caller: 2 placed, 1 delivered, 1 cancelled
+    Note over O,J: Optional autosnapshot runs<br/>at successful command<br/>boundaries
+```
+
 ## Test
 
 ```sh

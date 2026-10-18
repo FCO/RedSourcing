@@ -76,6 +76,131 @@ flowchart TD
     Cancel --> Hooks
 ```
 
+## Sequence: purchase through physical delivery
+
+`Shop.drain` supplies the controller passes below. Each saga persists its intent
+and claim before calling an aggregate or provider, then records the outcome.
+Provider simulations save receipts under stable action keys.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as Customer and warehouse
+    participant App as Shop facade and controller
+    participant A as Order, Inventory and Shipment
+    participant J as Journal
+    participant P as PurchaseSaga
+    participant F as FulfillmentSaga
+    participant S as ShippingSaga
+    participant E as Payment and carrier providers
+    Customer->>App: Register products and purchase quoted items
+    App->>A: Create stock, order and shipment streams
+    App->>J: Create per-order sagas before OrderSubmitted
+    App->>A: Order.submit with authoritative inventory quote
+    A->>J: OrderSubmitted
+    App->>P: advance
+    P->>J: Persist deadline and first reservation intent
+    loop Each quoted line, in order
+        App->>A: Inventory.reserve
+        A->>J: StockReserved and saved reservation result
+        App->>P: StepSucceeded, retain release compensation
+    end
+    App->>E: Charge payment with stable action key
+    E->>J: Durable provider receipt
+    App->>P: Persist success and refund compensation
+    App->>A: Order.confirm-payment
+    A->>J: OrderPaid
+    App->>P: Settle child result and complete purchase
+    App->>F: Consume OrderPaid and plan carrier booking
+    App->>E: Book carrier
+    E->>J: Durable booking receipt
+    App->>A: Shipment.book
+    A->>J: ShipmentBooked
+    Customer->>A: Order.authorize-dispatch
+    A->>J: OrderDispatchAuthorized
+    App->>F: Consume authorization and plan handoff
+    App->>A: Shipment.dispatch
+    A->>J: ShipmentDispatched after checking authorization and holds
+    App->>S: Consume handoff
+    loop Each reserved line
+        App->>A: Inventory.dispatch
+        A->>J: StockDispatched
+        App->>S: Persist progress before the next line
+    end
+    App->>A: Order.mark-shipped
+    A->>J: OrderShipped
+    Customer->>A: Shipment.deliver from carrier confirmation
+    A->>J: ShipmentDelivered
+    App->>S: Consume delivery and plan order confirmation
+    App->>A: Order.mark-delivered
+    A->>J: OrderDelivered
+    App->>S: Persist completion
+    Note over A,J: Domain commands evaluate<br/>optional autosnapshot before<br/>saving their result
+    Note over App,J: Read models fold these facts<br/>on load, no service runs<br/>during loading
+```
+
+## Sequence: cancellation, returns and independent follow-up work
+
+These are alternative or subsequent paths for different orders. Physical handoff
+is a boundary: post-handoff issues do not automatically refund an in-transit parcel.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Customer, operator and warehouse
+    participant C as Shop controller
+    participant A as Domain aggregates
+    participant J as Journal
+    participant S as Purchase and Fulfillment
+    participant X as CancellationSaga and ReturnSaga
+    participant R as ReplenishmentSaga
+    participant N as NotificationSaga and WebhookSaga
+    participant E as Simulated providers
+    alt Definite failure during purchase
+        C->>S: Begin compensation after exhausted action
+        S->>J: Persist inverse work in reverse success order
+        C->>E: Refund confirmed payment when present
+        C->>A: Release earlier inventory holds
+        C->>A: Controller bridge records OrderCancelled after compensation
+    else Cancellation before dispatch authorization
+        User->>A: Order.request-cancellation
+        A->>J: CancellationRequested
+        C->>S: Fulfillment compensates carrier booking
+        C->>E: Cancel booking
+        C->>A: Controller bridge records ShipmentCancelled
+        C->>X: CancellationSaga waits for request and shipment cancellation
+        C->>E: Refund payment
+        C->>A: Release holds and confirm OrderCancelled
+    else Full return after delivery
+        User->>A: Order.request-return
+        A->>J: ReturnRequested
+        C->>X: ReturnSaga plans label and return deadline
+        C->>E: Create return label
+        User->>A: Confirm physical ReturnReceived
+        C->>X: Cancel deadline and plan sequential restocking
+        C->>A: Restock each Inventory line
+        C->>E: Refund payment
+        C->>A: Order.finish-return
+        A->>J: ReturnCompleted
+    end
+    opt Available stock crosses replenishment threshold
+        C->>R: Consume stock facts and plan supplier request
+        C->>E: Order replacement stock
+        C->>A: Inventory.receive with supplier reference
+        A->>J: StockReceived
+    end
+    loop Submitted, paid, shipped, delivered, cancelled, returned or issue facts
+        C->>N: Advance each independently routed notification workflow
+        N->>J: Persist email or webhook intent and claim
+        C->>E: Deliver using stable keys and saved payloads
+        E->>J: Persist receipt for retry and lost-ack recovery
+        C->>N: Record success or schedule retry
+    end
+    User->>A: Read ShopDashboard, WarehouseBoard and OrderNotifications
+    A->>J: Select matching domain facts and optional projection snapshots
+    A-->>User: Order states, stock totals and ordered in-app inbox
+```
+
 ## Use the application API
 
 The `Shop` facade initializes tables, creates required snapshots and creates every

@@ -26,6 +26,54 @@ provider, not a real payment integration. An external controller must call
 `.^advance` periodically. See [the saga API and recovery contract](../../docs/sagas.md)
 and [the regression tests](../../t/13-sagas.rakutest).
 
+## Sequence: successful steps, recovery and deadline compensation
+
+The demonstration injects `OrderSubmitted` directly as its source fixture. An
+application should produce that domain fact through an aggregate command.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Demo
+    participant J as Journal
+    participant S as OrderSaga
+    participant C as External controller
+    participant I as Inventory aggregate
+    participant P as Simulated payments
+    Demo->>I: create
+    I->>J: Initial inventory snapshot
+    Demo->>S: create
+    S->>J: Initial saga snapshot
+    Demo->>J: Inject OrderSubmitted fixture
+    Demo->>C: advance
+    C->>S: Consume OrderSubmitted
+    S->>S: APPLY amount, REACT plans reservation and 15-minute timeout
+    S->>J: Persist source cursor, timer and action intent
+    C->>J: Persist reservation claim and child command row
+    C->>I: reserve
+    I->>J: StockReserved and saved reservation result
+    C->>S: StepSucceeded
+    S->>J: Store release compensation and plan charge-payment
+    C->>J: Persist payment claim before contacting provider
+    C->>P: charge with stable idempotency key
+    P-->>C: payment-id
+    C->>S: StepSucceeded
+    S->>J: Persist paid state and refund compensation
+    Demo->>S: emit-snapshot, then load
+    S->>J: Restore state, timer and compensation stack
+    Note over S,P: Loading does not charge or<br/>reserve again
+    Demo->>C: check-timeouts after 901 seconds
+    C->>S: Run expire and begin compensation
+    S->>J: Persist compensating state
+    C->>P: refund the recorded payment-id
+    P-->>C: Refunded
+    C->>J: Persist inverse success and pop refund entry
+    C->>I: release the recorded reservation-id
+    I->>J: StockReleased and inverse command result
+    C->>J: Persist inverse success and compensated status
+    Note over S,J: Automatic snapshots may<br/>checkpoint any committed<br/>control boundary
+```
+
 ## CLI and web monitor configuration
 
 This directory includes `red-sourcing.rakuconf`, with a local SQLite store,

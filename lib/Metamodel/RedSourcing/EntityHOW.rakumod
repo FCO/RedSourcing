@@ -6,6 +6,11 @@ use RedSourcing::Command;
 use Metamodel::RedSourcing::ProxyHOW;
 use RedSourcing::Context;
 use RedSourcing::Flow;
+use RedSourcing::IsTransactional;
+use RedSourcing::Journal;
+use RedSourcing::Lifecycle;
+use RedSourcing::X::OptimisticLockFailed;
+use X::Red::Exceptions;
 
 also is Metamodel::ClassHOW;
 also does Metamodel::RedSourcing::EntityIdContainer;
@@ -17,6 +22,100 @@ has $!proxy;
 has $!version-attr;
 has $!curr-id-attr;
 has $!stream-attr;
+has $!checkpoint-attr;
+has EntityLifecycle $!lifecycle;
+has Bool $!used;
+has $!auto-snapshot;
+has Bool $!auto-snapshot-explicit;
+has $!snapshot-events-attr;
+has $!snapshot-at-attr;
+
+multi method lifecycle(Mu \type, Bool :$declared = False, *%options) {
+    if %options {
+        die 'Cannot combine :declared with lifecycle configuration' if $declared;
+        return self!configure-lifecycle(type, |%options);
+    }
+    my $default = $!lifecycle // OnDemand;
+    $declared ?? $default !! effective-lifecycle(type.WHAT, $default)
+}
+
+multi method lifecycle(Mu:U \type, EntityLifecycle $lifecycle) {
+    self.lifecycle(type, :$lifecycle)
+}
+
+method !configure-lifecycle(Mu:U \type, *%options) {
+    assert-effect-allowed('entity lifecycle configuration');
+    die 'Entity lifecycle options accept only retained, lifecycle and auto-snapshot'
+        if %options.keys.grep({ $_ ne any(<retained lifecycle auto-snapshot>) });
+    die 'Choose retained or lifecycle, not both' if (%options<retained>:exists) && (%options<lifecycle>:exists);
+    die 'retained must be a Bool' if (%options<retained>:exists) && %options<retained> !~~ Bool;
+    my $lifecycle = (%options<retained>:exists)
+        ?? (%options<retained> ?? Retained !! OnDemand)
+        !! %options<lifecycle> // self.lifecycle(type, :declared);
+    die 'lifecycle must be OnDemand or Retained' unless $lifecycle ~~ EntityLifecycle;
+    my $policy = (%options<auto-snapshot>:exists) ?? snapshot-policy(%options<auto-snapshot>) !! $!auto-snapshot;
+    die 'Entity lifecycle must be configured before first use'
+        if $!used && $lifecycle != self.lifecycle(type, :declared);
+    die 'Auto snapshot must be configured before first use'
+        if $!used && (%options<auto-snapshot>:exists)
+            && (!$!auto-snapshot-explicit || !($policy eqv $!auto-snapshot));
+    $!lifecycle = $lifecycle;
+    if %options<auto-snapshot>:exists {
+        $!auto-snapshot = $policy;
+        $!auto-snapshot-explicit = True;
+    }
+    type
+}
+
+method auto-snapshot(Mu \type, Bool :$declared = False, Bool :$explicit = False) {
+    return $!auto-snapshot-explicit if $explicit;
+    my $policy = $declared
+        ?? ($!auto-snapshot-explicit ?? $!auto-snapshot !! default-auto-snapshot())
+        !! effective-auto-snapshot(type.WHAT, $!auto-snapshot, $!auto-snapshot-explicit);
+    $policy.defined ?? $policy !! Nil
+}
+
+method snapshot-events(\entity) is rw { $!snapshot-events-attr.get_value(entity) }
+method snapshot-at(\entity) is rw { $!snapshot-at-attr.get_value(entity) }
+method record-applied(\entity, DateTime :$at = DateTime.now) {
+    entity.^snapshot-at = $at.Instant.Num unless entity.^snapshot-at;
+    entity.^snapshot-events++
+}
+
+method maybe-auto-snapshot(\entity) {
+    my $policy = entity.^auto-snapshot;
+    return unless $policy.defined && entity.^snapshot-events;
+    my $instant = DateTime.now.Instant.Num;
+    return unless (($policy<count>:exists) && entity.^snapshot-events >= $policy<count>)
+        || (($policy<seconds>:exists) && $instant - entity.^snapshot-at >= $policy<seconds>);
+    my $aggregate = self.^can('apply-new-events-of-stream').so;
+    my %cursor = $aggregate ?? {} !! { replay-cursor => entity.^current-id };
+    my $row;
+    {
+        CATCH {
+            when X::Red::Driver::Mapped::Unique {
+                RedSourcing::X::OptimisticLockFailed.new(:event-class(entity.^name),
+                    :stream(entity.^stream), :version(entity.^version + 1)).throw
+            }
+        }
+        $row = entity.^write-snapshot(:version(entity.^version + 1), |%cursor);
+    }
+    entity.^version = $row.version;
+    if $aggregate { entity.^current-id = $row.id }
+    else { entity.^checkpoint-cursor = $row.replay-cursor }
+    publish-entity(entity);
+    $row
+}
+
+method use-lifecycle(Mu \type) {
+    $!used = True;
+    mark-entity-used(type.WHAT);
+}
+
+method release(Mu:U \type, Str :$stream!) {
+    assert-effect-allowed('entity release');
+    release-entity(type, $stream)
+}
 
 method proxy(|) { $!proxy }
 
@@ -25,6 +124,9 @@ method compose(Mu \entity, |) {
 
 	callsame;
 	my $apply = entity.^find_method('APPLY');
+	die 'is transactional is only supported on projection APPLY methods'
+		if $apply.candidates.grep(* ~~ IsTransactional)
+		&& !self.^mro.grep(*.^name eq 'Metamodel::RedSourcing::ProjectionHOW').elems;
 	$apply.wrap(my method (Mu \SELF: |c) {
 		my $*REDSOURCING-PHASE = 'APPLY';
 		callsame
@@ -33,6 +135,9 @@ method compose(Mu \entity, |) {
 	$!version-attr = entity.^attributes.first: { .name eq '$!version'    }
 	$!curr-id-attr = entity.^attributes.first: { .name eq '$!current-id' }
 	$!stream-attr  = entity.^attributes.first: { .name eq '$!stream'     }
+	$!checkpoint-attr = entity.^attributes.first: { .name eq '$!checkpoint-cursor' }
+	$!snapshot-events-attr = entity.^attributes.first(*.name eq '$!snapshot-events');
+	$!snapshot-at-attr = entity.^attributes.first(*.name eq '$!snapshot-at');
 
 	my Str $name = entity.^name ~ "Proxy";
 	$!proxy := Metamodel::RedSourcing::ProxyHOW.new_type: :$name, :entity(entity.WHAT);
@@ -117,6 +222,10 @@ method current-id(\entity) is rw {
 	$!curr-id-attr.get_value: entity
 }
 
+method checkpoint-cursor(\entity) is rw {
+    $!checkpoint-attr.get_value: entity
+}
+
 method stream(\entity) {
 	$!stream-attr.get_value: entity
 }
@@ -135,20 +244,33 @@ method from(\entity, $source) {
 }
 
 method load(Mu:U \type, Str :$stream!, *%initial) {
+    type.^use-lifecycle;
+    my &restore = {
+        my $entity = type.^restore(:$stream, |%initial);
+        $entity.^replay;
+        $entity
+    };
+    return restore() if type.^lifecycle == OnDemand;
+    my $entity = retained-load(type, $stream, &restore);
+    $entity.^replay if (try $*RED-TRANSACTION-RUNNING) // False;
+    $entity
+}
+
+method restore(Mu:U \type, Str :$stream!, *%initial) {
 	require ::("RedSourcing::StoredEvent");
 	my $*RED-FALLBACK = False;
 	my $snapshot = ::("RedSourcing::StoredEvent").^all.grep({
 		.class eq type.^name && .stream eq $stream
 	}).sort(-*.id).head;
-	my $entity = type.^restore-state($snapshot, :$stream, |%initial);
-	$entity.^replay;
-	$entity
+	type.^restore-state($snapshot, :$stream, |%initial)
 }
 
 # Shared persistence; the concrete HOW chooses replay and cursor policy.
 method write-snapshot(\entity, UInt :$version!, UInt :$replay-cursor) {
 	assert-effect-allowed('snapshot emission');
+	entity.^use-lifecycle;
 	require ::("RedSourcing::StoredEvent");
+	my Mu $stored-event = ::("RedSourcing::StoredEvent");
 	my $event-schema-version = entity.^api.UInt // 0;
 	my $mro = "|"
 		~ [
@@ -158,15 +280,20 @@ method write-snapshot(\entity, UInt :$version!, UInt :$replay-cursor) {
 			$_ !~~ /"<anon|" \d+ ">"/
 		}).join("|")
 		~ "|";
-	my $row = ::("RedSourcing::StoredEvent").^create:
-		:$event-schema-version,
-		:$version,
-		:stream(entity.^stream),
-		:class(entity.^name),
-		:$mro,
-		:data(entity.^data),
-		:$replay-cursor,
-	;
-	trace-emission($row);
+	my $row = journal-do {
+		my $row = $stored-event.^create:
+			:$event-schema-version,
+			:$version,
+			:stream(entity.^stream),
+			:class(entity.^name),
+			:$mro,
+			:data(entity.^data),
+			:$replay-cursor,
+		;
+		trace-emission($row);
+		$row
+	};
+	entity.^snapshot-events = 0;
+	entity.^snapshot-at = $row.created.Instant.Num;
 	$row
 }

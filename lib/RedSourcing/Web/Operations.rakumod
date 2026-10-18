@@ -38,6 +38,8 @@ submethod TWEAK {
         ~ '.includes = ' ~ $!settings.includes.Array.raku ~ ';'
         ~ '.modules = ' ~ $!settings.modules.Array.raku ~ ';'
         ~ '.connection = ' ~ $!settings.connection.raku ~ ';'
+        ~ '.entities = ' ~ $!settings.entities.raku ~ ';'
+        ~ '.auto-snapshot = ' ~ ($!settings.auto-snapshot.defined ?? $!settings.auto-snapshot.raku !! 'Nil') ~ ';'
         ~ '.worker: { .limit = ' ~ ($!settings.worker.limit // 100)
         ~ '; .interval = ' ~ ($!settings.worker.interval // 1) ~ '; .watch = False } }');
     $!config.chmod(0o600);

@@ -172,6 +172,63 @@ my $restored = $reminder.^load; # reads committed state without sending email
 say $restored.^state<timers>;
 ```
 
+## Sequence: checkout and an abandoned cart
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Shopper
+    participant C as Cart aggregate
+    participant J as Journal
+    participant P as CartSummary and ShopSales
+    participant S as AbandonedCartReminder
+    participant W as External controller
+    participant E as Simulated email adapter
+    Shopper->>C: create, add-item, set-quantity and remove-item
+    C->>J: Initial snapshot and committed modification facts
+    Shopper->>P: load CartSummary for this cart
+    P->>J: Read matching facts and fold quantities and prices
+    P-->>Shopper: Lines, units and total
+    Shopper->>C: Save aggregate and projection snapshots
+    C->>J: Persist checkpoints
+    Shopper->>C: checkout asynchronously
+    C->>J: Store pending command
+    Shopper->>C: Run checkout handle
+    C->>J: Reload current cart, append CartCheckedOut and save receipt
+    C-->>Shopper: order-id, agreed lines and total
+    Shopper->>C: Run completed handle again
+    C-->>Shopper: Same saved receipt
+    Shopper->>P: Reload CartSummary and ShopSales
+    P->>J: Fold later checkout facts across the appropriate streams
+    P-->>Shopper: Closed cart and sales totals
+    Note over C,S: The demo now creates another<br/>cart that stays open
+    Shopper->>S: create with cart-id and email
+    S->>J: Initial saga snapshot
+    Shopper->>C: add-item on the forgotten cart
+    C->>J: ItemAdded with stored emission timestamp
+    W->>S: advance
+    S->>J: Read this cart's source facts
+    S->>S: APPLY item state, REACT sets inactivity deadline
+    S->>J: Persist 24-hour timer, cursor and optional checkpoint
+    Shopper->>S: load after checkpoint
+    S-->>Shopper: Restored timer, without email delivery
+    W->>S: advance after the deadline
+    S->>J: Persist timeout, email intent and running claim
+    W->>E: send with stable action key
+    E->>C: Recheck current cart state and latest activity
+    alt Cart is still open and inactive
+        E->>J: Save idempotent ReminderEmailSent receipt
+        E-->>W: sent True
+        W->>S: StepSucceeded
+        S->>J: Persist completion
+    else Checkout, empty cart or new activity made the action stale
+        E-->>W: sent False
+        W->>S: Settle action and recompute the inactivity window
+    end
+    W->>S: advance again
+    Note over S,E: Completed reminders send no<br/>second email
+```
+
 ## Verification and possible extensions
 
 ```sh

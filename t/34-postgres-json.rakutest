@@ -5,35 +5,46 @@ use Red::AST::Value;
 use Red::AST::Infixes;
 use Red::AST::Unary;
 use JSON::Fast;
+use Red::Driver::Pg;
 
-# A minimal SQL context exercises the adapter without needing a Pg server or
-# loading DB::Pg. Real execution is covered by the opt-in estate regressions.
-class Translator does RedSourcing::PgJSON {
+# Exercise Red's real path translator and our remaining scalar adaptations.
+# A placeholder handle avoids opening a server connection.
+class Translator is Red::Driver::Pg does RedSourcing::PgJSON {
     has UInt $.counter is rw = 0;
     method wildcard { '$' ~ ++$!counter }
-    multi method translate(Red::AST::Value $value, $context?) { 'payload' => [] }
+    multi method translate(Red::AST::Value $value where { .value ~~ Str && .value eq 'document' }, $context?) {
+        'payload' => []
+    }
 }
+sub translator() { Translator.new(:dbh(True)) }
 sub item($key) { Red::AST::JsonItem.new(ast-value('document'), ast-value($key)) }
 subtest 'JSON path keys are bound, including nested keys and array indexes' => {
-    my $driver = Translator.new;
+    my $driver = translator();
     my $key = q[a,b}'{quoted];
     my $sql = $driver.translate(item($key));
-    ok $sql.key.contains('ARRAY[$1]::text[]'), 'PostgreSQL receives a typed path array';
+    ok $sql.key.contains('ARRAY[($1)::text]::text[]'), 'native translator binds a typed path array';
     nok $sql.key.contains($key), 'punctuation and quotes never enter the SQL';
     is-deeply $sql.value.Array, [$key], 'path value is preserved exactly';
     my $nested = Red::AST::JsonItem.new(item('outer'), 'inner');
-    $sql = Translator.new.translate(Red::AST::JsonItem.new($nested, 2));
-    is-deeply $sql.value.Array, ['outer', 'inner', '2'], 'AST-wrapped nested keys and indexes are flattened';
-    ok $sql.key.contains('ARRAY[$1, $2, $3]'), 'nested keys each have a parameter';
+    $sql = translator().translate(Red::AST::JsonItem.new($nested, 2));
+    is-deeply $sql.value.Array, ['outer', 'inner', 2], 'native binding preserves key and index types';
+    ok $sql.key.contains('($3)::text'), 'nested keys each have a parameter';
 };
 subtest 'scalar casts extract text instead of casting quoted JSON' => {
     for <str num int boolean datetime date> -> $type {
-        my $sql = Translator.new.translate(Red::AST::Cast.new(item('value'), $type));
+        my $sql = translator().translate(Red::AST::Cast.new(item('value'), $type));
         ok $sql.key.contains('#>>'), "$type extracts the unquoted scalar";
         is-deeply $sql.value.Array, ['value'], 'cast retains bound path';
     }
-    dies-ok { Translator.new.translate(Red::AST::Cast.new(item('value'), 'unsafe-type')) },
+    dies-ok { translator().translate(Red::AST::Cast.new(item('value'), 'unsafe-type')) },
         'unknown types cannot be interpolated into SQL';
+};
+subtest 'path expressions are translated by Red rather than stringified' => {
+    my $key = Red::AST::Cast.new(ast-value('dynamic-key'), 'str');
+    my $sql = translator().translate(Red::AST::JsonItem.new(ast-value('document'), $key));
+    is-deeply $sql.value.Array, ['dynamic-key'], 'dynamic path retains its bound value';
+    ok $sql.key.contains('::TEXT'), 'path retains the SQL expression';
+    nok $sql.key.contains('dynamic-key'), 'dynamic path never enters SQL as a literal';
 };
 subtest 'uncast equality encodes JSON strings, numbers, booleans and null once' => {
     for 'quoted " value', 42, True, Any -> $value {
@@ -41,10 +52,45 @@ subtest 'uncast equality encodes JSON strings, numbers, booleans and null once' 
             my $field = item('value');
             my $literal = ast-value($value);
             my $eq = $reverse ?? Red::AST::Eq.new($literal, $field) !! Red::AST::Eq.new($field, $literal);
-            my $sql = Translator.new.translate($eq);
+            my $sql = translator().translate($eq);
             ok $sql.key.ends-with('= $2::jsonb'), 'JSON equality uses a typed bound literal';
             is-deeply from-json($sql.value.tail), $value, 'literal is valid JSON with its original type';
         }
     }
+};
+subtest 'PostgreSQL executes native paths and the remaining JSON adaptations' => sub {
+    unless %*ENV<RED_SOURCING_TEST_PG_DATABASE>.defined {
+        skip 'Set RED_SOURCING_TEST_PG_DATABASE for live PostgreSQL JSON checks';
+        return;
+    }
+    require ::('DB::Pg');
+    my $pool = ::('DB::Pg').new(:conninfo('dbname=' ~ %*ENV<RED_SOURCING_TEST_PG_DATABASE>),
+        :converters(<DateTime UUID Geometric>));
+    sub evaluate($ast, %document, Bool :$boolean = False, Bool :$text = False) {
+        my $translator = translator();
+        my ($sql, @bind) = do given $translator.translate($ast) { .key, |.value };
+        $sql = "CASE WHEN $sql THEN 1 ELSE 0 END" if $boolean;
+        $sql = "($sql)::text" if $text;
+        my $parameter = $translator.wildcard;
+        $pool.query("WITH document(payload) AS (VALUES ({$parameter}::jsonb)) SELECT $sql AS result FROM document",
+            |@bind, to-json(%document, :!pretty)).hash<result>
+    }
+    my $special = q[a,b}'{quoted];
+    my %document = $special => { items => ['first', 'second'] },
+        string => 'quoted " value', integer => 42, number => 6.25, boolean => True,
+        null => Any, date => '2026-10-18', datetime => '2026-10-18 12:30:00';
+    my $path = Red::AST::JsonItem.new(Red::AST::JsonItem.new(item($special), 'items'), 1);
+    is evaluate(Red::AST::Cast.new($path, 'str'), %document), 'second', 'nested special path and array index execute';
+    for (string => 'str', integer => 'int', number => 'num', boolean => 'boolean',
+        date => 'date', datetime => 'datetime') -> $pair {
+        is evaluate(Red::AST::Cast.new(item($pair.key), $pair.value), %document, :text),
+            %document{$pair.key}.Str.lc, "{$pair.value} scalar cast executes";
+    }
+    for <string integer boolean null> -> $key {
+        my $eq = Red::AST::Eq.new(item($key), ast-value(%document{$key}));
+        is evaluate($eq, %document, :boolean), 1, "$key equality retains its JSON type";
+    }
+    my $missing = Red::AST::Cast.new(item('missing'), 'str');
+    nok evaluate($missing, %document).defined, 'missing path remains SQL NULL';
 };
 done-testing;

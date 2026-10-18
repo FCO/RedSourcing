@@ -3,6 +3,8 @@ use Metamodel::RedSourcing::EntityHOW;
 use RedSourcing::IsEntityIdMap;
 use RedSourcing::Context;
 use RedSourcing::Event;
+use RedSourcing::Lifecycle;
+use RedSourcing::Journal;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
@@ -68,11 +70,25 @@ method compose(Mu \entity, |) {
 			}
 			die "Event {$event.^name} does not match any APPLY candidate"
 				unless SELF.^find_method('APPLY').cando(\(SELF, $instance));
-			my $row = $instance.emit(:stream(SELF.^stream), :version(SELF.^version + 1));
-			apply-event(SELF, $row.COERCE($event));
-			SELF.^version = $row.version;
-			SELF.^current-id = $row.id;
-			$row
+			entity-operation(SELF, -> $working {
+                journal-do {
+                    my $row = $instance.emit(:stream($working.^stream), :version($working.^version + 1));
+                    apply-event($working, $row.COERCE($event));
+                    $working.^version = $row.version;
+                    $working.^current-id = $row.id;
+                    $working.^record-applied;
+                    # Commands checkpoint the complete handler, including nested
+                    # aggregate emissions, rather than each individual append.
+                    if (try $*COMMAND).defined {
+                        my $key = entity-key($working.WHAT, $working.^stream);
+                        journal-connection().journal-state<snapshot-candidates>{$key} = $working;
+                    } else {
+                        $working.^maybe-auto-snapshot;
+                    }
+                    publish-entity($working);
+                    $row
+                }
+            })
 		};
 		&emitter does AggregateEventMethod[$event];
 		entity.^add_method: %definition<name>, &emitter;
@@ -97,12 +113,22 @@ method apply-new-events-of-stream(\entity) {
 }
 
 method apply-model(\entity, $_) {
-	apply-event(entity, .COERCE) unless .class eq entity.^name;
+	if .class eq entity.^name {
+		entity.^snapshot-events = 0;
+		entity.^snapshot-at = .created.Instant.Num;
+	} else {
+		apply-event(entity, .COERCE);
+		entity.^record-applied(:at(.created));
+	}
 	entity.^version    max= .version;
 	entity.^current-id max= .id;
 }
 
 method emit-snapshot(\entity) {
+    entity-operation(entity, -> $working { $working.^snapshot-operation })
+}
+
+method snapshot-operation(\entity) {
 	my $retries-yet = 5;
 	my $error;
 	repeat {
@@ -112,9 +138,14 @@ method emit-snapshot(\entity) {
 				$error = $_;
 			}
 		}
-		entity.^replay;
-		my $row = entity.^write-snapshot(:version(++(entity.^version)));
-		entity.^current-id max= $row.id;
+        entity.^replay;
+        my $row = journal-do {
+            my $row = entity.^write-snapshot(:version(entity.^version + 1));
+            entity.^version = $row.version;
+            entity.^current-id max= $row.id;
+            publish-entity(entity);
+            $row
+        };
 		return $row;
 	} while $retries-yet;
 	$error.rethrow

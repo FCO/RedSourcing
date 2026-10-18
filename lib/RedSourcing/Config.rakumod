@@ -4,6 +4,7 @@ use Red::Database;
 use RedSourcing::Flow;
 use RedSourcing::StoredEvent;
 use RedSourcing::StoredCommand;
+use RedSourcing::Lifecycle;
 unit module RedSourcing::Config;
 
 class MonitorSettings does Configuration::Node {
@@ -27,8 +28,13 @@ class Settings does Configuration::Node is export {
     has Str @.includes;
     has Str @.modules;
     has %.connection;
+    has %.entities;
+    has $.auto-snapshot;
     has MonitorSettings $.monitor .= new;
     has WorkerSettings $.worker .= new;
+    submethod TWEAK(|args) {
+        $!auto-snapshot = default-auto-snapshot() unless args.hash<auto-snapshot>:exists;
+    }
 }
 
 # Export the builder DSL without Configuration's process-global discovery.
@@ -80,12 +86,14 @@ sub load-config(IO() :$file, IO::Path :$directory = $*CWD --> Hash) is export {
     die "Configuration file must return a RedSourcing config block: $selected"
         unless $settings ~~ Settings;
     validate-connection($settings.connection);
+    lifecycle-settings($settings.entities);
+    snapshot-policy($settings.auto-snapshot);
     my @paths = $settings.includes.map({ absolute-path($selected.parent, $_).Str });
     %(settings => $settings.clone(:includes(@paths)), directory => $selected.parent)
 }
 
 sub validate-connection(%connection) {
-    for <driver database debug includes modules> -> $reserved {
+    for <driver database debug includes modules entities auto-snapshot> -> $reserved {
         die "Set '$reserved' at the top level, not in connection"
             if %connection{$reserved}:exists;
     }
@@ -106,9 +114,11 @@ sub red-sourcing-defaults(IO() :$file, IO::Path :$directory = $*CWD,
     my $effective = $settings.clone(:driver($selected-driver), :database($selected-database),
         :debug($debug // $settings.debug), :flow-tracing($flow-tracing // $settings.flow-tracing), :connection(%options));
     red-defaults :default(store-driver($selected-driver, $selected-database, :connection(%options)));
+    configure-lifecycles($effective.entities, :auto-snapshot($effective.auto-snapshot));
     $PROCESS::RED-DEBUG = $effective.debug;
     if $initialize {
         .^create-table(:unless-exists) for RedSourcing::StoredEvent, RedSourcing::StoredCommand;
+        .^create-indexes for RedSourcing::StoredEvent, RedSourcing::StoredCommand;
     }
     enable-flow-tracing(:$initialize) if $effective.flow-tracing;
     $effective

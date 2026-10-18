@@ -115,6 +115,71 @@ Reads load projections without emitting commands or snapshots. `APPLY` changes
 state; `REACT` plans effects. A single process lock serializes HTTP reads, writes
 and controller work around the shared database connection.
 
+## Sequence: tenancy, rent, repair payment and chat
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Browser
+    participant Web as Cro and HTMX routes
+    participant A as Tenant, Property, Repair and Conversation
+    participant J as PostgreSQL journal
+    participant C as Application controller
+    participant S as RepairWorkflow
+    participant E as Simulated notification and payment services
+    participant P as Read models
+    Browser->>Web: Register tenant and property, start tenancy
+    Web->>A: Aggregate proxy commands
+    A->>J: Initial snapshots, domain facts and saved command results
+    Browser->>Web: Charge month and record rent payment
+    Web->>A: Property.charge-rent and receive-rent
+    A->>J: RentCharged and RentReceived
+    Web->>P: Load Portfolio, TenantDirectory and RentLedger
+    P->>J: Fold their matching facts
+    P-->>Web: Current tenancy and outstanding balances
+    Web-->>Browser: Render HTML fragments
+    Browser->>Web: Request a repair
+    Web->>A: Repair.request-repair
+    A->>J: RepairRequested
+    C->>S: advance
+    S->>J: Consume matching repair facts and persist notification intent<br/>and follow-up timer
+    C->>J: Persist action claim before service execution
+    C->>E: Deliver notification with stable key
+    E->>A: Conversation.post-message with idempotent message-id
+    A->>J: MessagePosted
+    C->>J: Persist StepSucceeded
+    Browser->>Web: Schedule contractor and finish work
+    Web->>A: Repair.schedule and finish
+    A->>J: RepairScheduled and RepairCompleted
+    C->>S: advance
+    S->>J: Cancel follow-up timer and plan status notifications
+    Browser->>Web: Approve contractor payment
+    Web->>A: Repair.pay-contractor
+    A->>J: RepairPaymentStarted
+    C->>S: advance and claim send-payment
+    C->>E: Pay with stable action key
+    opt Definite temporary failure
+        C->>J: Persist retry and next due time
+        C->>E: Retry on a later controller pass
+    end
+    E-->>C: payment-id and amount
+    C->>J: Persist success and refund compensation
+    C->>A: Repair.record-payment
+    A->>J: RepairPaid and child command result
+    C->>J: Persist reverse-payment compensation and notification intent
+    Web->>P: Load RepairBoard and RepairChat
+    P->>J: Fold payment and chat facts
+    Web-->>Browser: SSE prompts HTMX to refresh the affected HTML
+    opt Operator reverses the payment
+        C->>S: Begin compensation
+        C->>A: Repair.reverse-payment
+        A->>J: RepairPaymentReversed
+        C->>E: Refund recorded payment-id
+        C->>J: Persist inverse results in reverse stack order
+    end
+    Note over S,J: Snapshots preserve actions<br/>and timers, loading performs<br/>no effects
+```
+
 ## Independent generic monitor
 
 The app does not import `RedSourcing::Inspector`, register entity types with a

@@ -10,6 +10,8 @@ use RedSourcing::StoredCommand;
 use RedSourcing::X::OptimisticLockFailed;
 use JSON::Fast;
 use Red;
+use RedSourcing::Journal;
+use RedSourcing::Lifecycle;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
@@ -63,10 +65,19 @@ method restore-state(Mu:U \type, $snapshot, Str :$stream!, *%initial) {
 method replay(\entity) {
     for RedSourcing::StoredEvent.list-events(:row, :stream(entity.^stream)) -> $row {
         next if $row.version <= entity.^version;
+        if $row.class eq entity.^name {
+            my $snapshot = $row.COERCE(entity.WHAT);
+            entity.^adopt($snapshot.^values, $snapshot.^state, $snapshot.^current-id);
+            entity.^version = $row.version;
+            entity.^snapshot-events = 0;
+            entity.^snapshot-at = $row.created.Instant.Num;
+            next;
+        }
         next unless $row.mro.contains('|RedSourcing::Saga::Control|');
         my $control = $row.COERCE;
         entity.^adopt($control.values, $control.state, $control.cursor);
         entity.^version = $row.version;
+        entity.^record-applied(:at($row.created));
     }
 }
 
@@ -82,21 +93,32 @@ method clone-state(\entity) {
     my $copy = entity.WHAT.bless(|copy-data(entity.^data).Hash, :stream(entity.^stream));
     $copy.^version = entity.^version;
     $copy.^current-id = entity.^current-id;
+    $copy.^snapshot-events = entity.^snapshot-events;
+    $copy.^snapshot-at = entity.^snapshot-at;
     $copy
 }
 
 method commit(\entity, $copy, Mu:U $type = RedSourcing::Saga::StateChanged, *%fields) {
     my $*REDSOURCING-PHASE = 'CONTROL';
-    my $row = $type.new(
+    journal-do {
+      my $row = $type.new(
         :state(copy-data($copy.^state)), :values(copy-data($copy.^values)),
         :cursor($copy.^current-id), |%fields,
     ).emit(:stream(entity.^stream), :version(entity.^version + 1));
     entity.^adopt($copy.^values, $copy.^state, $copy.^current-id);
     entity.^version = $row.version;
+    entity.^record-applied(:at($row.created));
+    entity.^maybe-auto-snapshot;
+    publish-entity(entity);
     $row
+    }
 }
 
 method plan(\entity, &code) {
+    entity-operation(entity, -> $working { $working.^plan-operation(&code) })
+}
+
+method plan-operation(\entity, &code) {
     die 'Saga effects are forbidden in APPLY' if phase() eq 'APPLY';
     my $copy = entity.^clone-state;
     my %before = copy-data($copy.^values);
@@ -126,11 +148,16 @@ method apply(\entity, $event) {
 }
 
 method emit-snapshot(\entity) {
-    entity.^replay;
-    my $row = entity.^write-snapshot(:version(entity.^version + 1),
-        :replay-cursor(entity.^current-id));
-    entity.^version = $row.version;
-    $row
+    entity-operation(entity, -> $working {
+      journal-do {
+        $working.^replay;
+        my $row = $working.^write-snapshot(:version($working.^version + 1),
+            :replay-cursor($working.^current-id));
+        $working.^version = $row.version;
+        publish-entity($working);
+        $row
+      }
+    })
 }
 
 method policy($, %input) {
@@ -290,6 +317,10 @@ method finish-action(\entity, Str $id, :$result, :$error is copy, Bool :$uncerta
 }
 
 method resolve-action(\entity, Str $id, *%outcome) {
+    entity-operation(entity, -> $working { $working.^resolve-operation($id, |%outcome) })
+}
+
+method resolve-operation(\entity, Str $id, *%outcome) {
     die 'Resolution requires exactly one of result or error'
         unless %outcome.elems == 1 && %outcome.keys.head eq any(<result error>);
     my %action = entity.^state<actions>.first(*.<id> eq $id) // die "No saga action '$id'";
@@ -306,7 +337,7 @@ method run-action(\entity, Str $id, DateTime $now) {
     if %action<status> ne 'running' {
         my $copy = entity.^clone-state;
         my %next := $copy.^state<actions>.first(*.<id> eq $id);
-        red-do :transaction, {
+        transaction-do {
             my $*REDSOURCING-PHASE = 'EXECUTE';
             %next<status> = 'running';
             %next<attempts>++;
@@ -362,6 +393,10 @@ method run-action(\entity, Str $id, DateTime $now) {
 }
 
 method advance(\entity, DateTime :$now = DateTime.now, UInt :$limit = 100) {
+    entity-operation(entity, -> $working { $working.^advance-operation(:$now, :$limit) })
+}
+
+method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 100) {
     assert-effect-allowed('saga advance');
     my $*REDSOURCING-NOW = $now;
     entity.^replay;

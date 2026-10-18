@@ -4,6 +4,7 @@ use Red::Type::Json;
 use RedSourcing::C;
 use RedSourcing::Utils;
 use RedSourcing::Event;
+use RedSourcing::Predicate;
 
 model RedSourcing::StoredEvent is table<red_sourcing_event> {
 	has UInt     $.id                   is serial;
@@ -16,6 +17,8 @@ model RedSourcing::StoredEvent is table<red_sourcing_event> {
 	has UInt     $.event-schema-version is column is rw            = 0;
 	# Projection checkpoints retain the consumed global ID, not their own row ID.
 	has UInt     $.replay-cursor        is column{ :nullable };
+	has $.stream-history is index{ .stream, .id };
+	has $.snapshot-history is index{ .class, .stream, .id };
 
 	multi pair-to-code(Mu:U $event, %values) {
 		-> $record {
@@ -60,6 +63,7 @@ model RedSourcing::StoredEvent is table<red_sourcing_event> {
 
 	method list-events(
 		UInt     :$from-id is copy,
+		UInt     :$through-id,
 		Mu:U     :$from-snapshot-of-type = C,
 		Str      :$stream,
 		DateTime :$after,
@@ -84,11 +88,12 @@ model RedSourcing::StoredEvent is table<red_sourcing_event> {
 		# constraints use boolean branches; tracing all rules together can add
 		# negated conditions on JSON fields absent from another event type.
 		my @filters = @rules.map: -> Pair (:$key, :$value) {
-			self.^all.grep(pair-to-code($key, $value)).filter
+			predicate-ast(pair-to-code($key, $value), self)
 		}
 		my @rs     := self.^all;
 		@rs := @rs.where(@filters == 1 ?? @filters.head !! [OR] @filters) if @filters;
 		@rs := @rs.grep: *.id > $_           with $from-id;
+		@rs := @rs.grep: *.id <= $_          with $through-id;
 		@rs := @rs.grep: *.stream eq $stream with $stream;
 		@rs := @rs.grep: *.created > $after  with $after;
 		do for @rs.sort(*.id).Seq {

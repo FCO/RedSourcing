@@ -2,6 +2,7 @@ use Red;
 use Red::DB;
 use JSON::Fast;
 use Red::Type::Json;
+use RedSourcing::Journal;
 unit module RedSourcing::Flow;
 
 # Independent telemetry: domain event payloads and existing tables stay unchanged.
@@ -13,6 +14,8 @@ model Link is table<red_sourcing_flow_link> {
     has Str $.target is column is required;
     has Str $.relation is column is required;
     has DateTime $.created is column .= now;
+    has $.source-lookup is index{ .source-kind, .source };
+    has $.target-lookup is index{ .target-kind, .target };
 }
 model ObservedEntity is table<red_sourcing_flow_entity> {
     has UInt $.id is serial;
@@ -20,9 +23,34 @@ model ObservedEntity is table<red_sourcing_flow_entity> {
     has Str $.type is column is required;
     has Str $.kind is column is required;
     has Json $.identity is column is required;
+    has $.stream-lookup is index{ .stream };
 }
 my %enabled;
 my Lock $lock .= new;
+
+sub retire-legacy-indexes(Mu:U $model, %legacy) {
+    my $driver = get-RED-DB;
+    my $namespace = '';
+    if $driver.^mro.first(*.^name eq 'Red::Driver::Pg').defined {
+        # Resolve the table's schema, not the index's search-path visibility.
+        # An unrelated index with the same name can exist in an earlier schema.
+        $namespace = $driver.execute(q:to/SQL/, $model.^table).row<namespace> ~ '.';
+            SELECT quote_ident(n.nspname) AS namespace
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.oid = to_regclass($1)
+            SQL
+    }
+    for $driver.indexes-for-table($model.^table) -> %index {
+        next unless %legacy{%index<name>}:exists;
+        my @expected = %legacy{%index<name>}.list.map({
+            $driver.index-key-fingerprint($driver.table-name-wrapper($_))
+        });
+        next if %index<unique> || (%index<partial> // False) || !(%index<valid> // True);
+        next unless %index<keys>.map({ $driver.index-key-fingerprint($_) }).List eqv @expected.List;
+        $driver.execute('DROP INDEX ' ~ $namespace ~ $driver.table-name-wrapper(%index<name>));
+    }
+}
+
 sub flow-tracing-enabled(--> Bool) is export {
     # Pg begins a transaction with a driver clone. Preserve the caller's recording
     # scope across the library's transaction boundary.
@@ -30,17 +58,21 @@ sub flow-tracing-enabled(--> Bool) is export {
     return $scope if $scope.defined;
     my $db = try get-RED-DB;
     return False unless $db.defined;
-    $lock.protect({ so %enabled{$db.WHICH.Str} })
+    $lock.protect({ so %enabled{journal-store()} })
 }
 sub enable-flow-tracing(Bool :$enabled = True, Bool :$initialize = True) is export {
     Link.^create-table(:unless-exists) if $enabled && $initialize;
     ObservedEntity.^create-table(:unless-exists) if $enabled && $initialize;
     if $enabled && $initialize {
-        get-RED-DB.execute('CREATE INDEX IF NOT EXISTS rs_flow_source ON red_sourcing_flow_link (source_kind, source)');
-        get-RED-DB.execute('CREATE INDEX IF NOT EXISTS rs_flow_target ON red_sourcing_flow_link (target_kind, target)');
-        get-RED-DB.execute('CREATE INDEX IF NOT EXISTS rs_flow_entity_stream ON red_sourcing_flow_entity (stream)');
+        .^create-indexes for Link, ObservedEntity;
+        # The replacements exist before any legacy index is removed. Only
+        # retire our known, nonunique definitions; leave conflicting names alone.
+        retire-legacy-indexes(Link, {
+            rs_flow_source => <source_kind source>, rs_flow_target => <target_kind target>
+        });
+        retire-legacy-indexes(ObservedEntity, { rs_flow_entity_stream => <stream> });
     }
-    $lock.protect({ %enabled{get-RED-DB.WHICH.Str} = $enabled });
+    $lock.protect({ %enabled{journal-store()} = $enabled });
     $enabled
 }
 sub observe-flow-entity($entity, Str $kind) is export {

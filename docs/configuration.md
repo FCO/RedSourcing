@@ -19,6 +19,11 @@ config {
     .includes = <lib>;
     .modules = <MyApp::Domain MyApp::Services>;
     .connection = %(timeout => 5000);
+    .entities = {
+        'MyApp::Domain::Account' => { lifecycle => 'Retained' },
+        'MyApp::Domain::Balance' => { lifecycle => 'OnDemand' },
+        'MyApp::Domain::PurchaseWorkflow' => { lifecycle => 'Retained' },
+    };
     .worker: { .limit = 100; .interval = 1; .watch = False }
     .monitor: {
         .host = '127.0.0.1'; .port = 3001; .minutes = 60;
@@ -45,11 +50,23 @@ connection hash, which may contain credentials.
 | Library connection overrides | Merge keys over the file's `connection` hash |
 | CLI imports | Configured include/module lists followed by `-I`/`-M`, with duplicates removed |
 | Reload | Read once per startup/invocation; no hot reload |
+| Entity lifecycle | File `entities` entry overrides that type's declaration default on the selected connection/pool; omitted types retain their declaration default |
 
 Relative include paths and SQLite filenames in a file resolve against that file's
 directory. Explicit relative database overrides resolve against the process
 working directory. Absolute paths, `:memory:`, SQLite `file:` names and server
 database names preserve their meaning. A SQLite file's parent directory must exist.
+
+The `entities` map uses exact full class names and supports aggregates, projections
+and sagas. An entry accepts `retained` (Bool), `auto-snapshot`, or `lifecycle`
+(`OnDemand`/`Retained`). Use one lifecycle spelling per entry. `.auto-snapshot`
+sets the global policy; omitted policies default to `{ :100count }`. Explicit
+`False` or `Nil` disables optional snapshots. See [automatic snapshots](auto-snapshot.md)
+for declaration precedence and operation boundaries. Native bootstrap and the
+CLI install overrides on the selected
+connection/pool, including for modules loaded later. A used type cannot change
+mode on that connection. See [entity lifecycle](lifecycle.md) for startup behavior,
+retained updates, release and cross-process freshness.
 
 The repository's root configuration targets the Hearth PostgreSQL example. Every
 example has a closer file. Select one from the root with, for example,
@@ -92,8 +109,11 @@ of discovery and the base of relative configuration filenames. A caller's
 `$*RED-DB` keeps Red's normal precedence over the configured default connection.
 
 `Bool :$initialize = True` controls table creation. Repeated initialization uses
-`:unless-exists` and preserves existing rows. It creates missing tables, not a
-missing PostgreSQL database, and does not migrate existing schemas. For a
+`:unless-exists` and preserves existing rows. It also calls `.^create-indexes`
+to add the declared query indexes to existing tables. Flow tracing replaces its
+three matching legacy indexes after creating their declarative replacements;
+conflicting legacy definitions are preserved. Initialization creates missing
+tables, not a missing PostgreSQL database, and does not migrate columns. For a
 connection to an existing store without any table/index creation, use:
 
 ```raku

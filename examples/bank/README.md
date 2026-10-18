@@ -53,8 +53,10 @@ is called on its loaded aggregate, within the same command transaction.
 
 Both appends and command completion use the executor's existing transaction.
 A conflict or failure on the recipient append rolls back the sender append too.
-No nested command or transaction is opened. An optimistic conflict records a terminal `Failed` command. Retry by submitting
-a new transfer command, which reloads both balances and stream versions. A successful repeated `.run` returns its saved result without moving
+No nested command or transaction is opened. An optimistic conflict rolls back the
+attempt and automatically retries with freshly loaded balances and versions.
+After the bounded immediate attempts, the record remains pending for another
+executor pass. A successful repeated `.run` returns its saved result without moving
 money again.
 
 To defer execution:
@@ -67,6 +69,50 @@ $pending.run;
 An executed rejection is recorded as a terminal `Failed` command with its
 error; the caller receives the exception. Retrying requires a new submission. Invalid amounts
 are rejected during submission before a command record is created.
+
+## Sequence: fund, transfer and rebuild the views
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller
+    participant A as Ana Account
+    participant B as Bob Account
+    participant J as Shared journal transaction
+    participant P as Balance and MonthlyStatement
+    participant T as BankTotals
+    Caller->>A: create and deposit 100
+    A->>J: Initial snapshot, pending command, Deposited and saved result
+    Caller->>B: create and deposit 20
+    B->>J: Initial snapshot, Deposited and saved result
+    Caller->>A: transfer 25.50 to Bob
+    A->>J: Claim command and restore current source state
+    A->>A: Check positive amount, available funds and distinct recipient
+    A->>J: Verify recipient snapshot and load its current version
+    A->>J: Append canonical Transaction
+    A->>B: transfer-received with the transaction row ID
+    B->>J: Append TransferReceived and apply credit
+    Note over A,J: Sender debit, recipient<br/>credit, optional snapshots<br/>and result commit together
+    alt Optimistic conflict
+        J-->>A: Roll back both appends
+        A->>J: Retry from freshly loaded balances
+    else Commit succeeds
+        A-->>Caller: transaction-id and remaining balance
+    end
+    Caller->>P: load for each client
+    P->>J: Select Deposited and Transaction using client rules
+    P->>P: Fold balance, monthly entries and closing balances
+    P-->>Caller: Current and monthly balances
+    Caller->>T: load
+    T->>J: Select canonical deposit and transfer facts across streams
+    T-->>Caller: Deposits and transfer volume, without double-counting credits
+    Caller->>P: emit-snapshot
+    P->>J: Save projection state and replay cursor
+    Caller->>A: Submit deferred transfer and run its handle
+    A->>J: Validate current balances at execution time and commit<br/>transfer
+    Caller->>A: Run the same completed handle again
+    A-->>Caller: Saved result without another transfer
+```
 
 ## Projections
 

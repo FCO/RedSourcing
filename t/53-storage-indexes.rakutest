@@ -1,0 +1,120 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use Red::DB;
+use RedSourcing::Flow;
+use RedSourcing::Config;
+use DB::Pg;
+
+my $*RED-DB;
+my $pg = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $admin;
+my $pg-schema = 'rs_indexes_' ~ $*PID;
+if $pg.defined {
+    die 'Use a simple PostgreSQL test database name' unless $pg ~~ /^ <[\w\-]>+ $/;
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$pg"));
+    $admin.execute("CREATE SCHEMA $pg-schema");
+    $*RED-DB = store-driver('Pg', $pg, :connection{
+        dbh => ::('DB::Pg').new(
+            :conninfo("dbname=$pg options='-csearch_path=$pg-schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>))
+    });
+} else {
+    $*RED-DB = database('SQLite');
+}
+LEAVE $admin.execute("DROP SCHEMA $pg-schema CASCADE") if $admin.defined;
+
+sub names(Str $table) { get-RED-DB.indexes-for-table($table).map(*.<name>).sort.Array }
+sub drop-index(Str $name) { get-RED-DB.execute('DROP INDEX ' ~ get-RED-DB.table-name-wrapper($name)) }
+
+subtest 'new stores declare query indexes and preserve stream-version uniqueness' => {
+    schema(StoredEvent, StoredCommand).create;
+    for StoredEvent, StoredCommand -> $type {
+        my @actual = names($type.^table);
+        for $type.^indexes.grep({ !.inline }) -> $index {
+            ok $index.name eq any(@actual), "{$index.name} exists";
+        }
+        lives-ok { $type.^create-indexes; $type.^create-indexes }, 'index creation is idempotent';
+    }
+    StoredEvent.^create(:class('IndexFact'), :mro('|IndexFact|'), :stream('indexes'), :version(1), :data{});
+    dies-ok {
+        StoredEvent.^create(:class('IndexFact'), :mro('|IndexFact|'), :stream('indexes'), :version(1), :data{});
+    }, 'stream-version uniqueness is unchanged';
+    is StoredEvent.^all.elems, 1, 'existing event survives index initialization';
+};
+
+subtest 'existing tables receive missing indexes without changing data' => {
+    for StoredEvent, StoredCommand -> $type {
+        drop-index($_.name) for $type.^indexes.grep({ !.inline });
+        lives-ok { $type.^create-table(:unless-exists); $type.^create-indexes },
+            'explicit initialization upgrades an existing table';
+        for $type.^indexes.grep({ !.inline }) -> $index {
+            ok $index.name eq any(names($type.^table)), 'missing declared index is created';
+        }
+    }
+    is StoredEvent.^all.elems, 1, 'upgrade preserves persisted events';
+};
+
+subtest 'tracing replaces only matching legacy indexes after creating declarations' => {
+    enable-flow-tracing;
+    flow-link('command', '1', 'event', '2', 'emitted');
+    for <red_sourcing_flow_link red_sourcing_flow_entity> -> $table {
+        for get-RED-DB.indexes-for-table($table).grep({ !.<unique> }) -> %index {
+            drop-index(%index<name>);
+        }
+    }
+    get-RED-DB.execute('CREATE INDEX rs_flow_source ON red_sourcing_flow_link (source_kind, source)');
+    get-RED-DB.execute('CREATE INDEX rs_flow_target ON red_sourcing_flow_link (target_kind, target)');
+    get-RED-DB.execute('CREATE INDEX rs_flow_entity_stream ON red_sourcing_flow_entity (stream)');
+    lives-ok { enable-flow-tracing; enable-flow-tracing }, 'migration and repeat initialization succeed';
+    nok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'legacy source index is retired';
+    nok 'rs_flow_target' eq any(names('red_sourcing_flow_link')), 'legacy target index is retired';
+    nok 'rs_flow_entity_stream' eq any(names('red_sourcing_flow_entity')), 'legacy stream index is retired';
+    is names('red_sourcing_flow_link').grep(*.ends-with('_idx')).elems, 2, 'two replacement indexes exist';
+    is flow-links.elems, 1, 'telemetry survives migration';
+    get-RED-DB.execute('CREATE INDEX rs_flow_source ON red_sourcing_flow_link (relation)');
+    enable-flow-tracing;
+    ok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'conflicting legacy definition is preserved';
+};
+
+subtest 'configuration bootstrap upgrades an existing SQLite store' => {
+    my $directory = tempdir.IO;
+    my $file = $directory.add('store.db').Str;
+    my $db = database('SQLite', :database($file));
+    {
+        my $*RED-DB = $db;
+        schema(StoredEvent, StoredCommand).create;
+        drop-index($_.name) for StoredEvent.^indexes.grep({ !.inline });
+    }
+    {
+        my $*RED-DB;
+        red-sourcing-defaults(:directory($directory), :driver<SQLite>, :database($file));
+        red-sourcing-defaults(:directory($directory), :driver<SQLite>, :database($file));
+        for StoredEvent.^indexes.grep({ !.inline }) -> $index {
+            ok $index.name eq any(names(StoredEvent.^table)), 'bootstrap adds the missing index';
+        }
+    }
+};
+
+if $pg.defined {
+    subtest 'legacy PostgreSQL migration preserves a homonymous index in another schema' => {
+        my $shadow = $pg-schema ~ '_shadow';
+        $admin.execute("CREATE SCHEMA $shadow");
+        LEAVE $admin.execute("DROP SCHEMA $shadow CASCADE");
+        $admin.execute("CREATE TABLE $shadow.other (id integer)");
+        $admin.execute("CREATE INDEX rs_flow_source ON $shadow.other (id)");
+        $admin.execute("DROP INDEX $pg-schema.rs_flow_source");
+        $admin.execute("CREATE INDEX rs_flow_source ON $pg-schema.red_sourcing_flow_link (source_kind, source)");
+        my $*RED-DB = store-driver('Pg', $pg, :connection{
+            dbh => ::('DB::Pg').new(
+                :conninfo("dbname=$pg options='-csearch_path=$pg-schema,$shadow -cclient_min_messages=warning'"),
+                :converters(<DateTime UUID Geometric>))
+        });
+        enable-flow-tracing;
+        nok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'matching legacy index is removed from the table schema';
+        nok $admin.query('SELECT to_regclass($1)::text', "$pg-schema.rs_flow_source").value.defined,
+            'legacy index is absent from the original schema';
+        ok 'rs_flow_source' eq any(names('other')), 'unrelated shadow index is untouched';
+    };
+}
+done-testing;

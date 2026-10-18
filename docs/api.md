@@ -6,6 +6,15 @@ Use `use RedSourcing` for the public declarations, roles, traits, `StoredEvent`,
 Configure a connection and initialize tables before using the examples below;
 see [shared configuration](configuration.md).
 
+`EntityLifecycle` exposes `OnDemand` and `Retained` for all three entity kinds.
+Declarations accept brackets, such as `aggregate Account[:retained] { ... }`,
+`projection Balance[:retained] { ... }` and `saga PurchaseWorkflow[:retained] { ... }`.
+`.^lifecycle` queries the effective mode; `.^lifecycle(:declared)` queries the
+declaration default. `.^lifecycle(:retained)` configures a declaration before
+first use and returns the type. These APIs and proxy `.^release` are shared by
+all three entity kinds. See [entity lifecycle](lifecycle.md)
+for configuration precedence and transaction boundaries.
+
 The event filtering snippets use this event definition in an initialized store:
 
 ```raku
@@ -184,6 +193,11 @@ Rakudo internals; the regression tests cover both SQL binding and subsequent
 normal handler dispatch.
 
 ## Mapping projection values
+
+Transactional projection subscriptions infer identity from their `APPLY`
+equalities and do not require these explicit loader mappings. See
+[projections and transactional updates](projections.md) for `is transactional`,
+`.^advance`, declarations such as `projection MyView[:retained] { ... }`, and `.^release`.
 
 `map-list-events` is a convenience built on top of `list-events` that turns event field values into a loader for a given projection identity. Each mapping describes one event class and how the value to match is obtained from the projection. A `Callable` value is called with the projection; any other value is read as a key when the projection is an `Associative`, or as an accessor method otherwise. Event domain classes are ordinary Raku classes doing the `Event` role; they do not need to be Red models.
 
@@ -425,10 +439,12 @@ $projection = $totals.^load; # Restore, then replay newer events
 $projection.^apply-new-applyable-events;  # Incremental replay on this instance
 ```
 
-Initial loading returns a new entity. For an already initialized projection, use:
+Initial loading returns a new entity with the default `OnDemand` lifecycle.
+`Retained` lifecycle reuses registered instances on the connection/pool. For an
+already initialized projection, use:
 
 ```raku
-$projection.^apply-new-applyable-events;
+$projection.^advance;
 ```
 
 This builds rules from the instance's `APPLY` candidates and queries matching
@@ -571,7 +587,8 @@ rethrown to the executor; a later worker pass or `.run` can resume the same reco
 A saga retains the same running action and child command for its next advance;
 this does not consume saga retry policy or trigger compensation.
 
-Red does not provide savepoints. A `.run` invoked inside an existing transaction
+Red 0.2.7 provides savepoints for explicit nested `red-do :transaction` scopes.
+RedSourcing preserves its batch-level retry policy: a `.run` inside an existing transaction
 propagates optimistic conflicts to that transaction's owner, which must roll back
 and restart the complete batch. It does not retry inside an aborted transaction.
 Handlers may therefore run more than once. Keep external effects in saga services
@@ -642,7 +659,7 @@ invalidate domain validation.
 A business or other handler failure rolls back database events and records a
 terminal failure. Optimistic conflicts follow the retry/pending contract above.
 External calls performed directly in a handler are outside that rollback; use
-saga service intents for provider work. Red's transaction/savepoint limitations
+saga service intents for provider work. Transaction ownership constraints
 and multi-executor ownership are described in the [roadmap](next-steps.md).
 
 SQLite is exercised by the main suite. PostgreSQL JSON translation, the estate
@@ -655,3 +672,12 @@ not been validated by this project's integration suite.
 - [Configuration](configuration.md): default connections and shared file settings.
 - [CLI](cli.md): command preparation, history, migrations and entity inspection.
 - [Roadmap](next-steps.md): unsupported signatures and concurrency work.
+
+## Automatic snapshot policy
+
+All three declarations accept `[:retained, :auto-snapshot{ :100count, :300seconds }]`.
+`.^auto-snapshot` returns the effective immutable policy or an undefined value when
+disabled; `:!auto-snapshot`, `:auto-snapshot(False)` and `:auto-snapshot(Nil)`
+all disable optional snapshots. `:declared` reports the declaration default. The built-in policy is
+`count => 100`. See [automatic snapshots](auto-snapshot.md) for count semantics,
+configuration, rollback and required checkpoints.

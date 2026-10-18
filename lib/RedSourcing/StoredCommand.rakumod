@@ -6,6 +6,8 @@ use JSON::Fast;
 use RedSourcing::Utils;
 use RedSourcing::Context;
 use RedSourcing::Flow;
+use RedSourcing::Journal;
+use RedSourcing::Lifecycle;
 unit model RedSourcing::StoredCommand is table<red_sourcing_command>;
 
 enum State <Pending Processing Done Failed>;
@@ -24,9 +26,12 @@ has UInt     $.tries      is column is rw = 0;
 has Json     $.data       is column{ :nullable };
 has Any      $.result     is column{ :nullable, :type<jsonb>, :inflate(&from-json), :deflate(&to-json) } is rw;
 has Str      $.error      is column{ :nullable } is rw;
+has $.stream-history is index{ .stream, .id };
+has $.due-work is index{ .state, .next-run, .id };
 
 method run(::?CLASS:D: Bool :$wait) {
 	assert-effect-allowed('command execution');
+	my $*REDSOURCING-COMMAND-DEPTH = ((try $*REDSOURCING-COMMAND-DEPTH) // 0) + 1;
 	my $flow-scope = flow-tracing-enabled;
 	my $*REDSOURCING-FLOW-SCOPE = $flow-scope;
 	my $failure;
@@ -47,8 +52,8 @@ method run(::?CLASS:D: Bool :$wait) {
 		}
 	}
 
-	# Red has no savepoints. A nested command must let its transaction owner
-	# roll back the complete batch before retrying.
+	# Preserve batch-level retries: nested conflicts propagate to the owner even
+	# though Red now supports savepoints. Retrying a child changes recovery scope.
 	my $owns-transaction = !((try $*RED-TRANSACTION-RUNNING) // False);
 	my UInt $conflicts = 0;
 	my UInt $invocations = 0;
@@ -75,7 +80,7 @@ method run(::?CLASS:D: Bool :$wait) {
 					$conflict = $_;
 				}
 			}
-			red-do :transaction, {
+			transaction-do {
 				self.WHAT.^all.grep(*.id == $!id).map({ .state = .state }).save;
 				self.^refresh;
 				return $!result if $!state == Done;
@@ -96,6 +101,13 @@ method run(::?CLASS:D: Bool :$wait) {
 					my $*COMMAND = self;
 					$!tries += ++$invocations;
 					$!result = $entity."$!method"(|$!data.Map);
+					journal-connection().journal-state<snapshot-candidates>{entity-key($type, $!stream)} = $entity;
+					if $*REDSOURCING-COMMAND-DEPTH == 1 {
+						for journal-connection().journal-state<snapshot-candidates>.values -> $candidate {
+							$candidate.^maybe-auto-snapshot;
+						}
+						journal-connection().journal-state<snapshot-candidates> = {};
+					}
 					$!state = Done;
 					$!error = Nil;
 					self.^save;
