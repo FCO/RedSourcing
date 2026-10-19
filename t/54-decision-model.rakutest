@@ -1,0 +1,139 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Journal;
+
+class DecisionFact does Event { has Str $.key; has Int $.amount }
+projection DecisionTotal {
+    has Str $.key is entity-id;
+    has Int $.amount is rw = 0;
+    method APPLY(DecisionFact $event where { .key eqv $!key }) { $!amount += $event.amount }
+}
+projection InvalidDecision {
+    has Int $.limit = 0;
+    method APPLY(DecisionFact $event where { .amount > $!limit }) { $!limit += $event.amount }
+}
+projection RetainedDecision[:retained] {
+    has Str $.key is entity-id;
+    has Int $.amount is rw = 0;
+    method APPLY(DecisionFact $event where { .key eqv $!key }) { $!amount += $event.amount }
+}
+my $*RED-DB = database 'SQLite', :database(':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $proxy = DecisionTotal.^with-ids(:key<a>);
+
+subtest 'empty decisions, several models, return value and own appends' => {
+    is decision-model($proxy, -> $view { $view.amount }), 0, 'empty model has its initial state';
+    is decision-model($proxy, DecisionTotal.^with-ids(:key<b>), -> $a, $b {
+        is $a.amount, 0, 'first model is loaded';
+        is $b.amount, 0, 'second model is loaded';
+        DecisionFact.emit(:key<a>, :amount(2), :stream<one>, :version(1));
+        DecisionFact.emit(:key<a>, :amount(3), :stream<two>, :version(1));
+        42
+    }), 42, 'returns the block result and appends a batch';
+    is $proxy.^load.amount, 5, 'both appends are visible after commit';
+};
+
+subtest 'an exception rolls back a complete batch even when the caller catches it' => {
+    red-do :transaction, {
+        dies-ok {
+            decision-model $proxy, -> $view {
+                DecisionFact.emit(:key<a>, :amount(7), :stream<aborted>, :version(1));
+                die 'abort batch';
+            }
+        }, 'decision block throws';
+        DecisionFact.emit(:key<b>, :amount(1), :stream<survivor>, :version(1));
+    }
+    is $proxy.^load.amount, 5, 'partial decision is absent';
+    is StoredEvent.list-events(:row, :stream<aborted>).elems, 0, 'aborted event does not persist';
+};
+
+subtest 'nested decisions share writes without conflicting with themselves' => {
+    decision-model $proxy, -> $outer {
+        DecisionFact.emit(:key<a>, :amount(1), :stream<nested>, :version(1));
+        decision-model $proxy, -> $inner {
+            is $inner.amount, 6, 'inner decision includes earlier writes in this transaction';
+            DecisionFact.emit(:key<a>, :amount(1), :stream<nested>, :version(2));
+        }
+    }
+    is $proxy.^load.amount, 7, 'nested writes commit together';
+};
+
+subtest 'invalid inputs and mutable filters fail before the block' => {
+    dies-ok { decision-model -> { } }, 'at least one proxy is required';
+    dies-ok { decision-model DecisionTotal, -> $ { } }, 'a type is not a proxy';
+    dies-ok { decision-model 42, -> $ { } }, 'ordinary values are not proxies';
+    my $called = False;
+    throws-like { decision-model InvalidDecision.^with-ids, -> $ { $called = True } },
+        X::AdHoc, message => /'mutable projection state'/;
+    nok $called, 'invalid filter never executes the block';
+};
+
+subtest 'snapshots and retained projections remain isolated from the decision' => {
+    my $view = $proxy.^load;
+    $view.^emit-snapshot;
+    decision-model $proxy, -> $copy {
+        is $copy.amount, 7, 'restores checkpoint and replays through the boundary';
+        $copy.amount = 100;
+    }
+    is $proxy.^load.amount, 7, 'decision reads do not write snapshots';
+    my $retained = RetainedDecision.^with-ids(:key<a>);
+    my $cached = $retained.^load;
+    decision-model $retained, -> $copy {
+        isnt $copy.WHICH, $cached.WHICH, 'retained decision is an isolated instance';
+        $copy.amount = 100;
+    }
+    is $cached.amount, 7, 'cached state does not adopt decision mutations';
+};
+
+subtest 'savepoint rollback restores a still-active decision check' => {
+    decision-model $proxy, -> $view {
+        try {
+            red-do :transaction, {
+                DecisionFact.emit(:key<a>, :amount(20), :stream<discarded-check>, :version(1));
+                die 'rollback validated scope';
+            }
+            CATCH { default { .rethrow unless .message eq 'rollback validated scope' } }
+        }
+        nok journal-connection().journal-state<decisions>.head<validated>,
+            'rolling back the first append restores pending validation';
+        DecisionFact.emit(:key<a>, :amount(2), :stream<after-check>, :version(1));
+    }
+    is $proxy.^load.amount, 9, 'only the replacement append commits';
+    is StoredEvent.list-events(:row, :stream<discarded-check>).elems, 0, 'savepoint discards earlier append';
+};
+
+subtest 'SQLite rejects an empty read invalidated by an independent committed writer' => {
+    my $directory = tempdir.IO;
+    my $file = $directory.add('events.db').Str;
+    my $*RED-DB = database 'SQLite', :database($file);
+    schema(StoredEvent, StoredCommand).create;
+    my $pragma = $*RED-DB.execute('PRAGMA journal_mode=WAL');
+    $pragma.row;
+    $pragma.finish-transaction;
+    my $worker = $directory.add('writer.raku');
+    $worker.spurt(q:to/WORKER/);
+        use RedSourcing;
+        class DecisionFact does Event { has Str $.key; has Int $.amount }
+        my $*RED-DB = database 'SQLite', :database(@*ARGS.head);
+        DecisionFact.emit(:key<empty>, :amount(1), :stream<competitor>, :version(1));
+        WORKER
+    my ($read, $status, $errors);
+    throws-like {
+        decision-model DecisionTotal.^with-ids(:key<empty>), -> $view {
+            $read = $view.amount;
+            my $p = run $*EXECUTABLE.Str, '-Ilib', $worker.Str, $file, :out, :err;
+            $status = $p.exitcode;
+            $errors = $p.err.slurp(:close);
+            $p.out.slurp(:close);
+            DecisionFact.emit(:key<empty>, :amount(2), :stream<loser>, :version(1));
+        }
+    }, RedSourcing::X::OptimisticLockFailed;
+    is $read, 0, 'no matching event existed at the read position';
+    is $status, 0, 'independent writer commits';
+    is $errors, '', 'writer has no diagnostics';
+    is StoredEvent.list-events(:row, :stream<loser>).elems, 0, 'stale decision appended nothing';
+    my $total = DecisionTotal.^with-ids(:key<empty>).^load.amount;
+    is $total, 1, 'only the competing fact remains';
+};
+done-testing;

@@ -13,6 +13,7 @@ use RedSourcing::StoredCommand;
 use RedSourcing::X::OptimisticLockFailed;
 
 use RedSourcing::StoredEvent;
+use RedSourcing::Decision;
 use RedSourcing::Saga;
 
 module RedSourcing { }
@@ -47,6 +48,7 @@ sub EXPORT {
 		'StoredEvent' => RedSourcing::StoredEvent,
 		'StoredCommand' => RedSourcing::StoredCommand,
 		'Event' => Event,
+		'&decision-model' => &decision-model,
 		'Command' => Command,
 		'RedSourcing::X::OptimisticLockFailed' => RedSourcing::X::OptimisticLockFailed,
 		# Preserve the merged dispatchers for Red and the event-store candidates.

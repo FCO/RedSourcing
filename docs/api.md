@@ -6,6 +6,12 @@ Use `use RedSourcing` for the public declarations, roles, traits, `StoredEvent`,
 Configure a connection and initialize tables before using the examples below;
 see [shared configuration](configuration.md).
 
+`decision-model` takes projection proxies followed by a block receiving isolated,
+loaded projections. It infers their combined event query from `APPLY` and guards
+all appends in the block with an optimistic consistency check. Conflicts retry
+the complete stored command. See [decision models](decision-models.md) and the
+[school example](../examples/school/README.md).
+
 `EntityLifecycle` exposes `OnDemand` and `Retained` for all three entity kinds.
 Declarations accept brackets, such as `aggregate Account[:retained] { ... }`,
 `projection Balance[:retained] { ... }` and `saga PurchaseWorkflow[:retained] { ... }`.

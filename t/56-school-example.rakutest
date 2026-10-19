@@ -1,0 +1,90 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use lib $?FILE.IO.parent.parent.add('examples/school/lib').Str;
+use School;
+
+my $*RED-DB;
+my $school;
+my $version;
+sub fresh {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+    $school = School::App.new.initialize;
+    $version = 0;
+}
+sub seed(Mu:U $type, *%data) { $type.emit(:stream<seed>, :version(++$version), |%data) }
+
+subtest 'registration, unknown IDs, duplicate commands and replay' => {
+    fresh;
+    dies-ok { $school.enroll('unknown', 'unknown') }, 'unknown participants cannot enroll';
+    $school.add-student('alice', 'Alice');
+    dies-ok { $school.enroll('alice', 'unknown') }, 'a class must exist';
+    $school.add-class('math', 'Mathematics');
+    ok $school.enroll('alice', 'math'), 'enrollment succeeds';
+    nok $school.enroll('alice', 'math'), 'duplicate enrollment is idempotent';
+    is $school.student('alice').class-count, 1, 'student projection includes enrollment';
+    is $school.classroom('math').student-count, 1, 'class projection consumes the same event';
+    is StoredEvent.list-events(:types[StudentEnrolled]).elems, 1, 'the shared fact is persisted once';
+    ok $school.cancel('alice', 'math'), 'cancellation succeeds';
+    nok $school.cancel('alice', 'math'), 'duplicate cancellation is idempotent';
+    is $school.student('alice').class-count, 0, 'cancellation frees the student limit';
+    is $school.classroom('math').student-count, 0, 'cancellation frees the seat';
+    ok $school.enroll('alice', 'math'), 'student can enroll again';
+    is $school.summary.enrollment-count, 1, 'global view rebuilds active memberships';
+};
+
+subtest 'the ninth, tenth and eleventh classes and a freed allowance' => {
+    fresh;
+    seed(StudentRegistered, :student-id<alice>, :name<Alice>);
+    for 1..11 -> $i {
+        seed(ClassCreated, :class-id("c$i"), :title("Class $i"));
+        seed(StudentEnrolled, :student-id<alice>, :class-id("c$i")) if $i <= 9;
+    }
+    is $school.student('alice').class-count, 9, 'fixture starts with nine active classes';
+    ok $school.enroll('alice', 'c10'), 'tenth class is accepted';
+    throws-like { $school.enroll('alice', 'c11') }, X::AdHoc,
+        message => 'Student already participates in 10 classes';
+    is $school.student('alice').class-count, 10, 'eleventh class is absent';
+    ok $school.cancel('alice', 'c10'), 'cancels an active enrollment';
+    ok $school.enroll('alice', 'c11'), 'another class can use the released allowance';
+    is $school.student('alice').class-count, 10, 'count returns to ten';
+};
+
+subtest 'the twenty-ninth, thirtieth and thirty-first students and a freed seat' => {
+    fresh;
+    seed(ClassCreated, :class-id<math>, :title<Math>);
+    for 1..31 -> $i {
+        seed(StudentRegistered, :student-id("s$i"), :name("Student $i"));
+        seed(StudentEnrolled, :student-id("s$i"), :class-id<math>) if $i <= 29;
+    }
+    is $school.classroom('math').student-count, 29, 'fixture starts with twenty-nine students';
+    ok $school.enroll('s30', 'math'), 'thirtieth student is accepted';
+    throws-like { $school.enroll('s31', 'math') }, X::AdHoc,
+        message => 'Class already has 30 students';
+    is $school.classroom('math').student-count, 30, 'thirty-first student is absent';
+    ok $school.cancel('s30', 'math'), 'cancels a seat';
+    ok $school.enroll('s31', 'math'), 'another student can use the released seat';
+    is $school.classroom('math').student-count, 30, 'count returns to thirty';
+};
+
+subtest 'CLI operations persist and reconstruct in independent processes' => {
+    my $database = tempdir.IO.add('school.db').Str;
+    sub cli(*@args) {
+        my $p = run $*EXECUTABLE.Str, '-Ilib', 'examples/school/main.raku',
+            "--database=$database", |@args, :out, :err;
+        my $out = $p.out.slurp(:close);
+        my $err = $p.err.slurp(:close);
+        is $p.exitcode, 0, @args.join(' ') ~ ' succeeds';
+        is $err, '', 'no diagnostics';
+        $out
+    }
+    is cli('--name=Alice', 'student-add', 'alice'), "Alice\n", 'registers student';
+    is cli('--title=Mathematics', 'class-add', 'math'), "Mathematics\n", 'registers class';
+    is cli('enroll', 'alice', 'math'), "Enrolled\n", 'enrolls in the persisted store';
+    like cli('student', 'alice'), /'Classes (1/10): math'/, 'student query restores history';
+    like cli('class', 'math'), /'Students (1/30): alice'/, 'class query restores history';
+    like cli('summary'), /'active enrollments: 1'/, 'overview restores history';
+    is cli('cancel', 'alice', 'math'), "Cancelled\n", 'cancels in another process';
+    like cli('summary'), /'active enrollments: 0'/, 'cancellation persists';
+};
+done-testing;

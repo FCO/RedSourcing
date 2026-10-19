@@ -33,6 +33,7 @@
     "RedSourcing::Config": "lib/RedSourcing/Config.rakumod",
     "RedSourcing::Context": "lib/RedSourcing/Context.rakumod",
     "RedSourcing::Declaration": "lib/RedSourcing/Declaration.rakumod",
+    "RedSourcing::Decision": "lib/RedSourcing/Decision.rakumod",
     "RedSourcing::Entity": "lib/RedSourcing/Entity.rakumod",
     "RedSourcing::Event": "lib/RedSourcing/Event.rakumod",
     "RedSourcing::Flow": "lib/RedSourcing/Flow.rakumod",

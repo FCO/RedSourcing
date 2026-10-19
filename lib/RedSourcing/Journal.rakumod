@@ -1,10 +1,12 @@
 unit module RedSourcing::Journal;
 use Red;
 use Red::DB;
+use RedSourcing::X::OptimisticLockFailed;
 
 sub empty-state() {
     { gated => False, working => {}, publish => {}, retained => {},
-        snapshot-candidates => {}, savepoints => [] }
+        snapshot-candidates => {}, savepoints => [], decisions => [],
+        decision-locked => False, decision-conflict => Nil }
 }
 
 # Lifecycle depends on Journal. Resolve its copy helpers only when a savepoint
@@ -26,7 +28,10 @@ sub checkpoint(Hash $state --> Hash) {
                 lifecycle-helper('&entity-copy')($entity)];
         }
     }
-    { gated => $state<gated>, :%maps, :%objects }
+    { gated => $state<gated>, :%maps, :%objects,
+        decisions => $state<decisions>.map(*.clone).Array,
+        decision-locked => $state<decision-locked>,
+        decision-conflict => $state<decision-conflict> }
 }
 
 sub restore-checkpoint(Hash $state, Hash $checkpoint) {
@@ -35,6 +40,9 @@ sub restore-checkpoint(Hash $state, Hash $checkpoint) {
     }
     $state<gated> = $checkpoint<gated>;
     $state{$_} = $checkpoint<maps>{$_}.clone for <working publish retained snapshot-candidates>;
+    $state<decisions> = $checkpoint<decisions>.map(*.clone).Array;
+    $state<decision-locked> = $checkpoint<decision-locked>;
+    $state<decision-conflict> = $checkpoint<decision-conflict>;
 }
 
 # Install hooks on the transaction driver, including transactions owned by a
@@ -87,6 +95,7 @@ my role JournalConnection {
     }
     method commit {
         return callsame if self.?transaction-guard.defined;
+        $!journal-state<decision-conflict>.throw if $!journal-state<decision-conflict>.defined;
         my @publish = $!journal-state<publish>.values;
         my $result = callsame;
         $!journal-state = empty-state();
@@ -143,17 +152,55 @@ sub journal-store() is export { journal-connection().journal-store }
 sub journal-gate() is export {
     die 'Journal append requires a transaction' unless (try $*RED-TRANSACTION-RUNNING) // False;
     my $connection = journal-connection();
-    return if $connection.journal-state<gated>;
+    my $state = $connection.journal-state;
+    $state<decision-conflict>.throw if $state<decision-conflict>.defined;
     my @drivers = $connection.^mro.map(*.^name);
-    if @drivers.first(* eq 'Red::Driver::Pg').defined {
+    my $pg = @drivers.first(* eq 'Red::Driver::Pg').defined;
+    if !$state<gated> && $pg {
         # The table OID scopes the gate to a store/schema in this database. All
         # journal writers acquire it before a sequence allocates their row ID.
         $connection.execute("SELECT pg_advisory_xact_lock(1381188434, 'red_sourcing_event'::regclass::oid::integer)").row;
-    } elsif !@drivers.first(* eq 'Red::Driver::SQLite').defined {
+    } elsif !$pg && !@drivers.first(* eq 'Red::Driver::SQLite').defined {
         die 'Transactional journal appends require SQLite or PostgreSQL';
     }
     # SQLite's first INSERT already holds the database write lock through commit.
-    $connection.journal-state<gated> = True;
+    $state<gated> = True;
+    if $state<decisions>.elems && !$state<decision-locked> {
+        unless $pg {
+            my $reservation = $connection.prepare(
+                'UPDATE red_sourcing_event SET version = version WHERE 1 = 0');
+            CATCH {
+                default {
+                    my $failure = $_;
+                    # Failed execution is not marked executed by Red::Statement.
+                    # Reset its native cursor too, or SQLite can retain the stale
+                    # WAL snapshot even after the transaction has rolled back.
+                    try $reservation.statement.?finish;
+                    my $native = $failure;
+                    $native = $native.?orig-exception // $native;
+                    if $native.^name eq 'X::DBDish::DBError' && ($native.code +& 255) == any(5, 6) {
+                        my $conflict = RedSourcing::X::OptimisticLockFailed.new(
+                            :after($state<decisions>.head<after>), :boundary<SQLite-write-snapshot>);
+                        $state<decision-conflict> = $conflict;
+                        $conflict.throw;
+                    }
+                    $failure.rethrow;
+                }
+            }
+            # A zero-row UPDATE acquires SQLite's write reservation before SELECT.
+            $reservation.execute;
+            $reservation.finish-transaction;
+        }
+        $state<decision-locked> = True;
+    }
+    for $state<decisions>.grep({ !.<validated> }) -> $decision {
+        my $conflict = $decision<check>();
+        if $conflict.defined {
+            $state<decision-conflict> = $conflict;
+            $conflict.throw;
+        }
+        $decision<validated> = True;
+    }
 }
 
 sub transaction-do(&work) is export {

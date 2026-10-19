@@ -116,6 +116,21 @@ model RedSourcing::StoredEvent is table<red_sourcing_event> {
 		}
 	}
 
+    # Share the compiled predicate between decision replay and conditional append.
+    method event-filter(*@rules, Bool :$domain = False) {
+        my $*RED-INTERNAL = True;
+        my @filters = @rules.map: -> Pair (:$key, :$value) {
+            predicate-ast(pair-to-code($key, $value), self)
+        };
+        my $filter = @filters ?? (@filters == 1 ?? @filters.head !! [OR] @filters)
+            !! ast-value(False);
+        if $domain {
+            $filter = $filter AND self.mro.contains('|Entity|').not
+                AND self.mro.contains('|RedSourcing::Saga::Control|').not;
+        }
+        $filter
+    }
+
 	method streams {
 		self.^all.classify(*.stream).keys
 	}

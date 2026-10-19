@@ -39,6 +39,7 @@ SQLite volume, and then the independent monitor starts.
 | Example | Services |
 | --- | --- |
 | [Counter](../examples/counter/compose.yaml) | One-shot demo, SQLite volume, monitor |
+| [School](../examples/school/compose.yaml) | DCB enrollment demo, SQLite volume, monitor |
 | [Bank](../examples/bank/compose.yaml) | One-shot demo, SQLite volume, monitor |
 | [Shopping cart](../examples/shopping-cart/compose.yaml) | One-shot demo including reminder, SQLite volume, monitor |
 | [Food delivery](../examples/food-delivery/compose.yaml) | One-shot demo, SQLite volume, monitor |

@@ -411,6 +411,7 @@ Run these commands from the repository root:
 | Example | What it demonstrates | Run |
 | --- | --- | --- |
 | [Counter](examples/counter/README.md) | Minimal aggregate, projection and CLI walkthrough | `raku -Ilib examples/counter/main.raku` |
+| [School](examples/school/README.md) | Dynamic consistency: at most 10 classes per student and 30 students per class | `raku -Ilib examples/school/main.raku` |
 | [Simple flow](examples/simple-flow/README.md) | One aggregate, projection and saga, inspected line by line in the REPL | See the linked REPL walkthrough |
 | [Bank](examples/bank/README.md) | Rational money, transfers and monthly projections | `raku -Ilib -Iexamples/bank examples/bank/main.raku` |
 | [Shopping cart](examples/shopping-cart/README.md) | Checkout and a 24-hour abandoned-cart email saga | `raku -Ilib -Iexamples/shopping-cart examples/shopping-cart/main.raku` |
@@ -432,6 +433,7 @@ webhooks to a configured HTTP endpoint; its default webhook provider is simulate
 - [Docker](docs/docker.md): shared image and an isolated Compose stack for every example.
 - [Library API](docs/api.md): events, identity, commands, replay, snapshots,
   filtering, schema versions and failure behavior.
+- [Decision models](docs/decision-models.md): consistent decisions across projections and command retries.
 - [Sagas](docs/sagas.md): reactions, compensation, retries, services and timeouts.
 - [CLI](docs/cli.md): all commands, options, examples and readable/JSON output.
 - [Web monitor](docs/web-monitor.md): live inspection, metrics and Operations.

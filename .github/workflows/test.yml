@@ -134,6 +134,7 @@ jobs:
           raku -Ilib t/34-postgres-json.rakutest
           raku -Ilib t/52-journal-savepoints.rakutest
           raku -Ilib t/53-storage-indexes.rakutest
+          raku -Ilib t/55-decision-model-pg.rakutest
 
   docker:
     runs-on: ubuntu-latest
@@ -148,7 +149,7 @@ jobs:
           done
       - name: Run the SQLite walkthroughs through their actual Compose arguments
         run: |
-          for example in counter bank shopping-cart food-delivery order-saga simple-flow; do
+          for example in counter bank shopping-cart food-delivery order-saga simple-flow school; do
             docker compose -p "rs-ci-$example" -f "examples/$example/compose.yaml" run --rm demo
           done
       - name: Check the standalone SQLite monitor

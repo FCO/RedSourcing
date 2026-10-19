@@ -183,3 +183,10 @@ Automatic snapshot regression coverage is in `t/50-auto-snapshot.rakutest`
 and `t/51-auto-snapshot-config.rakutest`: count/time thresholds, explicit Nil,
 batch boundaries, restoration, optimistic conflicts, rollback, saga acknowledgement
 recovery and CLI/web configuration forwarding.
+
+Decision models are covered by `t/54-decision-model.rakutest` (including an
+independent SQLite WAL writer), `t/55-decision-model-pg.rakutest` (independent
+PostgreSQL writers and complete-command retries), and `t/56-school-example.rakutest`
+(school limits, cancellations, replay and persistent CLI operations). Set
+`RED_SOURCING_TEST_PG_DATABASE` to a disposable PostgreSQL database name for the
+PostgreSQL checks, using normal libpq environment variables for connection settings.
