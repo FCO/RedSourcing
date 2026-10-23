@@ -1,0 +1,269 @@
+{
+  "measured_at": "2026-10-21",
+  "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+  "methodology": "Five alternating samples after one warmup per version; Red 0.2.7, SQLite in memory, no concurrent tests. School includes startup, schema and tracing. Aggregate workload times 200 fresh on-demand state reconstructions across 10 streams, excluding setup, with tracing disabled. Equivalent isolated source snapshots and warmed precompilation caches are used for both versions.",
+  "runs": [
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 2.4746952499845065,
+      "sum": 1100,
+      "iterations": 200,
+      "streams": 10,
+      "seconds": 1.504511172
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 22.543845291016623,
+      "iterations": 200,
+      "seconds": 0.290428215,
+      "streams": 10,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 1.1514582079835236,
+      "streams": 10,
+      "seconds": 0.289434724,
+      "iterations": 200,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.4882746250077616,
+      "seconds": 1.515035906,
+      "streams": 10,
+      "sum": 1100,
+      "iterations": 200
+    },
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.457312250015093,
+      "iterations": 200,
+      "streams": 10,
+      "seconds": 1.523846074,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 1.1448538749828003,
+      "seconds": 0.289288934,
+      "streams": 10,
+      "iterations": 200,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 1.1541963340132497,
+      "streams": 10,
+      "iterations": 200,
+      "sum": 1100,
+      "seconds": 0.293776851
+    },
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.458098041010089,
+      "iterations": 200,
+      "seconds": 1.52597768,
+      "streams": 10,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.5102684579906054,
+      "iterations": 200,
+      "streams": 10,
+      "sum": 1100,
+      "seconds": 1.499987672
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 1.1482105839822907,
+      "sum": 1100,
+      "seconds": 0.291207291,
+      "iterations": 200,
+      "streams": 10
+    },
+    {
+      "workload": "loads",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 1.1445656249998137,
+      "seconds": 0.288586399,
+      "iterations": 200,
+      "streams": 10,
+      "sum": 1100
+    },
+    {
+      "workload": "loads",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 2.4515855420031585,
+      "iterations": 200,
+      "sum": 1100,
+      "seconds": 1.521205891,
+      "streams": 10
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 6.536852833000012,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 6.959189540997613,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 5.771286000002874,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 6.506900292006321,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 6.466968082997482,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 5.781492209003773,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 5.77141120901797,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 6.49084541600314,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 6.484848000021884,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 5.7740868749970105,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 5.788838749984279,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 6.472639625018928,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "equal_results": true,
+  "medians": {
+    "loads": {
+      "before": 1.521205891,
+      "after": 0.289434724
+    },
+    "school": {
+      "before": 6.484848000021884,
+      "after": 5.7740868749970105
+    }
+  },
+  "source_hashes": {
+    "before": {
+      "lib/RedSourcing/Storage.rakumod": "54d12b36efe657a3b700cbec859dc41b72a877d10e3828ee697d3b87d0531306",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "eff701d47ad6314b7a2c75fcae7999724baee70b1d836f119016c5db49ac304e",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "9aca0d4fcf14d88d2056cdbcc4ffde8ab8d5fe491cfcaeb42ae15ab7943dc8bd"
+    },
+    "after": {
+      "lib/RedSourcing/Storage.rakumod": "9358072dfc1b070420b71e9ae5a9e75579a8e946aa650a54eccd4dd1538f5a2f",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "11746106ab3766b3212334131298ee9581462de3a840f64c869ca389b2b0d279",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "770ca8d5c43ffd2613552ef7ec5b63028c75914ff323182a508248e480894a12"
+    }
+  },
+  "workload_details": "Aggregate workload uses 10 streams, each with an initial snapshot and one subsequent domain event. SQL/native caches are warm; aggregate instances are reconstructed on every load.",
+  "meta6_sha256": "da987fecfe073dd50cc05e8481d47917907ddb813808b9f05104607a20b77110",
+  "benchmark_source_sha256": "45724265ed64f597457b05b54975ea98d43870e2040e77985260e57e07ca2543",
+  "elapsed_reduction_percent": {
+    "loads": 80.97333663296995,
+    "school": 10.960335924951137
+  },
+  "speedup": {
+    "loads": 5.2557822709620705,
+    "school": 1.1230949828799106
+  }
+}

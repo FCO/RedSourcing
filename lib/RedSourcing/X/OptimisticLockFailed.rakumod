@@ -7,7 +7,8 @@ has UInt $.after;
 has Str $.boundary;
 
 method message {
-	return "Optimistic lock failed: decision model {$!boundary} changed after journal position {$!after}"
+	return "Optimistic lock failed: decision model {$!boundary} changed"
+            ~ ($!after.defined ?? " after journal position {$!after}" !! ' during append validation')
 		if $!boundary.defined;
 	"Optimistic lock failed: cannot emit '{$!event-class}' to stream '{$!stream}' "
 	~ "at version {$!version} — an event with this (stream, version) already exists"

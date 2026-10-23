@@ -1,0 +1,111 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Storage;
+use RedSourcing::EventType;
+use Red::DB;
+
+role MroOwner { has Str $.key }
+class MroBase does Event does MroOwner { has Int $.amount }
+class MroChild is MroBase { }
+projection MroTotal {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(MroBase $e where { .key eqv $!key }) { $!total += $e.amount }
+}
+projection MroRoleTotal {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(MroOwner $e where { .key eqv $!key }) { $!total += $e.amount }
+}
+my $pg = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $*RED-DB;
+my $admin;
+my $schema = 'rs_mro_' ~ $*PID;
+if $pg.defined {
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$pg"));
+    $admin.execute("CREATE SCHEMA $schema");
+    $*RED-DB = store-driver('Pg', $pg, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$pg options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>))
+    });
+} else {
+    $*RED-DB = database('SQLite', :database(':memory:'));
+}
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+schema(StoredEvent, StoredCommand).create;
+lives-ok { StoredEvent.^create-indexes; StoredEvent.^create-indexes }, 'index initialization is idempotent';
+my $row = MroChild.emit(:key<a>, :amount(7), :stream<a>, :version(1));
+ok $row.mro ~~ Str, 'RETURNING preserves the Raku string interface';
+ok $row.mro.contains('|MroBase|'), 'MRO retains the base class';
+ok $row.mro.contains('|MroOwner|'), 'MRO retains roles';
+is StoredEvent.^all.grep(*.id == $row.id).head.mro, $row.mro, 'ORM hydration preserves MRO';
+is storage-query($*RED-DB, 'SELECT mro FROM red_sourcing_event').head<mro>, $row.mro,
+    'internal SQL hydration preserves MRO';
+is MroTotal.^with-ids(:key<a>).^load.total, 7, 'base-class projection consumes a derived event';
+is MroRoleTotal.^with-ids(:key<a>).^load.total, 7, 'role projection consumes a derived event';
+is StoredEvent.^all.grep(*.mro.contains('|MroOwner|')).elems, 1, 'existing ORM string membership remains supported';
+decision-model (MroRoleTotal) => %(:key<a>), -> $view {
+    is $view.total, 7, 'decision query supports role membership';
+};
+my $*RED-INTERNAL = True;
+my Int $*bind-counter = 0;
+my ($sql, @binds) := $*RED-DB.translate(event-type-ast(StoredEvent.mro, 'MroOwner')).kv;
+like $sql, $pg.defined ?? /'@>'/ !! /'LIKE'/, 'membership translation follows the driver';
+is @binds.head, $pg.defined ?? 'MroOwner' !! '%|MroOwner|%', 'type name remains a bound value';
+if $pg.defined {
+    unlike $sql, /'LIKE'/, 'native membership does not use LIKE';
+    like $*RED-DB.translate(StoredEvent.mro, 'select').key, /'array_to_string'/,
+        'ORM SELECT renders the logical string without client-side array parsing';
+    is storage-query($*RED-DB, q[SELECT pg_typeof(mro)::text AS type FROM red_sourcing_event]).head<type>,
+        'text[]', 'MRO is a native PostgreSQL array';
+    my @indexes = storage-query($*RED-DB,
+        "SELECT indexdef FROM pg_indexes WHERE schemaname = '$schema' AND indexname = 'red_sourcing_event_mro_gin'");
+    like @indexes.head<indexdef>, /'USING gin'/, 'native membership has a GIN index';
+    # Exercise UPDATE as well as INSERT ... RETURNING without changing identity.
+    $*RED-DB.execute(q[INSERT INTO red_sourcing_event
+        (class, mro, stream, version, created, data, event_schema_version)
+        SELECT 'MroNoise', ARRAY['MroNoise']::text[], 'noise-' || g, 1, now(), '{}'::jsonb, 0
+        FROM generate_series(1, 10000) g]);
+    $*RED-DB.execute('ANALYZE red_sourcing_event');
+    my $plan = storage-query($*RED-DB, q[EXPLAIN (FORMAT JSON)
+        SELECT id FROM red_sourcing_event WHERE mro @> ARRAY['MroOwner']::text[]]).head{'QUERY PLAN'};
+    like $plan, /'red_sourcing_event_mro_gin'/, 'selective membership uses GIN with collected statistics';
+    my $original = $row.mro;
+    $row.^set-attr('mro', $original ~ 'ExtraRole|');
+    $row.^set-dirty(StoredEvent.^columns.first(*.column.attr-name eq 'mro'));
+    $row.^save;
+    is StoredEvent.^all.grep(*.id == $row.id).head.mro, $original ~ 'ExtraRole|', 'ORM updates encode MRO as a native array';
+    $row.^set-attr('mro', $original);
+    $row.^set-dirty(StoredEvent.^columns.first(*.column.attr-name eq 'mro'));
+    $row.^save;
+    my $db = $admin.db;
+    LEAVE $db.finish if $db.defined;
+    $db.execute("SET search_path TO $schema");
+    $db.execute('DROP INDEX red_sourcing_event_mro_gin');
+    $db.execute(q[ALTER TABLE red_sourcing_event ALTER COLUMN mro TYPE text
+        USING '|' || array_to_string(mro, '|') || '|']);
+    throws-like { StoredEvent.^create-indexes }, X::AdHoc,
+        message => /'migrate-pg-mro-array.sql'/, 'legacy schema gets an explicit migration instruction';
+    my $migration = 'tools/migrate-pg-mro-array.sql'.IO.slurp;
+    lives-ok { $db.execute($migration) }, 'legacy MRO migrates to a native array';
+    lives-ok { $db.execute($migration) }, 'migration can be repeated';
+    is StoredEvent.^all.grep(*.id == $row.id).head.mro, $original, 'migration preserves the historical type sequence';
+    is StoredEvent.^all.grep(*.id == $row.id).head.id, $row.id, 'migration preserves event IDs';
+    is StoredEvent.^all.grep(*.id == $row.id).head.version, 1, 'migration preserves stream versions';
+    lives-ok { StoredEvent.^create-indexes }, 'migrated store initializes successfully';
+    $db.execute('DROP INDEX red_sourcing_event_mro_gin');
+    $db.execute(q[ALTER TABLE red_sourcing_event ALTER COLUMN mro TYPE jsonb USING to_jsonb(mro)]);
+    dies-ok { $db.execute($migration) }, 'migration rejects unexpected column types';
+    $db.execute('ROLLBACK');
+    is $db.query(q[SELECT pg_typeof(mro)::text AS type FROM red_sourcing_event]).hash<type>,
+        'jsonb', 'failed migration leaves the column unchanged';
+} else {
+    is storage-query($*RED-DB, 'SELECT typeof(mro) AS type FROM red_sourcing_event').head<type>,
+        'text', 'SQLite keeps string storage';
+    is storage-query($*RED-DB, q[SELECT count(*) AS count FROM sqlite_master
+        WHERE type = 'index' AND name = 'red_sourcing_event_mro_gin']).head<count>, 0,
+        'SQLite gets no MRO GIN index';
+}
+done-testing;

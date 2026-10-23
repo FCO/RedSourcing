@@ -1,0 +1,35 @@
+use Test;
+use lib 'examples/bank', 'examples/shopping-cart', 'examples/food-delivery',
+    'examples/counter/lib', 'examples/school/lib', 'examples/simple-flow/lib',
+    'examples/real-estate/lib', 'examples/commerce/lib';
+need Balance;
+need BankTotals;
+need MonthlyStatement;
+need CartSummary;
+need ShopSales;
+need CustomerOrders;
+need RestaurantBoard;
+need DeliveryTotals;
+need CounterDemo;
+need School;
+need SimpleFlow;
+need Estate::Domain;
+need Commerce::ReadModels;
+
+for Balance, BankTotals, MonthlyStatement, CartSummary, ShopSales,
+    CustomerOrders, RestaurantBoard, DeliveryTotals,
+    CounterDemo::CounterTotal, School::StudentClasses, School::ClassRoster,
+    School::SchoolOverview, SimpleFlow::OrderCard,
+    Estate::Domain::Portfolio, Estate::Domain::TenantDirectory,
+    Estate::Domain::RentLedger, Estate::Domain::RepairBoard, Estate::Domain::RepairChat,
+    Commerce::ReadModels::OrderNotifications, Commerce::ReadModels::WarehouseBoard,
+    Commerce::ReadModels::ShopDashboard -> $type {
+    my $descriptor = $type.^projection-descriptor;
+    is $descriptor<templates>.elems, $descriptor<rules>.elems,
+        $type.^name ~ ' prepares every APPLY candidate';
+    for $descriptor<templates>.List -> $template {
+        ok $template<ast>:exists, $type.^name ~ ' uses a compiled query template';
+        diag $template<reason> unless $template<ast>:exists;
+    }
+}
+done-testing;

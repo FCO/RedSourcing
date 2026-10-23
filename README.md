@@ -232,10 +232,11 @@ instances in memory; matching instances receive committed state after the outer
 transaction completes. See [projections and transactional updates](docs/projections.md)
 for routing limits, lifecycle, rollback and cross-stream ordering.
 
-Lifecycle also applies to aggregates and sagas: declare
-`aggregate Account[:retained] { ... }` or `saga PurchaseWorkflow[:retained] { ... }`.
-`EntityLifecycle` exposes `OnDemand` (the default) and `Retained`. Override a type
-in configuration with `.entities = { 'App::Account' => { retained => True } }`.
+Aggregates, projections and sagas default to `Cached`, with LRU limits of 100 per
+type and 100 total per store. Declare `aggregate Account[:50cached] { ... }` to
+change a type's limit; configure `.entity-cache-size = 200` to change the total.
+`EntityLifecycle` also exposes explicit `OnDemand` and unbounded `Retained`.
+Override a type with `.entities = { 'App::Account' => { cached => 50 } }`.
 These settings apply to the selected connection/pool before first use. Retained
 aggregates fold new events before commands; sagas restore passively and keep their
 explicit advance/controller behavior. See [entity lifecycle](docs/lifecycle.md)
@@ -374,12 +375,11 @@ startup settings, independent connections, job controls and metrics definitions.
 
 Entity actions run in place with their target fixed; command parameters come from
 the signature and results use HTML cards/tables. **Flows** connects saga actions,
-actual child commands, emitted events and observed consumers in causal order.
-Choose an entity or a typed saga action; internal bookkeeping links are hidden
-by default and can be shown when needed. Enable
-`.flow-tracing = True` in shared configuration, or call `enable-flow-tracing`
-after selecting a database. [The flow guide](docs/flows.md) covers recording and
-the limits of historical data.
+actual child commands and emitted events in causal order, using a projection
+over journal metadata. Choose an entity or a typed saga action; internal
+bookkeeping links are hidden by default and can be shown when needed. Causal
+command/action IDs are always stored; no tracing tables or replay observations
+are required. [The flow guide](docs/flows.md) covers reconstruction and its limits.
 
 ## Automatic snapshots
 
@@ -437,10 +437,11 @@ webhooks to a configured HTTP endpoint; its default webhook provider is simulate
 - [Sagas](docs/sagas.md): reactions, compensation, retries, services and timeouts.
 - [CLI](docs/cli.md): all commands, options, examples and readable/JSON output.
 - [Web monitor](docs/web-monitor.md): live inspection, metrics and Operations.
-- [Workflow visualization](docs/flows.md): causal links and observed consumer fan-out.
+- [Workflow visualization](docs/flows.md): causal links reconstructed from journal metadata.
 - [REPL tutorial](docs/tutorials/simple-flow.md): follow one order through an aggregate,
   projection and saga, inspecting commands, events and recovery at each step.
 - [Food delivery tutorial](docs/tutorials/food-delivery.md): a step-by-step application.
+- [Performance](docs/performance.md): measurements, storage optimizations and remaining costs.
 - [Testing](docs/testing.md): local checks, coverage, PostgreSQL and browser checks.
 - [Roadmap](docs/next-steps.md): remaining API, concurrency and storage work.
 

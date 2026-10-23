@@ -42,11 +42,11 @@ say $card.status;
 $card = $view.^load; say "{$card.item}: {$card.status}";
 show-journal;
 
-# Inspect exact causal IDs and the projection's observed consumption.
+# Inspect exact causal IDs and independently reload the projection state.
 my $action = $saga.^state<actions>[0];
 say "E{$action<source-event-id>} -> confirm-order -> C{$action<row-id>}";
 say flow-links(:source-kind<command>, :source($action<row-id>.Str)).map({ "C{.<source>} -> E{.<target>} ({.<relation>})" }).join("\n");
-say flow-links(:target-kind<entity>, :target($view.^stream-name)).map({ "E{.<source>} -> {.<target>} ({.<relation>})" }).join("\n");
+say 'Projection state: ' ~ $view.^load.status;
 
 # Replay is read-only: a completed saga does not confirm the order twice.
 $saga = $workflow.^load; show-actions($saga);

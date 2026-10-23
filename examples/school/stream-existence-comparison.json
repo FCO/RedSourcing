@@ -1,0 +1,55 @@
+{
+  "measured_at": "2026-10-21",
+  "driver": "SQLite",
+  "database": ":memory:",
+  "red": "0.2.7",
+  "rakudo": "2026.09",
+  "samples_seconds": {
+    "before": [
+      5.967729875002988,
+      5.972864665964153,
+      6.448313667031471,
+      5.458705500001088,
+      6.053922875027638
+    ],
+    "after": [
+      4.5421462910017,
+      3.894466832978651,
+      4.669939125014935,
+      3.990270500013139,
+      4.6575413750251755
+    ]
+  },
+  "medians_seconds": {
+    "before": 5.972864665964153,
+    "after": 4.5421462910017
+  },
+  "change_percent": -23.953637910386227,
+  "favorable_pairs": 5,
+  "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+  "methodology": "One warmup per variant, five alternating full-process pairs, no parallel tests. Same final Storage helper in both variants; only School.ensure expression differs. Both use isolated copies of School/main with absolute original configuration path.",
+  "before_expression": "$proxy.^create unless StoredEvent.^all.where(StoredEvent.journal-filter(:class($type), :$stream)).map(*.id).head;",
+  "after_expression": "$proxy.^create unless storage-stream-exists(journal-connection(), $type, $stream);",
+  "retained": true,
+  "source_sha256": {
+    "/Users/fernando/Projects/RedStoredEvent/lib/RedSourcing/Storage.rakumod": "d51fbf6f2359fb97928ee80220fabe01fc96c842b7844fe1ff6beb318768695d",
+    "/Users/fernando/Projects/RedStoredEvent/examples/school/lib/School.rakumod": "2e39a7609f5229a3a787f40830cd8430f483834469da3356fd646c0165e0d144"
+  },
+  "validation": {
+    "sqlite": [
+      "t/56-school-example.rakutest",
+      "t/65-aggregate-combined-load.rakutest",
+      "t/66-cached-entities.rakutest",
+      "t/70-counter-statements.rakutest",
+      "t/71-stream-existence.rakutest"
+    ],
+    "postgresql": [
+      "t/55-decision-model-pg.rakutest",
+      "t/71-stream-existence.rakutest"
+    ],
+    "rakuast": [
+      "t/71-stream-existence.rakutest"
+    ],
+    "all_passed": true
+  }
+}

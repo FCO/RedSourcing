@@ -1,0 +1,98 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Counters;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+
+my (%prepares, %executions, %disposals);
+my ($fail-prepare, $fail-execute) = False, False;
+my role ObserveStatement {
+    has Str $.observed-sql is rw;
+    method execute(|) {
+        %executions{$!observed-sql}++;
+        die 'injected execute failure' if $fail-execute && $!observed-sql.contains('fault');
+        callsame
+    }
+    method dispose(|) { %disposals{$!observed-sql}++; callsame }
+}
+my role ObserveDriver {
+    multi method prepare(Str $sql, |) {
+        die 'injected prepare failure' if $fail-prepare && $sql.contains('fault');
+        %prepares{$sql}++;
+        my $statement = callsame;
+        $statement.statement does ObserveStatement;
+        $statement.statement.observed-sql = $sql;
+        $statement
+    }
+}
+my $*RED-DB = store-driver('SQLite', ':memory:');
+schema(StoredEvent, StoredCommand).create;
+initialize-counters;
+$*RED-DB does ObserveDriver;
+my $connection = journal-connection();
+sub write($key, $definition, $increment, *%options) {
+    red-do :transaction, { update-counter($connection, $key, $definition, $increment, |%options) }
+}
+is write('a', 'A', 1, :expected(0)), 1, 'missing counter accepts expected zero';
+is write('b', 'B', 3, :expected(0)), 3, 'reused INSERT binds a different key and increment';
+is write('a', 'A', 2, :expected(1)), 3, 'positive expectation advances existing counter';
+is write('b', 'B', 1, :expected(3)), 4, 'reused UPDATE binds the current expectation';
+is write('a', 'A', 1), 4, 'undefined expectation uses unguarded UPSERT';
+is write('b', 'B', 2), 6, 'reused unguarded UPSERT keeps fresh values';
+is read-counters($connection, {a => 'A'})<a>, 4, 'read sees current version';
+is read-counters($connection, {b => 'B'})<b>, 6, 'same read shape binds another key';
+my $select = %prepares.keys.first(*.starts-with('SELECT key, definition, version'));
+is %prepares{$select}, 1, 'repeated counter read prepares once';
+is %executions{$select}, 2, 'both counter reads execute';
+my $update = %prepares.keys.first(*.starts-with('UPDATE red_sourcing_counter'));
+is %prepares{$update}, 1, 'guarded UPDATE prepares once';
+is %executions{$update}, 2, 'both guarded updates execute';
+throws-like { write('a', 'A', 1, :expected(1)) }, RedSourcing::X::OptimisticLockFailed;
+is write('a', 'A', 1, :expected(4)), 5, 'statement remains usable after an optimistic rollback';
+dies-ok { red-do :transaction, { update-counter($connection, 'a', 'A', 10); die 'abort' } }, 'caller rollback propagates';
+is read-counters($connection, {a => 'A'})<a>, 5, 'reused read does not retain the rolled-back version';
+throws-like { write('a', 'wrong', 1) }, Exception, message => / 'collision' | 'Optimistic' /;
+is read-counters($connection, {a => 'A'})<a>, 5, 'definition collision preserves the durable counter';
+my %changes = a => {definition => 'A', increment => 1}, b => {definition => 'B', increment => 1};
+red-do :transaction, { update-counters($connection, %changes) };
+red-do :transaction, { update-counters($connection, %changes) };
+is-deeply read-counters($connection, {a => 'A', b => 'B'}), {a => 7, b => 8},
+    'batch RETURNING executes twice with NULL expectations';
+my $batch = %prepares.keys.first(*.starts-with('WITH changes('));
+is %prepares{$batch}, 1, 'batch statement prepares once';
+is %executions{$batch}, 2, 'batch statement executes twice';
+my $fault = 'SELECT ? AS fault';
+$fail-prepare = True;
+throws-like { storage-prepared-query($connection, $fault, 1) }, Exception,
+    message => / 'injected prepare failure' /;
+$fail-prepare = False;
+is storage-prepared-query($connection, $fault, 2).head<fault>, 2, 'prepare failure does not poison the connection';
+$fail-execute = True;
+throws-like { storage-prepared-query($connection, $fault, 3) }, Exception,
+    message => / 'injected execute failure' /;
+$fail-execute = False;
+is %disposals{$fault}, 1, 'failed execution disposes its leased statement';
+is storage-prepared-query($connection, $fault, 4).head<fault>, 4, 'next execution prepares a healthy replacement';
+is %prepares{$fault}, 2, 'failed native statement is not returned to the cache';
+my $before-eviction = %prepares{$select};
+for ^128 -> $slot {
+    storage-prepared-query($connection, "SELECT ? AS pool_slot_$slot", $slot);
+}
+is read-counters($connection, {a => 'A'})<a>, 7, 'counter read survives idle-pool eviction';
+is %prepares{$select}, $before-eviction + 1, 'counter statements share the existing bounded pool';
+my $native = $connection.^attributes.first(*.name eq '$!dbh').get_value($connection);
+lives-ok { $native.teardown-connection-state }, 'teardown closes cached counter statements';
+my $old = %prepares{$select};
+is read-counters($connection, {a => 'A'})<a>, 7, 'counter read works after connection-state reset';
+is %prepares{$select}, $old + 1, 'reset forces a new native preparation';
+{
+    my $*RED-DB = store-driver('SQLite', ':memory:');
+    schema(StoredEvent, StoredCommand).create;
+    initialize-counters;
+    $*RED-DB does ObserveDriver;
+    my $other = journal-connection();
+    is read-counters($other, {a => 'A'})<a>, 0, 'another connection has its own counter state';
+    is %prepares{$select}, $old + 2, 'physical connections do not share native statements';
+}
+done-testing;

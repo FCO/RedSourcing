@@ -12,6 +12,9 @@ use JSON::Fast;
 use Red;
 use RedSourcing::Journal;
 use RedSourcing::Lifecycle;
+use RedSourcing::Storage;
+use RedSourcing::EventType;
+use Red::DB;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
@@ -55,7 +58,11 @@ method data(\entity) {
     Map(callsame, 'saga-state' => copy-data(entity.^state))
 }
 
-method values(\entity) { entity.^data.Hash.grep(*.key ne 'saga-state').Hash }
+method values(\entity) {
+    # Domain values do not include runtime state. Do not deep-copy that entire
+    # state just to discard it from the result.
+    self.Metamodel::RedSourcing::EntityHOW::data(entity).Hash
+}
 
 method restore-state(Mu:U \type, $snapshot, Str :$stream!, *%initial) {
     $snapshot ?? $snapshot.COERCE(type) !! type.bless(|%initial, :$stream)
@@ -63,22 +70,46 @@ method restore-state(Mu:U \type, $snapshot, Str :$stream!, *%initial) {
 
 # Loading reads only committed controls. It never calls REACT or an adapter.
 method replay(\entity) {
-    for RedSourcing::StoredEvent.list-events(:row, :stream(entity.^stream)) -> $row {
-        next if $row.version <= entity.^version;
-        if $row.class eq entity.^name {
-            my $snapshot = $row.COERCE(entity.WHAT);
-            entity.^adopt($snapshot.^values, $snapshot.^state, $snapshot.^current-id);
-            entity.^version = $row.version;
-            entity.^snapshot-events = 0;
-            entity.^snapshot-at = $row.created.Instant.Num;
-            next;
+    my $connection = get-RED-DB;
+    my $pg = $connection.^mro.map(*.^name).first(* eq 'Red::Driver::Pg').defined;
+    my @p = $pg ?? < $1 $2 $3 > !! < ? ? ? >;
+    my @headers = storage-query($connection,
+        'SELECT id, version, class, mro, created FROM red_sourcing_event WHERE stream = ' ~ @p[0]
+        ~ ' AND version > ' ~ @p[1] ~ ' AND (class = ' ~ @p[2]
+        ~ ' OR ' ~ event-type-sql($connection, 'RedSourcing::Saga::Control') ~ ') ORDER BY id',
+        entity.^stream, entity.^version, entity.^name);
+    my $version = entity.^version;
+    my $events = entity.^snapshot-events;
+    my $at = entity.^snapshot-at;
+    my $last;
+    for @headers -> %row {
+        next if %row<version> <= $version;
+        $last = %row<id>;
+        $version = %row<version>;
+        if %row<class> eq entity.^name {
+            $events = 0;
+            $at = (%row<created> ~~ DateTime ?? %row<created> !! DateTime.new(%row<created>)).Instant.Num;
+        } else {
+            $events++;
+            $at = (%row<created> ~~ DateTime ?? %row<created> !! DateTime.new(%row<created>)).Instant.Num unless $at;
         }
-        next unless $row.mro.contains('|RedSourcing::Saga::Control|');
+    }
+    return unless $last.defined;
+    # Every native control stores complete values/state/cursor. Historical
+    # headers preserve version and snapshot accounting; only the final payload
+    # must be inflated, copied and adopted. No APPLY/REACT is executed here.
+    my $row = RedSourcing::StoredEvent.^all.where(
+        RedSourcing::StoredEvent.journal-filter(:id($last))).head;
+    if $row.class eq entity.^name {
+        my $snapshot = $row.COERCE(entity.WHAT);
+        entity.^adopt($snapshot.^values, $snapshot.^state, $snapshot.^current-id);
+    } else {
         my $control = $row.COERCE;
         entity.^adopt($control.values, $control.state, $control.cursor);
-        entity.^version = $row.version;
-        entity.^record-applied(:at($row.created));
     }
+    entity.^version = $version;
+    entity.^snapshot-events = $events;
+    entity.^snapshot-at = $at;
 }
 
 method adopt(\entity, %values, %state, UInt $cursor) {
@@ -90,7 +121,10 @@ method adopt(\entity, %values, %state, UInt $cursor) {
 }
 
 method clone-state(\entity) {
-    my $copy = entity.WHAT.bless(|copy-data(entity.^data).Hash, :stream(entity.^stream));
+    # Entity.TWEAK copies saga-state when initializing the new instance. Copy
+    # domain values once and let that initializer isolate runtime state once.
+    my $copy = entity.WHAT.bless(|copy-data(entity.^values).Hash,
+        :saga-state(entity.^state), :stream(entity.^stream));
     $copy.^version = entity.^version;
     $copy.^current-id = entity.^current-id;
     $copy.^snapshot-events = entity.^snapshot-events;
@@ -330,8 +364,7 @@ method resolve-operation(\entity, Str $id, *%outcome) {
 }
 
 method run-action(\entity, Str $id, DateTime $now) {
-    my $flow-scope = flow-tracing-enabled;
-    my $*REDSOURCING-FLOW-SCOPE = $flow-scope;
+    my $*REDSOURCING-ACTION = $id;
     my %action := entity.^state<actions>.first(*.<id> eq $id);
     # Claim and record the child command atomically before executing it.
     if %action<status> ne 'running' {
@@ -352,13 +385,12 @@ method run-action(\entity, Str $id, DateTime $now) {
         %action := entity.^state<actions>.first(*.<id> eq $id);
     }
     my ($result, $failure);
-    my $*REDSOURCING-ACTION = $id;
     {
         CATCH { default { $failure = $_ } }
         if %action<kind> eq 'command' {
             my $row = RedSourcing::StoredCommand.^all.grep(*.id == %action<row-id>).head;
             $result = $row.run;
-            $row.^refresh;
+            $row.^refresh-storage-row;
             return unless $row.state == RedSourcing::StoredCommand::State::Done;
         } else {
             my &adapter = RedSourcing::Saga::service-adapter(%action<target>);
@@ -401,11 +433,7 @@ method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 
     my $*REDSOURCING-NOW = $now;
     entity.^replay;
     # Observe committed domain facts before deciding whether a timer has expired.
-    my @rules;
-    for <APPLY REACT> -> $method {
-        my $handler = entity.^find_method($method);
-        @rules.append(rules-from-func(entity, $handler)) if $handler;
-    }
+    my @rules = rules-from-methods(entity, <APPLY REACT>);
     # Native controls are replayed from this saga's stream or dispatched by
     # finish-action. Their handlers cannot match source events, so do not trace
     # their signatures into the global subscription query.
@@ -420,8 +448,6 @@ method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 
             $copy.^react($event);
             $copy.^current-id = $row.id;
             entity.^commit($copy);
-            observe-flow-entity(entity, 'saga');
-            flow-link('event', $row.id.Str, 'entity', entity.^stream, 'consumed-saga');
             last unless entity.^status eq 'running';
         }
     }

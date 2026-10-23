@@ -1,0 +1,285 @@
+{
+  "status": "complete",
+  "measured_at": "2026-10-20",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "runtime": "Welcome to Rakudo™ v2026.09-198-g50379ea28a.\nImplementing the Raku® Programming Language v6.d.\nBuilt on MoarVM version 2026.09-38-g597c5351b.\n",
+  "source_sha256": "8be0c88792afc4a0fcf1c24743d2845071c2f30fe108f5592b4c151ff6e5aaec",
+  "frontend": "RAKUDO_RAKUAST=0",
+  "runs": [
+    {
+      "case": "sqlite-memory",
+      "warmup": true,
+      "iteration": 0,
+      "seconds": 17.449737583985552,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "driver": "SQLite",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "journal_mode": "memory",
+        "flow_tracing": true,
+        "synchronous": "2",
+        "server_version": "3.51.0",
+        "red_version": "0.2.7"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-file",
+      "warmup": true,
+      "iteration": 0,
+      "seconds": 17.852354833012214,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "flow_tracing": true,
+        "driver": "SQLite",
+        "synchronous": "2",
+        "journal_mode": "delete",
+        "red_version": "0.2.7",
+        "server_version": "3.51.0",
+        "auto_snapshot": {
+          "count": 100
+        }
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "postgresql",
+      "warmup": true,
+      "iteration": 0,
+      "seconds": 18.593048125010682,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "server_version": "18.4 (Homebrew)",
+        "full_page_writes": "on",
+        "red_version": "0.2.7",
+        "fsync": "on",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous_commit": "on",
+        "flow_tracing": true,
+        "driver": "Pg"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-memory",
+      "warmup": false,
+      "iteration": 1,
+      "seconds": 17.38582100000349,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "red_version": "0.2.7",
+        "journal_mode": "memory",
+        "driver": "SQLite",
+        "flow_tracing": true,
+        "server_version": "3.51.0",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous": "2"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-file",
+      "warmup": false,
+      "iteration": 1,
+      "seconds": 17.716687499982072,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "synchronous": "2",
+        "red_version": "0.2.7",
+        "flow_tracing": true,
+        "server_version": "3.51.0",
+        "driver": "SQLite",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "journal_mode": "delete"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "postgresql",
+      "warmup": false,
+      "iteration": 1,
+      "seconds": 18.410906124976464,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "driver": "Pg",
+        "synchronous_commit": "on",
+        "red_version": "0.2.7",
+        "full_page_writes": "on",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "server_version": "18.4 (Homebrew)",
+        "fsync": "on",
+        "flow_tracing": true
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-file",
+      "warmup": false,
+      "iteration": 2,
+      "seconds": 17.8354446250014,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "driver": "SQLite",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous": "2",
+        "red_version": "0.2.7",
+        "journal_mode": "delete",
+        "server_version": "3.51.0",
+        "flow_tracing": true
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "postgresql",
+      "warmup": false,
+      "iteration": 2,
+      "seconds": 18.497192707989598,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "full_page_writes": "on",
+        "fsync": "on",
+        "red_version": "0.2.7",
+        "server_version": "18.4 (Homebrew)",
+        "driver": "Pg",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous_commit": "on",
+        "flow_tracing": true
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-memory",
+      "warmup": false,
+      "iteration": 2,
+      "seconds": 17.629942166997353,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "red_version": "0.2.7",
+        "server_version": "3.51.0",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "driver": "SQLite",
+        "synchronous": "2",
+        "flow_tracing": true,
+        "journal_mode": "memory"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "postgresql",
+      "warmup": false,
+      "iteration": 3,
+      "seconds": 18.50202200000058,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "server_version": "18.4 (Homebrew)",
+        "red_version": "0.2.7",
+        "full_page_writes": "on",
+        "fsync": "on",
+        "driver": "Pg",
+        "flow_tracing": true,
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous_commit": "on"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-memory",
+      "warmup": false,
+      "iteration": 3,
+      "seconds": 17.625976667011855,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "server_version": "3.51.0",
+        "driver": "SQLite",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "synchronous": "2",
+        "flow_tracing": true,
+        "red_version": "0.2.7",
+        "journal_mode": "memory"
+      },
+      "database_empty_at_start": true
+    },
+    {
+      "case": "sqlite-file",
+      "warmup": false,
+      "iteration": 3,
+      "seconds": 18.303639209014364,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "settings": {
+        "red_version": "0.2.7",
+        "flow_tracing": true,
+        "server_version": "3.51.0",
+        "synchronous": "2",
+        "auto_snapshot": {
+          "count": 100
+        },
+        "journal_mode": "delete",
+        "driver": "SQLite"
+      },
+      "database_empty_at_start": true
+    }
+  ],
+  "postgres_connection": {
+    "host": "127.0.0.1",
+    "port": 55441,
+    "user": "postgres",
+    "database": "postgres"
+  },
+  "summary": {
+    "sqlite-memory": {
+      "seconds": [
+        17.38582100000349,
+        17.629942166997353,
+        17.625976667011855
+      ],
+      "median_seconds": 17.625976667011855,
+      "min_seconds": 17.38582100000349,
+      "max_seconds": 17.629942166997353,
+      "postgresql_time_ratio": 1.0494279583728419,
+      "postgresql_time_difference_percent": 4.942795837284186
+    },
+    "sqlite-file": {
+      "seconds": [
+        17.716687499982072,
+        17.8354446250014,
+        18.303639209014364
+      ],
+      "median_seconds": 17.8354446250014,
+      "min_seconds": 17.716687499982072,
+      "max_seconds": 18.303639209014364,
+      "postgresql_time_ratio": 1.0371029765111979,
+      "postgresql_time_difference_percent": 3.710297651119787
+    },
+    "postgresql": {
+      "seconds": [
+        18.410906124976464,
+        18.497192707989598,
+        18.50202200000058
+      ],
+      "median_seconds": 18.497192707989598,
+      "min_seconds": 18.410906124976464,
+      "max_seconds": 18.50202200000058
+    }
+  },
+  "red_version": "0.2.7"
+}

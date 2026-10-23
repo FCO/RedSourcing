@@ -11,12 +11,12 @@ sub fresh {
     schema(StoredEvent, StoredCommand).create;
 }
 
-subtest 'all entity kinds declare a lifecycle and default to OnDemand' => {
+subtest 'all entity kinds declare a lifecycle and default to Cached' => {
     fresh;
     is Account.^lifecycle, Retained, 'aggregate declaration retains';
     is Total.^lifecycle, Retained, 'projection declaration retains';
     is Workflow.^lifecycle, Retained, 'saga declaration retains';
-    is DefaultAccount.^lifecycle, OnDemand, 'unparameterized declaration keeps default';
+    is DefaultAccount.^lifecycle, Cached, 'unparameterized declaration keeps default';
     is Account.^name, 'LifecycleDomain::Account', 'lifecycle preserves persisted names';
 };
 
@@ -26,7 +26,7 @@ subtest 'lifecycle queries and named configuration share the same metaclass API'
     projection ConfiguredTotal { has Int $.id is entity-id; method APPLY(Added $) {} }
     saga ConfiguredWorkflow { has Int $.id is entity-id; method APPLY(Added $) {} }
     for ConfiguredAccount, ConfiguredTotal, ConfiguredWorkflow -> $type {
-        is $type.^lifecycle, OnDemand, 'argumentless call queries the effective lifecycle';
+        is $type.^lifecycle, Cached, 'argumentless call queries the effective lifecycle';
         ok $type.^lifecycle(:retained, :auto-snapshot{ :2count }) === $type,
             'configuration returns the declaration type';
         is $type.^lifecycle, Retained, 'named option configures retention';
@@ -36,7 +36,7 @@ subtest 'lifecycle queries and named configuration share the same metaclass API'
         is $type.^lifecycle, OnDemand, 'negated option restores OnDemand';
         nok $type.^auto-snapshot.defined, 'negated snapshot option disables snapshots';
         throws-like { $type.^lifecycle(:typo) }, X::AdHoc,
-            message => /'only retained, lifecycle and auto-snapshot'/;
+            message => /'only retained, cached, lifecycle and auto-snapshot'/;
         throws-like { $type.^lifecycle(:declared, :retained) }, X::AdHoc,
             message => 'Cannot combine :declared with lifecycle configuration';
     }
@@ -51,10 +51,10 @@ subtest 'creating the first snapshot freezes lifecycle before the first load' =>
         $type.^with-ids(:id(1)).^create;
         throws-like { $type.^lifecycle(Retained) }, X::AdHoc,
             message => /'before first use'/;
-        lives-ok { $type.^lifecycle(OnDemand) }, 'same declaration choice remains valid';
+        lives-ok { $type.^lifecycle(Cached) }, 'same declaration choice remains valid';
         throws-like { configure-lifecycles({ $type.^name => { lifecycle => 'Retained' } }) },
             X::AdHoc, message => /'before first use'/;
-        is $type.^lifecycle, OnDemand, 'rejected changes preserve the effective lifecycle';
+        is $type.^lifecycle, Cached, 'rejected changes preserve the effective lifecycle';
     }
 };
 
@@ -173,13 +173,13 @@ subtest 'configuration overrides are store-scoped, lazy, and frozen after first 
         message => /'before first use'/;
     is DefaultAccount.^lifecycle, Retained, 'invalid reconfiguration is atomic';
     fresh;
-    is DefaultAccount.^lifecycle, OnDemand, 'a different connection keeps its own settings';
+    is DefaultAccount.^lifecycle, Cached, 'a different connection keeps its own settings';
     my $plain = DefaultAccount.^with-ids(:id(9)); $plain.^create;
-    nok $plain.^load === $plain.^load, 'OnDemand loads are independent';
+    ok $plain.^load === $plain.^load, 'default Cached loads reuse instances';
     throws-like { configure-lifecycles({'X' => { lifecycle => 'Other' }}) }, X::AdHoc,
         message => /'Unknown entity lifecycle'/;
     throws-like { configure-lifecycles({'X' => { lifecycle => 'Retained', typo => True }}) }, X::AdHoc,
-        message => /'only retained, lifecycle and auto-snapshot'/;
+        message => /'only retained, cached, lifecycle and auto-snapshot'/;
 };
 
 done-testing;

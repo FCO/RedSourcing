@@ -145,7 +145,8 @@ subtest 'projection replay advances the cursor only after successful APPLY' => {
 };
 
 my &checkpoint-interleave = -> { };
-projection CheckpointProjection {
+# These checkpoint race tests deliberately use independent, stale instances.
+projection CheckpointProjection[OnDemand] {
     has Int $.client-id is entity-id;
     has Str $.month is entity-id;
     has Int $.amount = 0;

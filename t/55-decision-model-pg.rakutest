@@ -68,7 +68,7 @@ sub fresh {
 }
 sub fact(Mu:U $type, Str $stream, UInt $version, *%data) { $type.emit(:$stream, :$version, |%data) }
 sub race(Str $schema, $command, &compete, UInt :$attempts = 1 --> Hash) {
-    my $barrier = $directory.add("barrier-{$command.id}" ~ ($attempts > 1 ?? '-repeat' !! '')).Str;
+    my $barrier = $directory.add("barrier-{$schema}-{$command.id}" ~ ($attempts > 1 ?? '-repeat' !! '')).Str;
     my $process = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-Iexamples/school/lib',
         $worker.Str, $database, $schema, $command.id.Str, $barrier);
     my ($out, $err) = '', '';
@@ -101,6 +101,7 @@ subtest 'two different enrollment streams compete for the thirtieth seat' => {
         fact(StudentRegistered, "student-$i", 1, :student-id("s$i"), :name("Student $i"));
         fact(StudentEnrolled, 'seed', $i, :student-id("s$i"), :class-id<math>) if $i <= 29;
     }
+    $school.classroom('math').^emit-snapshot;
     my $first = $school.enrollment('s30', 'math').enroll(:!sync);
     $school.enrollment('s31', 'math');
     my %result = race($schema, $first, { ok $school.enroll('s31', 'math'), 'competing command takes last seat' });
@@ -121,6 +122,7 @@ subtest 'one student competes for a tenth enrollment in two different classes' =
         fact(ClassCreated, "class-$i", 1, :class-id("c$i"), :title("Class $i"));
         fact(StudentEnrolled, 'seed', $i, :student-id<alice>, :class-id("c$i")) if $i <= 9;
     }
+    $school.student('alice').^emit-snapshot;
     my $first = $school.enrollment('alice', 'c10').enroll(:!sync);
     $school.enrollment('alice', 'c11');
     my %result = race($schema, $first, { ok $school.enroll('alice', 'c11'), 'competitor takes tenth enrollment' });
@@ -148,7 +150,7 @@ subtest 'empty decisions reject the first matching concurrent event without a co
     my $schema = fresh;
     my ($exists, $code, $errors);
     throws-like {
-        decision-model StudentClasses.^with-ids(:student-id<new>), -> $view {
+        decision-model (StudentClasses) => %(:student-id<new>), -> $view {
             $exists = $view.exists;
             my $p = run $*EXECUTABLE.Str, '-Ilib', '-Iexamples/school/lib',
                 $worker.Str, $database, $schema, 'append', 'new', :out, :err;

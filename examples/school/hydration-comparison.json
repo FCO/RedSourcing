@@ -1,0 +1,268 @@
+{
+  "measured_at": "2026-10-20",
+  "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+  "methodology": "Five alternating samples after one warmup per version; Red 0.2.7, SQLite in memory, no concurrent tests. School includes process startup and schema with tracing enabled; isolated materialization excludes setup, SQL and appends.",
+  "runs": [
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 21.778279667021707,
+      "sum": 28000,
+      "conversion_seconds": 0.035537788,
+      "iterations": 2000,
+      "hydration_seconds": 0.815096548
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 2.134973624983104,
+      "conversion_seconds": 0.032208153,
+      "sum": 28000,
+      "iterations": 2000,
+      "hydration_seconds": 0.734788226
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.0962345830048434,
+      "sum": 28000,
+      "iterations": 2000,
+      "conversion_seconds": 0.032753772,
+      "hydration_seconds": 0.73300216
+    },
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 1.5076165829959791,
+      "sum": 28000,
+      "hydration_seconds": 0.826268858,
+      "conversion_seconds": 0.034922084,
+      "iterations": 2000
+    },
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 1.5233384169987403,
+      "conversion_seconds": 0.034967251,
+      "iterations": 2000,
+      "hydration_seconds": 0.829413035,
+      "sum": 28000
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.09236220800085,
+      "sum": 28000,
+      "iterations": 2000,
+      "hydration_seconds": 0.732992494,
+      "conversion_seconds": 0.031854114
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.0926570409792475,
+      "conversion_seconds": 0.032157861,
+      "hydration_seconds": 0.732656498,
+      "iterations": 2000,
+      "sum": 28000
+    },
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 1.5167242080206051,
+      "sum": 28000,
+      "iterations": 2000,
+      "conversion_seconds": 0.03535758,
+      "hydration_seconds": 0.826154859
+    },
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 1.527952042000834,
+      "hydration_seconds": 0.834802027,
+      "iterations": 2000,
+      "sum": 28000,
+      "conversion_seconds": 0.034925627
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.114878750027856,
+      "hydration_seconds": 0.739235893,
+      "iterations": 2000,
+      "sum": 28000,
+      "conversion_seconds": 0.03229861
+    },
+    {
+      "workload": "materialization",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 1.4493139999976847,
+      "conversion_seconds": 0.031679449,
+      "sum": 28000,
+      "hydration_seconds": 0.726481556,
+      "iterations": 2000
+    },
+    {
+      "workload": "materialization",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 1.5418487499991897,
+      "sum": 28000,
+      "iterations": 2000,
+      "hydration_seconds": 0.845384385,
+      "conversion_seconds": 0.03542108
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 8.651134749990888,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 7.36718358300277,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 6.783756791992346,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 7.4671404999971855,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 7.457137708988739,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 7.437268125009723,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 7.441223749978235,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 7.514172625000356,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 7.476716540986672,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 6.826020291977329,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 7.4362791670137085,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 7.496615207986906,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "equal_results": true,
+  "medians": {
+    "school": {
+      "before": {
+        "wall_seconds": 7.476716540986672
+      },
+      "after": {
+        "wall_seconds": 7.4362791670137085
+      }
+    },
+    "materialization": {
+      "before": {
+        "hydration_seconds": 0.829413035,
+        "conversion_seconds": 0.034967251
+      },
+      "after": {
+        "hydration_seconds": 0.732992494,
+        "conversion_seconds": 0.032157861
+      }
+    }
+  },
+  "source_hashes": {
+    "before": {
+      "lib/RedSourcing/Storage.rakumod": "02c993a999d57b81077ec8278a943a90e9307b0f14dcbc15dfee0fd929c671b5",
+      "lib/RedSourcing/StoredEvent.rakumod": "2ea1f3dc6cd46b212b32261f96b5f3ce02d75a68b9e9571b7bac2ae32d765531"
+    },
+    "after": {
+      "lib/RedSourcing/Storage.rakumod": "da04dd696b3f7ee72d993e005ddde3b6a1d556eaeda18780db75d2bb860e58a7",
+      "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289"
+    }
+  },
+  "changes": "Ordered complete-row inflators and successful event-class/metadata-attribute caches; constructor hooks and driver inflation preserved.",
+  "interpretation": "Isolated hydration/conversion improve. Full-school median changes by only 0.54%, with visibly variable after samples; this does not establish a meaningful end-to-end speedup."
+}

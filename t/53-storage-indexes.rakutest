@@ -1,6 +1,7 @@
 use Test;
 use File::Temp;
 use RedSourcing;
+use RedSourcing::Counters;
 use Red::DB;
 use RedSourcing::Flow;
 use RedSourcing::Config;
@@ -55,26 +56,14 @@ subtest 'existing tables receive missing indexes without changing data' => {
     is StoredEvent.^all.elems, 1, 'upgrade preserves persisted events';
 };
 
-subtest 'tracing replaces only matching legacy indexes after creating declarations' => {
-    enable-flow-tracing;
-    flow-link('command', '1', 'event', '2', 'emitted');
-    for <red_sourcing_flow_link red_sourcing_flow_entity> -> $table {
-        for get-RED-DB.indexes-for-table($table).grep({ !.<unique> }) -> %index {
-            drop-index(%index<name>);
-        }
-    }
-    get-RED-DB.execute('CREATE INDEX rs_flow_source ON red_sourcing_flow_link (source_kind, source)');
-    get-RED-DB.execute('CREATE INDEX rs_flow_target ON red_sourcing_flow_link (target_kind, target)');
-    get-RED-DB.execute('CREATE INDEX rs_flow_entity_stream ON red_sourcing_flow_entity (stream)');
-    lives-ok { enable-flow-tracing; enable-flow-tracing }, 'migration and repeat initialization succeed';
-    nok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'legacy source index is retired';
-    nok 'rs_flow_target' eq any(names('red_sourcing_flow_link')), 'legacy target index is retired';
-    nok 'rs_flow_entity_stream' eq any(names('red_sourcing_flow_entity')), 'legacy stream index is retired';
-    is names('red_sourcing_flow_link').grep(*.ends-with('_idx')).elems, 2, 'two replacement indexes exist';
-    is flow-links.elems, 1, 'telemetry survives migration';
-    get-RED-DB.execute('CREATE INDEX rs_flow_source ON red_sourcing_flow_link (relation)');
-    enable-flow-tracing;
-    ok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'conflicting legacy definition is preserved';
+subtest 'tracing needs no auxiliary storage or indexes' => {
+    lives-ok { enable-flow-tracing; enable-flow-tracing }, 'read-model enablement is idempotent';
+    my $catalog = $pg.defined
+        ?? q[SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()]
+        !! q[SELECT name FROM sqlite_master WHERE type = 'table'];
+    my @tables = counter-sql(get-RED-DB, $catalog).map(*.<name>);
+    nok @tables.grep(*.starts-with('red_sourcing_flow_')).elems, 'no tracing tables are created';
+    is flow-links(:target-kind<event>).elems, 1, 'flow is projected from the existing journal';
 };
 
 subtest 'configuration bootstrap upgrades an existing SQLite store' => {
@@ -96,25 +85,4 @@ subtest 'configuration bootstrap upgrades an existing SQLite store' => {
     }
 };
 
-if $pg.defined {
-    subtest 'legacy PostgreSQL migration preserves a homonymous index in another schema' => {
-        my $shadow = $pg-schema ~ '_shadow';
-        $admin.execute("CREATE SCHEMA $shadow");
-        LEAVE $admin.execute("DROP SCHEMA $shadow CASCADE");
-        $admin.execute("CREATE TABLE $shadow.other (id integer)");
-        $admin.execute("CREATE INDEX rs_flow_source ON $shadow.other (id)");
-        $admin.execute("DROP INDEX $pg-schema.rs_flow_source");
-        $admin.execute("CREATE INDEX rs_flow_source ON $pg-schema.red_sourcing_flow_link (source_kind, source)");
-        my $*RED-DB = store-driver('Pg', $pg, :connection{
-            dbh => ::('DB::Pg').new(
-                :conninfo("dbname=$pg options='-csearch_path=$pg-schema,$shadow -cclient_min_messages=warning'"),
-                :converters(<DateTime UUID Geometric>))
-        });
-        enable-flow-tracing;
-        nok 'rs_flow_source' eq any(names('red_sourcing_flow_link')), 'matching legacy index is removed from the table schema';
-        nok $admin.query('SELECT to_regclass($1)::text', "$pg-schema.rs_flow_source").value.defined,
-            'legacy index is absent from the original schema';
-        ok 'rs_flow_source' eq any(names('other')), 'unrelated shadow index is untouched';
-    };
-}
 done-testing;

@@ -3,8 +3,7 @@
   "authors": [
     "Fernando Correa de Oliveira"
   ],
-  "build-depends": [
-  ],
+  "build-depends": [],
   "depends": [
     "Red:ver<0.2.7+>",
     "JSON::Fast",
@@ -16,6 +15,7 @@
   "name": "RedSourcing",
   "perl": "6.d",
   "provides": {
+    "RedSourcing::QueryTemplate": "lib/RedSourcing/QueryTemplate.rakumod",
     "Metamodel::RedSourcing::AggregateHOW": "lib/Metamodel/RedSourcing/AggregateHOW.rakumod",
     "Metamodel::RedSourcing::CommandContainer": "lib/Metamodel/RedSourcing/CommandContainer.rakumod",
     "Metamodel::RedSourcing::EntityHOW": "lib/Metamodel/RedSourcing/EntityHOW.rakumod",
@@ -32,11 +32,13 @@
     "RedSourcing::Command": "lib/RedSourcing/Command.rakumod",
     "RedSourcing::Config": "lib/RedSourcing/Config.rakumod",
     "RedSourcing::Context": "lib/RedSourcing/Context.rakumod",
-    "RedSourcing::Declaration": "lib/RedSourcing/Declaration.rakumod",
+    "RedSourcing::Counters": "lib/RedSourcing/Counters.rakumod",
     "RedSourcing::Decision": "lib/RedSourcing/Decision.rakumod",
+    "RedSourcing::Declaration": "lib/RedSourcing/Declaration.rakumod",
     "RedSourcing::Entity": "lib/RedSourcing/Entity.rakumod",
     "RedSourcing::Event": "lib/RedSourcing/Event.rakumod",
     "RedSourcing::Flow": "lib/RedSourcing/Flow.rakumod",
+    "RedSourcing::Flow::Projection": "lib/RedSourcing/Flow/Projection.rakumod",
     "RedSourcing::Inspector": "lib/RedSourcing/Inspector.rakumod",
     "RedSourcing::IsCommand": "lib/RedSourcing/IsCommand.rakumod",
     "RedSourcing::IsEntityId": "lib/RedSourcing/IsEntityId.rakumod",
@@ -44,12 +46,16 @@
     "RedSourcing::IsTransactional": "lib/RedSourcing/IsTransactional.rakumod",
     "RedSourcing::Journal": "lib/RedSourcing/Journal.rakumod",
     "RedSourcing::Lifecycle": "lib/RedSourcing/Lifecycle.rakumod",
+    "RedSourcing::Metrics::Projection": "lib/RedSourcing/Metrics/Projection.rakumod",
     "RedSourcing::PgJSON": "lib/RedSourcing/PgJSON.rakumod",
     "RedSourcing::Predicate": "lib/RedSourcing/Predicate.rakumod",
     "RedSourcing::Projection": "lib/RedSourcing/Projection.rakumod",
     "RedSourcing::Saga": "lib/RedSourcing/Saga.rakumod",
+    "RedSourcing::Storage": "lib/RedSourcing/Storage.rakumod",
     "RedSourcing::StoredCommand": "lib/RedSourcing/StoredCommand.rakumod",
+    "RedSourcing::StoredCounter": "lib/RedSourcing/StoredCounter.rakumod",
     "RedSourcing::StoredEvent": "lib/RedSourcing/StoredEvent.rakumod",
+    "RedSourcing::Tags": "lib/RedSourcing/Tags.rakumod",
     "RedSourcing::Traits": "lib/RedSourcing/Traits.rakumod",
     "RedSourcing::Utils": "lib/RedSourcing/Utils.rakumod",
     "RedSourcing::Web": "lib/RedSourcing/Web.rakumod",
@@ -62,7 +68,8 @@
     "RedSourcing::Web::Operations": "lib/RedSourcing/Web/Operations.rakumod",
     "RedSourcing::Web::Presentation": "lib/RedSourcing/Web/Presentation.rakumod",
     "RedSourcing::Web::Server": "lib/RedSourcing/Web/Server.rakumod",
-    "RedSourcing::X::OptimisticLockFailed": "lib/RedSourcing/X/OptimisticLockFailed.rakumod"
+    "RedSourcing::X::OptimisticLockFailed": "lib/RedSourcing/X/OptimisticLockFailed.rakumod",
+    "RedSourcing::EventType": "lib/RedSourcing/EventType.rakumod"
   },
   "resources": [
     "app.css",

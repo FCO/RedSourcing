@@ -62,8 +62,10 @@ class Shop is export {
                 }
             }
             if (%!instances{$row.stream}:exists) && $row.mro.contains('|RedSourcing::Saga::Control|') {
-                my $live = %!instances{$row.stream}<live>;
-                %!dirty{$row.stream} = True unless $live.defined && $live.^version >= $row.version;
+                # A Cached live reference may already reflect an external
+                # resolution while its scheduled wakeup is still based on old state.
+                %!dirty{$row.stream} = True
+                    unless (%!instances{$row.stream}<wake-version> // 0) >= $row.version;
             }
             for (%routes{$row.class} // []).List -> $type {
                 my %ids = $type.^entity-id-names.map({ $_ => $row.data{$_} });
@@ -79,6 +81,7 @@ class Shop is export {
             @due.push($action<status> eq 'running' ?? $now.Instant.Num + 1 !! $action<due>);
         }
         %!wakeups{$live.^stream} = @due ?? @due.min !! Inf;
+        %!instances{$live.^stream}<wake-version> = $live.^version;
     }
     method initialize {
         .^create-table(:unless-exists) for StoredEvent, StoredCommand;
@@ -136,7 +139,7 @@ class Shop is export {
                 %!dirty{$stream}:delete;
                 # Reload dirty state so an external resolution/checkpoint is observed.
                 my $live = $proxy.^load;
-                $live.^advance(:$now, :$limit) if $live.^status eq any(<running compensating>);
+                $live = $live.^advance(:$now, :$limit) if $live.^status eq any(<running compensating>);
                 %!instances{$stream}<live> = $live;
                 self!wake-after($live, $now);
             }

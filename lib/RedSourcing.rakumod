@@ -14,6 +14,7 @@ use RedSourcing::X::OptimisticLockFailed;
 
 use RedSourcing::StoredEvent;
 use RedSourcing::Decision;
+use RedSourcing::Counters;
 use RedSourcing::Saga;
 
 module RedSourcing { }
@@ -41,6 +42,7 @@ sub EXPORT {
 		'EntityLifecycle' => EntityLifecycle,
 		'OnDemand' => OnDemand,
 		'Retained' => Retained,
+		'Cached' => Cached,
 		'&config' => &config,
 		'&red-sourcing-defaults' => &red-sourcing-defaults,
 		'&enable-flow-tracing' => &enable-flow-tracing,
@@ -49,6 +51,7 @@ sub EXPORT {
 		'StoredCommand' => RedSourcing::StoredCommand,
 		'Event' => Event,
 		'&decision-model' => &decision-model,
+        '&rebuild-event-counters' => &rebuild-event-counters,
 		'Command' => Command,
 		'RedSourcing::X::OptimisticLockFailed' => RedSourcing::X::OptimisticLockFailed,
 		# Preserve the merged dispatchers for Red and the event-store candidates.
@@ -103,9 +106,9 @@ helpers. Import Red separately when declaring custom Red models or experimentals
 C<is transactional> marks projection C<APPLY> candidates that trigger an ordered
 advance and checkpoint of the whole projection in the event's transaction.
 Equalities infer target IDs without a mapping. C<EntityLifecycle> exposes
-C<OnDemand> and C<Retained> for aggregates, projections and sagas. Declare
-C<aggregate Account[:retained] { ... }>, C<projection MyView[:retained] { ... }> or
-C<saga Workflow[:retained] { ... }> to reuse loaded instances. Configuration
+C<Cached> (the default), C<OnDemand> and C<Retained> for aggregates, projections and sagas. Declare
+C<aggregate Account[:100cached] { ... }>, C<projection MyView[:50cached] { ... }> or
+C<saga Workflow[:cached] { ... }> to configure bounded instance reuse. Configuration
 C<entities> entries override declaration defaults on the selected connection/pool.
 Their state is published after outer commit. All proxies support C<.^release>;
 projections and sagas also support C<.^advance>. See C<docs/lifecycle.md> and

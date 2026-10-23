@@ -3,11 +3,11 @@
 [README](../README.md#web-monitor) · [Configuration](configuration.md) · [CLI](cli.md)
 
 The **Flows** view follows saga creation, action/command execution, emitted events
-and observed consumers using stored causal links. The form groups entities and
+using causal links projected from journal metadata. The form groups entities and
 typed **Actions**, and the diagram advances left to right through causal steps.
 Enable **Show internal links and snapshots** when inspecting bookkeeping.
 Detail pages provide **View
-flow**; see the [flow guide](flows.md) to enable recording and understand gaps in
+flow**; see the [flow guide](flows.md) for reconstruction and the limits of
 historical data.
 
 A generic, independent Cro + HTMX **4.0.0** monitor for a RedSourcing database.
@@ -218,13 +218,30 @@ command rows. Saga counters are not summed repeatedly across control events or
 snapshots. The time chart uses observed attempt transitions; a snapshot alone
 supplies a total, not the timestamps of past retries. Command failures have no
 failure timestamp in the current schema, so their graph is an all-time comparison.
+`store-metrics` delegates to the ordinary raw-record `MetricsProjection`.
+Its APPLY accumulates counts, minute buckets and deduplicated saga attempts and
+outcomes. Reports can select different windows from the same projected state
+without querying the database. No metrics table is created. The source reads
+journal metadata and saga state, excluding domain payloads and snapshot values;
+it never loads application classes or runs handlers/adapters.
+
+Command lifecycle transitions are not journal events yet. The projection takes
+a current snapshot of command ID, stream, state and tries from the operational
+command table. Updating the same command replaces its previous contribution.
+A checkpoint alone cannot refresh this mutable state; `metrics-projection()`
+rebuilds visible journal facts and refreshes command contributions together.
+Like flow reconstruction, this includes late commits with lower serial IDs.
+
 These are journal-derived metrics, not measured handler duration or CPU use.
 
 ## Live updates and performance
 
 One polling loop checks the store once a second, shared by all browser tabs.
-Reports and metrics are cached until the journal/command revision changes or a
-new minute starts. SSE only invalidates server-rendered HTMX fragments; it carries
+The metrics projection and stored-state report are cached until the
+journal/command revision changes. When a new minute starts, the monitor only
+renders a new window from the existing projection; it does not replay history.
+A data change rebuilds the projection from all visible rows, rather than relying
+on a persistent global serial-ID cursor. SSE only invalidates server-rendered HTMX fragments; it carries
 no entity state and requires no publisher in the application. Cro response
 pipelines terminate on disconnect, cancelling their subscriptions and heartbeat
 timers. Genuine route/body failures still propagate.

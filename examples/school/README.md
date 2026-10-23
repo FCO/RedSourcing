@@ -2,7 +2,7 @@
 
 Students can participate in at most **10 active classes**, and each class can
 have at most **30 active students**. Enrollment checks both limits in one
-`decision-model`, using projections inferred from their `APPLY` handlers.
+`decision-model`, using `(ProjectionType) => %ids` pairs and queries inferred from their `APPLY` handlers. Every emit maintains optimistic field/tag counters; no global journal advisory lock is acquired.
 One `StudentEnrolled` event updates both projections. Cancellation releases both
 the student's allowance and the seat. Duplicate enrollments and cancellations
 do not emit additional domain events.
@@ -110,3 +110,27 @@ The regression tests cover [API and CLI behavior](../../t/56-school-example.raku
 and [independent PostgreSQL writers](../../t/55-decision-model-pg.rakutest), including
 two students competing for seat thirty and one student competing for a tenth
 enrollment in two different classes.
+
+## Sequência e tempos do demo
+
+Veja o [diagrama medido do demo completo](demo-sequence.md), com a sequência geral,
+o detalhe de matrícula/rejeição/cancelamento e o tempo de cada chamada. As
+[medições em JSON](demo-sequence.json) e `tools/profile-school-demo.py` permitem
+reproduzir o relatório.
+
+O [diagrama de um comando e emissão de evento](command-sequence.md) abre os tempos
+de filtros, preparação da consulta Red, SQL, hidratação, APPLY, validação otimista
+e commit. A [amostra em JSON](command-measurement.json) contém as chamadas observadas.
+
+## SQLite e PostgreSQL
+
+A [comparação medida do demo](driver-comparison.md) executa o mesmo cenário em
+SQLite em memória, SQLite em arquivo e PostgreSQL local, com três rodadas
+alternadas e bancos vazios. Os [resultados em JSON](driver-comparison.json)
+incluem tempos individuais, versões e configurações de durabilidade.
+
+Para reproduzir, com PostgreSQL já iniciado:
+
+```sh
+python3 tools/compare-school-drivers.py --pg-host=127.0.0.1 --pg-port=5432 --pg-user=postgres --pg-database=postgres
+```

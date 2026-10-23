@@ -53,10 +53,14 @@ if $result.exitcode == 0 {
     like %seen<vendor/htmx-4.0.0.min.js>, /'application/javascript'/, 'installed HTMX has JavaScript MIME type';
 } else { diag $err }
 my $executable-suffix = $*DISTRO.is-win ?? '.exe' !! '';
+# Keep dependency repositories available when the test uses a custom RAKULIB.
+# The installed package still has priority through -Iinst# and this prefix.
+my %installed-env = %(|%*ENV, RAKULIB => "inst#$destination"
+    ~ (%*ENV<RAKULIB>:exists ?? ',' ~ %*ENV<RAKULIB> !! ''));
 my $command = $destination.add('bin/red-sourcing-monitor' ~ $executable-suffix);
 ok $command.f, 'distribution installs red-sourcing-monitor executable';
 my $help = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing-monitor.raku').Str, '--help', :cwd($tmp),
-    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+    :env(%installed-env), :out, :err;
 my $usage = $help.out.slurp(:close) ~ $help.err.slurp(:close);
 like $usage, /'--driver'/, 'installed CLI exposes driver';
 like $usage, /'--database'/, 'installed CLI exposes database';
@@ -64,13 +68,13 @@ nok $usage.contains('--config'), 'CLI requires no application module configurati
 my $root-command = $destination.add('bin/red-sourcing' ~ $executable-suffix);
 ok $root-command.f, 'core installation provides the unified executable';
 my $root-help = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing.raku').Str, 'web-monitor', '--help', :cwd($tmp),
-    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+    :env(%installed-env), :out, :err;
 is $root-help.exitcode, 0, 'installed root CLI exposes web-monitor help';
 like $root-help.out.slurp(:close) ~ $root-help.err.slurp(:close), /'--minutes'/,
     'unified monitor help exposes web options';
 my $missing = $tmp.add('missing-store.db');
 my $root-run = run $*EXECUTABLE.Str, "-Iinst#$destination", $destination.add('bin/red-sourcing.raku').Str, 'web-monitor', "--database=$missing", :cwd($tmp),
-    :env(%(|%*ENV, RAKULIB => "inst#$destination")), :out, :err;
+    :env(%installed-env), :out, :err;
 isnt $root-run.exitcode, 0, 'installed unified CLI runs monitor validation';
 $root-run.out.slurp(:close);
 like $root-run.err.slurp(:close), /'Database does not exist'/,

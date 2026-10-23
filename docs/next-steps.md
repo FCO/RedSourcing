@@ -97,7 +97,7 @@ cursor order; a more concurrent per-projection ownership protocol remains future
 work. Retained caches still need optional cross-process invalidation and a defined
 API for synchronized access from multiple threads.
 
-All three entity kinds now support `OnDemand`/`Retained` declaration lifecycles
+All three entity kinds now support `Cached`/`OnDemand`/`Retained` declaration lifecycles
 and connection/pool-scoped overrides through configuration `entities` entries.
 See [entity lifecycle](lifecycle.md). Remaining cache work includes automatic
 eviction and synchronized reads. Automatic snapshots now support count/time policies on declarations and in

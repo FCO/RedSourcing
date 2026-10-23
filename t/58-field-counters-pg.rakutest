@@ -1,0 +1,150 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Config;
+use lib $?FILE.IO.parent.add('lib').Str;
+use CounterDomain;
+
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+unless $database.defined {
+    skip 'Set RED_SOURCING_TEST_PG_DATABASE for independent field-counter writers';
+    done-testing; exit;
+}
+die 'Use a simple PostgreSQL database name' unless $database ~~ /^ <[\w\-]>+ $/;
+require ::('DB::Pg');
+my $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+my $schema = 'rs_counter_' ~ $*PID;
+$admin.execute("CREATE SCHEMA $schema");
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE");
+my $pool = ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+    :converters(<DateTime UUID Geometric>));
+red-sourcing-defaults(:driver<Pg>, :$database, :connection{ dbh => $pool });
+my $directory = tempdir.IO;
+my $worker = $directory.add('worker.raku');
+$worker.spurt(q:to/WORKER/);
+use RedSourcing;
+use RedSourcing::Config;
+use CounterDomain;
+use DB::Pg;
+my ($database, $schema, $mode, $read, $write, $barrier) = @*ARGS;
+my $*RED-DB = store-driver('Pg', $database, :connection{
+    dbh => DB::Pg.new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>))
+});
+sub pause {
+    ($barrier ~ '.ready').IO.spurt('ready');
+    my $deadline = now + 30;
+    until ($barrier ~ '.resume').IO.e {
+        die 'Counter barrier timed out' if now > $deadline;
+        await Promise.in(0.01);
+    }
+}
+try {
+    if $mode eq 'deadlock' {
+        red-do :transaction, {
+            CounterFact.emit(:key($read), :stream($barrier), :version(1));
+            pause;
+            CounterFact.emit(:key($write), :stream($barrier), :version(2));
+        }
+    } elsif $mode eq 'range' {
+        decision-model((CounterRange) => %(:minimum(10)), -> $view {
+            pause;
+            CounterFact.emit(:key($write), :stream($barrier), :version(1));
+        });
+    } else {
+        decision-model((CounterView) => %(:key($read)), -> $view {
+            pause;
+            CounterFact.emit(:key($write), :stream($barrier), :version(1));
+        });
+    }
+    say 'OK';
+    CATCH {
+        when RedSourcing::X::OptimisticLockFailed { say 'CONFLICT' }
+        default { .rethrow }
+    }
+}
+WORKER
+
+sub spawn(Str $mode, Str $read, Str $write, Str $name --> Hash) {
+    my $barrier = $directory.add($name).Str;
+    my $process = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-It/lib', $worker.Str,
+        $database, $schema, $mode, $read, $write, $barrier);
+    my ($out, $err) = '', '';
+    $process.stdout.tap(-> $s { $out ~= $s });
+    $process.stderr.tap(-> $s { $err ~= $s });
+    my $finished = $process.start;
+    %( :$process, :$finished, :$barrier, output => -> { $out }, errors => -> { $err } )
+}
+sub ready(%worker) {
+    my $deadline = now + 30;
+    until (%worker<barrier> ~ '.ready').IO.e {
+        die "Counter worker exited: {%worker<errors>()}" if %worker<finished>.status !~~ Planned;
+        die 'Counter worker never reached barrier' if now > $deadline;
+        await Promise.in(0.01);
+    }
+}
+sub release(%worker) { (%worker<barrier> ~ '.resume').IO.spurt('resume') }
+sub finish(%worker --> Str) {
+    await Promise.anyof(%worker<finished>, Promise.in(30));
+    die 'Counter worker did not finish' if %worker<finished>.status ~~ Planned;
+    is (await %worker<finished>).exitcode, 0, 'worker exits normally';
+    is %worker<errors>(), '', 'no unexpected diagnostics';
+    %worker<output>().trim
+}
+
+subtest 'simultaneous first writes arbitrate through a missing counter' => {
+    my %a = spawn('decision', 'first', 'first', 'first-a');
+    my %b = spawn('decision', 'first', 'first', 'first-b');
+    LEAVE { for %a, %b -> %worker { %worker<process>.kill if %worker<finished>.status ~~ Planned } }
+    ready(%a); ready(%b); release(%a); release(%b);
+    my @results = finish(%a), finish(%b);
+    is-deeply @results.sort.Array, ['CONFLICT', 'OK'], 'only one stale decision may append';
+    is CounterView.^with-ids(:key<first>).^load.count, 1, 'one event commits across different streams';
+};
+
+subtest 'read dependencies are guarded even when the emitted event uses another key' => {
+    my %a = spawn('decision', 'cross-a', 'cross-b', 'cross-a');
+    my %b = spawn('decision', 'cross-b', 'cross-a', 'cross-b');
+    LEAVE { for %a, %b -> %worker { %worker<process>.kill if %worker<finished>.status ~~ Planned } }
+    ready(%a); ready(%b); release(%a); release(%b);
+    my @results = finish(%a), finish(%b);
+    is-deeply @results.sort.Array, ['CONFLICT', 'OK'], 'crossed read/write dependencies cannot both pass';
+};
+
+subtest 'ordinary emits invalidate a decision and a new range value' => {
+    my %a = spawn('decision', 'ordinary', 'ordinary-result', 'ordinary');
+    LEAVE %a<process>.kill if %a<finished>.status ~~ Planned;
+    ready(%a);
+    CounterFact.emit(:key<ordinary>, :stream<outside>, :version(1));
+    release(%a);
+    is finish(%a), 'CONFLICT', 'emit outside decision updates the protected counter';
+    my %b = spawn('range', '', 'range-result', 'range');
+    LEAVE %b<process>.kill if %b<finished>.status ~~ Planned;
+    ready(%b);
+    CounterAmount.emit(:amount(30), :stream<new-range-value>, :version(1));
+    release(%b);
+    is finish(%b), 'CONFLICT', 'previously unseen value invalidates a field-wide dependency';
+};
+
+subtest 'a real deadlock rolls back the losing transaction as an optimistic conflict' => {
+    my %a = spawn('deadlock', 'dead-a', 'dead-b', 'dead-a');
+    my %b = spawn('deadlock', 'dead-b', 'dead-a', 'dead-b');
+    LEAVE { for %a, %b -> %worker { %worker<process>.kill if %worker<finished>.status ~~ Planned } }
+    ready(%a); ready(%b); release(%a); release(%b);
+    my @results = finish(%a), finish(%b);
+    is-deeply @results.sort.Array, ['CONFLICT', 'OK'], 'native deadlock is mapped to an optimistic conflict';
+    my @dead = StoredEvent.list-events(:row, :types[CounterFact]).grep({ so (.data<key> eq any(<dead-a dead-b>)) });
+    is @dead.elems, 2, 'loser leaves no partial first append';
+};
+subtest 'a retryable SQL error outside emit retries the complete stored command' => {
+    my $proxy = CounterCommandSource.^with-ids(:key<command-retry>);
+    $proxy.^create;
+    my $command = $proxy.record(:!sync);
+    $fail-next-command = True;
+    ok $command.run, 'command succeeds after the injected SQL failure';
+    is $command.tries, 2, 'whole command ran twice';
+    is $command.state.Str, 'Done', 'retryable SQL failure is not terminal';
+    is StoredEvent.list-events(:row, :stream($proxy.^stream-name), :types[CounterFact]).elems,
+        1, 'only the successful attempt emits a fact';
+};
+done-testing;

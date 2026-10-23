@@ -1,0 +1,188 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Lifecycle;
+use RedSourcing::Journal;
+use RedSourcing::Config;
+
+use lib 't/lib';
+use CachedEntityDomain;
+
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $admin;
+my @schemas;
+LEAVE { if $admin.defined { $admin.execute("DROP SCHEMA $_ CASCADE") for @schemas } }
+my $*RED-DB;
+my %created;
+sub fresh(Int $size = 100, %entities = {}) {
+    %created = ();
+    if $database {
+        require ::('DB::Pg');
+        $admin //= ::('DB::Pg').new(:conninfo("dbname=$database"));
+        my $schema = 'rs_entity_cache_' ~ $*PID ~ '_' ~ @schemas.elems;
+        $admin.execute("CREATE SCHEMA $schema"); @schemas.push($schema);
+        $*RED-DB = store-driver('Pg', $database, :connection{
+            dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+                :converters(<DateTime UUID Geometric>)) });
+    } else { $*RED-DB = store-driver('SQLite', ':memory:') }
+    schema(StoredEvent, StoredCommand).create;
+    configure-lifecycles(%entities, :entity-cache-size($size));
+}
+sub proxy($type, $id) { $type.^with-ids(:$id) }
+sub load($type, $id) {
+    my $p = proxy($type, $id);
+    if $type.HOW.^name.contains('AggregateHOW') && !(%created{$p.^stream-name}:exists) {
+        $p.^create;
+        %created{$p.^stream-name} = True;
+    }
+    $p.^load
+}
+
+my $reconstructions = 0;
+my $restore-hook = CacheDefault.HOW.^find_method('restore-state').wrap(-> |c {
+    $reconstructions++ if c.list[1].^name eq CacheDefault.^name;
+    callsame
+});
+LEAVE $restore-hook.restore;
+
+fresh;
+is CacheDefault.^lifecycle, Cached, 'entities default to Cached';
+is CacheDefault.^cache-size, 100, 'default type capacity';
+is CacheAccount.^cache-size, 2, 'numeric declaration configures type capacity';
+is CacheOff.^lifecycle, OnDemand, 'negated cached opts out';
+is CacheZero.^lifecycle, Cached, 'zero capacity keeps lifecycle';
+ok !(load(CacheOff, 1) === load(CacheOff, 1)), 'OnDemand does not retain instances';
+ok !(load(CacheZero, 1) === load(CacheZero, 1)), 'zero type capacity does not retain instances';
+my $default = load(CacheDefault, 1);
+ok $default === load(CacheDefault, 1), 'default loads reuse instances';
+is $reconstructions, 1, 'warm load avoids full state reconstruction';
+for -1, 1.5, '100', Any -> $bad {
+    dies-ok { lifecycle-options({cached => $bad}) }, 'invalid type capacity is rejected';
+}
+dies-ok { lifecycle-options({cached => True, retained => True}) }, 'conflicting lifecycle options are rejected';
+dies-ok { configure-lifecycles({}, :entity-cache-size(5)) }, 'total capacity freezes after first use';
+
+fresh(3);
+my $a1 = load(CacheAccount, 1); my $a2 = load(CacheAccount, 2); my $b1 = load(CacheOther, 1);
+ok $a1 === load(CacheAccount, 1), 'hit renews global LRU';
+my $b2 = load(CacheOther, 2);
+ok $b1 === load(CacheOther, 1), 'unexpired entry survives';
+ok !($a2 === load(CacheAccount, 2)), 'total limit evicts another type below its individual limit';
+
+fresh(10);
+$a1 = load(CacheAccount, 1); $a2 = load(CacheAccount, 2);
+load(CacheAccount, 1); load(CacheAccount, 3);
+ok $a1 === load(CacheAccount, 1), 'recent entry survives type eviction';
+ok !($a2 === load(CacheAccount, 2)), 'type limit applies below total capacity';
+proxy(CacheAccount, 1).^release;
+ok !($a1 === load(CacheAccount, 1)), 'release discards the cached owner';
+
+fresh(0);
+ok !(load(CacheDefault, 1) === load(CacheDefault, 1)), 'zero total capacity disables caching';
+my $disabled = proxy(CacheAccount, 9); $disabled.^create;
+is $disabled.add(:amount(2)), 2, 'disabled cache preserves command receiver updates';
+is $disabled.^load.amount, 2, 'disabled cache reconstructs committed commands';
+fresh(10, { CacheAccount.^name => {cached => 4} });
+is CacheAccount.^cache-size, 4, 'external configuration overrides declaration';
+is CacheAccount.^cache-size(:declared), 2, 'declared capacity remains queryable';
+
+fresh(10);
+my $p = proxy(CacheAccount, 1); $p.^create;
+my $owner = $p.^load;
+is $p.add(:amount(2)), 2, 'command applies to cached state';
+is $owner.amount, 2, 'committed command updates the owner';
+red-do :transaction, {
+    $p.add(:amount(3));
+    is $owner.amount, 2, 'uncommitted changes stay private';
+    is $p.^load.amount, 5, 'transaction sees its working entity';
+    True
+};
+is $owner.amount, 5, 'outer commit publishes working state';
+dies-ok { red-do :transaction, { $p.add(:amount(7)); die 'abort' } }, 'outer rollback propagates';
+is $owner.amount, 5, 'rollback leaves owner unchanged';
+is-deeply $owner.seen.Array, [2, 3], 'rollback isolates array state';
+dies-ok { $p.add(:amount(11), :fail) }, 'failed command propagates';
+is $p.^load.amount, 5, 'failed command does not poison later loads';
+CacheAdded.emit(:id(1), :amount(4), :stream($p.^stream-name), :version($owner.^version + 1));
+is $p.^load.amount, 9, 'cache hit folds an external append';
+my $other = CacheAccount.bless(:id(1), :amount(42), :stream($p.^stream-name));
+# A newer durable checkpoint may include state changes without domain events.
+$other.^version = $owner.^version;
+$other.^current-id = $owner.^current-id;
+journal-do { $other.^write-snapshot(:version($owner.^version + 1)) };
+is $p.^load.amount, 42, 'newer checkpoint supersedes cached state';
+red-do :transaction, {
+    $p.add(:amount(2));
+    dies-ok { red-do :transaction, { $p.add(:amount(100)); die 'inner' } }, 'savepoint rollback propagates';
+    is $p.^load.amount, 44, 'savepoint restores the transaction working state';
+    is $owner.amount, 42, 'savepoint keeps shared state private';
+    True
+};
+is $owner.amount, 44, 'outer commit publishes restored savepoint state';
+my $s = load(CacheSaga, 1);
+ok $s === load(CacheSaga, 1), 'saga loads reuse state without REACT';
+my $total = load(CacheTotal, 1);
+is $total.amount, 11, 'transactional projection includes committed events only';
+proxy(CacheTotal, 1).^release;
+$p.add(:amount(1));
+is load(CacheTotal, 1).amount, 12, 'transactional projection advances after eviction';
+
+my @late;
+red-do :transaction, {
+    $p.^load;
+    @late = journal-connection().journal-state<publish>.values.Array;
+    True
+};
+$p.add(:amount(3));
+my $latest = $owner.amount;
+.() for @late;
+is $owner.amount, $latest, 'late publications cannot replace newer state';
+
+fresh(10);
+$owner = load(CacheDefault, 1);
+red-do :transaction, {
+    load(CacheDefault, 1);
+    proxy(CacheDefault, 1).^release;
+    True
+};
+ok !($owner === load(CacheDefault, 1)), 'pending publication does not resurrect released entry';
+fresh(1);
+my $evicted = load(CacheDefault, 1);
+my @pending;
+red-do :transaction, { load(CacheDefault, 1); @pending = journal-connection().journal-state<publish>.values.Array; True };
+my $survivor = load(CacheDefault, 2);
+.() for @pending;
+ok $survivor === load(CacheDefault, 2), 'late publication does not evict the survivor';
+ok !($evicted === load(CacheDefault, 1)), 'late publication does not resurrect an evicted owner';
+my $first-store = $*RED-DB;
+$owner = load(CacheDefault, 1);
+fresh(10);
+ok !($owner === load(CacheDefault, 1)), 'independent stores isolate cached entities';
+fresh(1);
+my $detached-proxy = proxy(CacheAccount, 9); $detached-proxy.^create;
+my $detached = $detached-proxy.^load;
+$detached-proxy.^release;
+my $replacement = CacheAccount.bless(:id(9), :amount(80), :stream($detached.^stream));
+journal-do { $replacement.^write-snapshot(:version($detached.^version + 1)) };
+$detached.^emit-snapshot;
+is $detached.amount, 80, 'evicted reference observes checkpoint-only state before writing';
+is $detached-proxy.^load.amount, 80, 'evicted reference cannot overwrite newer checkpoint state';
+
+fresh(10);
+my @bounded = (1..3).map({ CacheAdded.emit(:id(99), :amount($_), :stream<bounded>, :version($_)) });
+my $bounded = CacheBounded.^restore-state(Nil, :id(99), :stream(proxy(CacheBounded, 99).^stream-name));
+my $advanced = $bounded.^advance(:through-id(@bounded[0].id));
+is $advanced.amount, 1, 'bounded advancement does not replay later facts while obtaining a working copy';
+is $advanced.^current-id, @bounded[0].id, 'bounded advancement preserves its cursor boundary';
+is load(CacheBounded, 99).amount, 6, 'ordinary cached load subsequently catches up';
+
+if $database {
+    fresh(3);
+    my @proxies = (^8).map({ proxy(CacheDefault, $_) });
+    .^create for @proxies;
+    my $shared = $*RED-DB;
+    my @jobs = @proxies.map(-> $p { start { my $*RED-DB = $shared; $p.^load } });
+    my @loaded = await @jobs;
+    my $hits = [+] @proxies.keys.map({ @loaded[$_] === @proxies[$_].^load ?? 1 !! 0 });
+    ok $hits <= 3, 'concurrent admissions obey total capacity';
+} else { skip 'PostgreSQL pool required for independent concurrent transactions', 1 }
+done-testing;

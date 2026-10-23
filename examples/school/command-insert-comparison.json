@@ -1,0 +1,526 @@
+{
+  "measured_at": "2026-10-21",
+  "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+  "methodology": "Five alternating samples after one warmup per version; Red 0.2.7, SQLite in memory, no concurrent tests. School includes startup, schema and tracing. Insert workload times 500 command submissions with fresh payloads and generated-ID hydration, excluding schema setup and without command execution. Equivalent isolated source snapshots and warmed precompilation caches are used for both versions.",
+  "runs": [
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 2.0473414169973694,
+      "sum": 125250,
+      "seconds": 1.435446953,
+      "iterations": 500
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 23.857107374991756,
+      "seconds": 1.484369184,
+      "iterations": 500,
+      "sum": 125250
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.0476023750088643,
+      "sum": 125250,
+      "iterations": 500,
+      "seconds": 1.450781798
+    },
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.0822439170151483,
+      "sum": 125250,
+      "iterations": 500,
+      "seconds": 1.460658002
+    },
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.0519254580140114,
+      "seconds": 1.451243421,
+      "iterations": 500,
+      "sum": 125250
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.026201125001535,
+      "iterations": 500,
+      "seconds": 1.434268958,
+      "sum": 125250
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.0447077919961885,
+      "seconds": 1.45115238,
+      "sum": 125250,
+      "iterations": 500
+    },
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.0351115409866907,
+      "seconds": 1.447242107,
+      "sum": 125250,
+      "iterations": 500
+    },
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.0379496660025325,
+      "sum": 125250,
+      "seconds": 1.451101213,
+      "iterations": 500
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.0408477079763543,
+      "sum": 125250,
+      "seconds": 1.446082737,
+      "iterations": 500
+    },
+    {
+      "workload": "inserts",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 2.036231125006452,
+      "iterations": 500,
+      "seconds": 1.443925996,
+      "sum": 125250
+    },
+    {
+      "workload": "inserts",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 2.0329452920123003,
+      "iterations": 500,
+      "sum": 125250,
+      "seconds": 1.447594855
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 5.899304457998369,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 7.184031208977103,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 5.85357091599144,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 5.778049583022948,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 5.7792391249968205,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 5.87522345900652,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 5.889892250008415,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 5.86546366699622,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 5.910102916997857,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 5.884774792008102,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 5.896801833005156,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 5.8804426660062745,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "equal_results": true,
+  "medians": {
+    "inserts": {
+      "before": 1.451101213,
+      "after": 1.446082737
+    },
+    "school": {
+      "before": 5.86546366699622,
+      "after": 5.884774792008102
+    }
+  },
+  "source_hashes": {
+    "before": {
+      "lib/RedSourcing/Storage.rakumod": "9358072dfc1b070420b71e9ae5a9e75579a8e946aa650a54eccd4dd1538f5a2f",
+      "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e"
+    },
+    "after": {
+      "lib/RedSourcing/Storage.rakumod": "462709384c064f054984c5872df865889950cc17572d181c23a4a5121c2fb8be",
+      "lib/RedSourcing/PgJSON.rakumod": "b3cba53e6ef227f2075419d3fde3eabd2dfae78f3c9389d716413b365bc84267"
+    }
+  },
+  "retained": false,
+  "conclusion": "Rejected: no material improvement in command submission; school median slightly regressed. Production Storage and PgJSON sources were restored byte-for-byte to the before snapshot.",
+  "elapsed_change_percent": {
+    "inserts": -0.345839143061899,
+    "school": 0.32923441535477327
+  },
+  "first_attempt": {
+    "measured_at": "2026-10-21",
+    "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+    "methodology": "Five alternating samples after one warmup per version; Red 0.2.7, SQLite in memory, no concurrent tests. School includes startup, schema and tracing. Insert workload times 500 command submissions with fresh payloads and generated-ID hydration, excluding schema setup and without command execution. Equivalent isolated source snapshots and warmed precompilation caches are used for both versions.",
+    "runs": [
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": -1,
+        "warmup": true,
+        "wall_seconds": 23.04296570798033,
+        "iterations": 500,
+        "sum": 125250,
+        "seconds": 1.457648002
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": -1,
+        "warmup": true,
+        "wall_seconds": 22.87717037499533,
+        "seconds": 1.467804765,
+        "sum": 125250,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": 0,
+        "warmup": false,
+        "wall_seconds": 2.0618851670005824,
+        "sum": 125250,
+        "seconds": 1.459022374,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": 0,
+        "warmup": false,
+        "wall_seconds": 2.0466302080021705,
+        "seconds": 1.446804765,
+        "sum": 125250,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": 1,
+        "warmup": false,
+        "wall_seconds": 2.0459677089820616,
+        "seconds": 1.451167563,
+        "iterations": 500,
+        "sum": 125250
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": 1,
+        "warmup": false,
+        "wall_seconds": 2.029866167024011,
+        "sum": 125250,
+        "iterations": 500,
+        "seconds": 1.439507816
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": 2,
+        "warmup": false,
+        "wall_seconds": 2.0464665000035893,
+        "iterations": 500,
+        "seconds": 1.447233954,
+        "sum": 125250
+      },
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": 2,
+        "warmup": false,
+        "wall_seconds": 2.015416375012137,
+        "seconds": 1.429422546,
+        "sum": 125250,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": 3,
+        "warmup": false,
+        "wall_seconds": 2.0277574170031585,
+        "sum": 125250,
+        "seconds": 1.442424973,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": 3,
+        "warmup": false,
+        "wall_seconds": 2.0317698330036364,
+        "seconds": 1.444521619,
+        "sum": 125250,
+        "iterations": 500
+      },
+      {
+        "workload": "inserts",
+        "version": "after",
+        "sample": 4,
+        "warmup": false,
+        "wall_seconds": 2.0575066250166856,
+        "seconds": 1.464538819,
+        "iterations": 500,
+        "sum": 125250
+      },
+      {
+        "workload": "inserts",
+        "version": "before",
+        "sample": 4,
+        "warmup": false,
+        "wall_seconds": 2.028541416017106,
+        "sum": 125250,
+        "seconds": 1.444577241,
+        "iterations": 500
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": -1,
+        "warmup": true,
+        "wall_seconds": 7.068117249989882,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": -1,
+        "warmup": true,
+        "wall_seconds": 7.088531500019599,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": 0,
+        "warmup": false,
+        "wall_seconds": 5.9451976249984,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": 0,
+        "warmup": false,
+        "wall_seconds": 5.859443791006925,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": 1,
+        "warmup": false,
+        "wall_seconds": 5.83503966598073,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": 1,
+        "warmup": false,
+        "wall_seconds": 5.8793552499846555,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": 2,
+        "warmup": false,
+        "wall_seconds": 5.887643458991079,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": 2,
+        "warmup": false,
+        "wall_seconds": 5.8611541249847505,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": 3,
+        "warmup": false,
+        "wall_seconds": 5.9181984159804415,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": 3,
+        "warmup": false,
+        "wall_seconds": 5.925894249987323,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "after",
+        "sample": 4,
+        "warmup": false,
+        "wall_seconds": 5.8760422080231365,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      },
+      {
+        "workload": "school",
+        "version": "before",
+        "sample": 4,
+        "warmup": false,
+        "wall_seconds": 5.805617791018449,
+        "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+      }
+    ],
+    "equal_results": true,
+    "medians": {
+      "inserts": {
+        "before": 1.444577241,
+        "after": 1.447233954
+      },
+      "school": {
+        "before": 5.859443791006925,
+        "after": 5.887643458991079
+      }
+    },
+    "source_hashes": {
+      "before": {
+        "lib/RedSourcing/Storage.rakumod": "9358072dfc1b070420b71e9ae5a9e75579a8e946aa650a54eccd4dd1538f5a2f",
+        "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e"
+      },
+      "after": {
+        "lib/RedSourcing/Storage.rakumod": "a9c2451af11563d04f20dba3852ed898245d46ba471ee9833cbae4c2cb0d5ca4",
+        "lib/RedSourcing/PgJSON.rakumod": "b3cba53e6ef227f2075419d3fde3eabd2dfae78f3c9389d716413b365bc84267"
+      }
+    }
+  },
+  "prototype_patch": "--- a/lib/RedSourcing/Storage.rakumod\n+++ b/lib/RedSourcing/Storage.rakumod\n@@ -138,12 +138,88 @@\n     @rows\n }\n \n+# Only unbound metadata and SQL layouts enter this cache. Red still creates\n+# the AST/object and runs all of its create hooks and persistence bookkeeping.\n+class CommandInsertCache {\n+    has Lock $!lock .= new;\n+    has %!descriptors;\n+    has %!layouts;\n+    has @!order;\n+\n+    method descriptor($model) {\n+        $!lock.protect: {\n+            %!descriptors{$model.WHICH.Str} //= $model.^columns.sort(*.column.name).map({\n+                [ .column.name, so(.column.attr.type ~~ Json), .column ]\n+            }).eager.List\n+        }\n+    }\n+\n+    method build-layout($driver, $model, @columns) {\n+        my $table = $driver.table-name-wrapper($model.^table);\n+        return \"INSERT INTO $table DEFAULT VALUES RETURNING *\" unless @columns;\n+        my $pg = pg-driver($driver);\n+        my @names = @columns.map({ $driver.table-name-wrapper($_[0]) });\n+        my @placeholders = @columns.kv.map(-> $i, $column {\n+            my $p = $pg ?? '$' ~ ($i + 1) !! '?';\n+            $pg && $column[1] ?? \"$p\\::text::jsonb\" !! $p\n+        });\n+        \"INSERT INTO $table (\" ~ @names.join(',') ~ ') VALUES ('\n+            ~ @placeholders.join(',') ~ ') RETURNING *'\n+    }\n+\n+    method layout($driver, $model, Str $key, Int $mask, $descriptor) {\n+        $!lock.protect: {\n+            if %!layouts{$key}:exists {\n+                @!order = @!order.grep(* ne $key);\n+                @!order.push($key);\n+                return %!layouts{$key};\n+            }\n+            my @columns = $descriptor.kv.map(-> $i, $column { $column if $mask +& (1 +< $i) });\n+            my $sql = self.build-layout($driver, $model, @columns);\n+            @!order.push($key);\n+            %!layouts{@!order.shift}:delete while @!order > 128;\n+            %!layouts{$key} = $sql;\n+        }\n+    }\n+}\n+\n+role CommandInsertPlans {\n+    has CommandInsertCache $!command-insert-cache .= new;\n+    method command-insert-plan(Red::AST::Insert $insert) {\n+        my $model = $insert.into;\n+        return Nil unless $model.^name eq 'RedSourcing::StoredCommand' && $model.^orig === $model;\n+        my $descriptor = $!command-insert-cache.descriptor($model);\n+        return Nil unless $insert.values.elems == $descriptor.elems;\n+        my @arguments;\n+        my Int $mask = 0;\n+        for $descriptor.kv -> $i, $column {\n+            my $value = $insert.values{$column[0]};\n+            return Nil unless $value ~~ Red::AST::Value:D && $value.column === $column[2];\n+            return Nil if $value.value ~~ Red::AST:D;\n+            if $value.value.defined || ($column[1] && !($value.value === Json)) {\n+                $mask +|= 1 +< $i;\n+                @arguments.push($value);\n+            }\n+        }\n+        my $key = $model.WHICH.Str ~ ':' ~ $mask;\n+        my $sql = $!command-insert-cache.layout(self, $model, $key, $mask, $descriptor);\n+        $sql => @arguments.map({ self.wildcard-value($_) }).Array\n+    }\n+}\n+\n+sub cached-command-insert($driver, Red::AST::Insert $insert, $context) is export {\n+    return Nil if $context.defined || $driver !~~ CommandInsertPlans;\n+    $driver.command-insert-plan($insert)\n+}\n+\n # SQLite supports the same INSERT ... RETURNING contract used by Red's Pg\n # driver. Restrict it to our storage tables and preserve Red's create hooks,\n # model construction and dirty tracking. Stable column order also keeps the\n # prepared SQL shape independent of Hash iteration order.\n role SQLiteStorageReturning is export {\n     multi method translate(Red::AST::Insert $insert, $context?) {\n+        my $cached = cached-command-insert(self, $insert, $context);\n+        return $cached if $cached.defined;\n         return callsame unless $insert.into.^name eq any(\n             <RedSourcing::StoredEvent RedSourcing::StoredCommand RedSourcing::StoredCounter>);\n         my @values = $insert.values.pairs.grep({\n@@ -158,17 +234,21 @@\n     }\n }\n \n+my Lock $read-install-lock .= new;\n+\n sub optimize-storage-driver($driver) is export {\n     if $driver.^mro.map(*.^name).first(* eq 'Red::Driver::SQLite').defined {\n         $driver does SQLiteStorageReturning unless $driver ~~ SQLiteStorageReturning;\n     }\n+    unless $driver ~~ CommandInsertPlans {\n+        $read-install-lock.protect: { $driver does CommandInsertPlans unless $driver ~~ CommandInsertPlans };\n+    }\n     install-read-cache($driver);\n     $driver\n }\n \n # SQL and bind layouts belong to the driver context. Values and execution\n # wrappers do not. Cloned transaction drivers may share immutable SQL entries.\n-my Lock $read-install-lock .= new;\n \n class ReadArgument {\n     has Int $.index;\n--- a/lib/RedSourcing/PgJSON.rakumod\n+++ b/lib/RedSourcing/PgJSON.rakumod\n@@ -1,6 +1,7 @@\n use Red::AST::JsonItem;\n use Red::AST::Value;\n use Red::AST::Insert;\n+use RedSourcing::Storage;\n use Red::Type::Json;\n use Red::AST::Infixes;\n use Red::AST::Unary;\n@@ -66,6 +67,8 @@\n # Keep storage INSERT plans stable across Hash iteration order, retaining Pg's\n # JSON parameter casts and RETURNING contract.\n multi method translate(Red::AST::Insert $insert, $context?) {\n+    my $cached = cached-command-insert(self, $insert, $context);\n+    return $cached if $cached.defined;\n     return callsame unless $insert.into.^name eq any(\n         <RedSourcing::StoredEvent RedSourcing::StoredCommand RedSourcing::StoredCounter>);\n     my Int $*bind-counter;\n--- /dev/null\n+++ b/t/66-command-insert-plans.rakutest\n@@ -0,0 +1,153 @@\n+use Test;\n+use Red;\n+use RedSourcing;\n+use RedSourcing::Config;\n+use RedSourcing::Storage;\n+use Red::AST::Insert;\n+use Red::AST::Value;\n+use JSON::Fast;\n+\n+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;\n+my $schema = 'rs_insert_plans_' ~ $*PID;\n+my $admin;\n+my &new-driver;\n+if $database {\n+    require ::('DB::Pg');\n+    $admin = ::('DB::Pg').new(:conninfo(\"dbname=$database\"));\n+    $admin.execute(\"CREATE SCHEMA $schema\");\n+    &new-driver = -> { store-driver('Pg', $database, :connection{\n+        dbh => ::('DB::Pg').new(:conninfo(\"dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'\"),\n+            :converters(<DateTime UUID Geometric>))\n+    }) };\n+} else { &new-driver = -> { store-driver('SQLite', ':memory:') } }\n+LEAVE $admin.execute(\"DROP SCHEMA $schema CASCADE\") if $admin.defined;\n+my $*RED-DB = new-driver();\n+schema(StoredEvent, StoredCommand).create;\n+my $layouts = 0;\n+my $compiled = ::('RedSourcing::Storage::CommandInsertCache').^find_method('build-layout').wrap(-> |c {\n+    $layouts++; callsame\n+});\n+LEAVE $compiled.restore;\n+my %phases;\n+my @notified;\n+my $phasers = StoredCommand.HOW.^find_method('apply-row-phasers').wrap(-> |c {\n+    my @args = c.list;\n+    if @args[1].^name eq 'RedSourcing::StoredCommand' && @args[1].entity eq 'InsertTarget' {\n+        %phases{@args[2].^name}++;\n+    }\n+    callsame\n+});\n+LEAVE $phasers.restore;\n+my $notifications = StoredCommand.HOW.^find_method('emit').wrap(-> |c {\n+    my @args = c.list;\n+    @notified.push(@args[2]) if @args.elems >= 3 && @args[1].^name eq 'RedSourcing::StoredCommand' && @args[2] ~~ Red::AST::Insert;\n+    callsame\n+});\n+LEAVE $notifications.restore;\n+\n+# Keep the reference row on a different layout so the measured layout starts cold.\n+my $reference = StoredCommand.^create(:entity<InsertTarget>, :entity-ids{key => 0},\n+    :method<perform>, :error<reference>, :stream<reference>, :next-run(DateTime.new('2026-01-01T00:00:00Z')),\n+    :data{key => 0, values => [1, '1', True, Any]}, :parent-command-id(100), :action-id<cause-0>);\n+$reference.entity-ids; $reference.data;\n+my $reference-dirty = $reference.^is-dirty;\n+\n+$layouts = 0; %phases = (); @notified = ();\n+\n+my @rows;\n+for ^3 -> $i {\n+    my $time = DateTime.new('2026-01-01T00:00:00Z').later(:seconds($i));\n+    my $row = StoredCommand.^create(:entity<InsertTarget>, :entity-ids{ key => $i },\n+        :method<perform>, :stream(\"insert-$i\"), :next-run($time),\n+        :data{ key => $i, values => [1, '1', True, Any] },\n+        :parent-command-id($i + 100), :action-id(\"cause-$i\"));\n+    @rows.push($row);\n+    is $layouts, 1, 'same field set compiles SQL once';\n+    ok $row.id.defined, 'database-generated ID is hydrated';\n+    is $row.state, StoredCommand::Pending, 'default enum is preserved';\n+    is $row.tries, 0, 'default attempt count is preserved';\n+    is $row.next-run.Instant, $time.Instant, 'current timestamp is bound';\n+    is-deeply $row.entity-ids, %(key => $i), 'identity payload is execution-local';\n+    is-deeply $row.data, %(key => $i, values => [1, '1', True, Any]), 'JSON types survive insertion';\n+    is $row.parent-command-id, $i + 100, 'parent metadata is execution-local';\n+    is $row.action-id, \"cause-$i\", 'action metadata is execution-local';\n+    ok $row.^is-on-db, 'created row is marked persisted';\n+    is $row.^is-dirty, $reference-dirty, 'post-create dirty tracking remains consistent';\n+}\n+is @rows.map(*.id).unique.elems, 3, 'generated IDs are not cached';\n+is @notified.elems, 3, 'Red emits one INSERT notification per create';\n+is ([+] %phases.values), 6, 'BeforeCreate and AfterCreate remain active';\n+is %phases.keys.grep(*.ends-with('BeforeCreate')).map({ %phases{$_} }).sum, 3, 'BeforeCreate runs each time';\n+is %phases.keys.grep(*.ends-with('AfterCreate')).map({ %phases{$_} }).sum, 3, 'AfterCreate runs each time';\n+is @notified[0].values{'stream'}.value, 'insert-0', 'first notification retains its AST values';\n+is @notified[2].values{'stream'}.value, 'insert-2', 'later notification has current AST values';\n+\n+my $explicit = StoredCommand.^create(:id(50000), :entity<InsertTarget>, :entity-ids{},\n+    :method<perform>, :stream<explicit>, :result{answer => [False, Any]}, :error<old>, :state(StoredCommand::Failed));\n+is $explicit.id, 50000, 'explicit serial ID has its own insert shape';\n+is $explicit.state, StoredCommand::Failed, 'non-default enum binds correctly';\n+is-deeply $explicit.result, %(answer => [False, Any]), 'nullable JSON result preserves structured values';\n+my $ast = Red::AST::Insert.new($explicit);\n+my $cached = cached-command-insert($*RED-DB, $ast, Any);\n+my $legacy = $*RED-DB.translate($ast, 'uncached-check');\n+is $cached.key, $legacy.key, 'cached SQL matches the existing dialect translator';\n+is-deeply $cached.value.Array, $legacy.value.Array, 'bind order matches the existing translator';\n+ok !cached-command-insert($*RED-DB, $ast, 'other-context').defined, 'non-default contexts retain the original path';\n+my %expr = $ast.values;\n+%expr<result> = Red::AST::Value.new(:column($ast.values<result>.column), :value(ast-value(1)));\n+ok !cached-command-insert($*RED-DB, Red::AST::Insert.new(:into(StoredCommand), :values(%expr)), Any).defined,\n+    'expression values retain the original path';\n+my $event = StoredEvent.new(:class<X>, :mro<|X|>, :stream<x>, :version(1), :data{});\n+ok !cached-command-insert($*RED-DB, Red::AST::Insert.new($event), Any).defined, 'event INSERTs retain the original path';\n+\n+my $null-json = StoredCommand.^create(:entity<InsertTarget>, :entity-ids{},\n+    :method<perform>, :stream<json-null>, :data(Any));\n+my $sql-null = StoredCommand.^create(:entity<InsertTarget>, :entity-ids{},\n+    :method<perform>, :stream<sql-null>);\n+my @nulls = storage-query($*RED-DB,\n+    q[SELECT stream, CASE WHEN data IS NULL THEN 1 ELSE 0 END AS missing FROM red_sourcing_command WHERE stream IN ('json-null','sql-null') ORDER BY stream]);\n+is @nulls[0]<missing>, 0, 'undefined JSON payload is stored as JSON null';\n+is @nulls[1]<missing>, 1, 'omitted JSON payload remains SQL NULL';\n+\n+my $before = StoredCommand.^all.elems;\n+dies-ok { StoredCommand.^create(:id(50000), :entity<InsertTarget>, :entity-ids{}, :method<perform>, :stream<duplicate>) },\n+    'duplicate INSERT errors propagate';\n+is StoredCommand.^all.elems, $before, 'failed INSERT leaves no extra row';\n+dies-ok {\n+    red-do :transaction, {\n+        StoredCommand.^create(:entity<InsertTarget>, :entity-ids{}, :method<perform>, :stream<rolled-back>);\n+        die 'rollback';\n+    }\n+}, 'rollback works with a warm insert layout';\n+is StoredCommand.^all.elems, $before, 'rolled-back values are not retained';\n+\n+# Synthetic AST shapes exercise the layout cache without inserting invalid rows.\n+my $fresh-driver = new-driver();\n+my $model = StoredCommand.new(:entity<X>, :entity-ids{});\n+my $seed = Red::AST::Insert.new($model);\n+my @names = $seed.values.keys.sort;\n+sub shape(UInt $mask) {\n+    Red::AST::Insert.new(:into(StoredCommand), :values(@names.kv.map(-> $i, $name {\n+        my $column = $seed.values{$name}.column;\n+        $name => Red::AST::Value.new(:$column, :value(($mask +& (1 +< $i)) ?? 1 !! $column.attr.type))\n+    }).Hash))\n+}\n+my $start = $layouts;\n+my $empty = cached-command-insert($fresh-driver, shape(0), Any);\n+ok $empty.key.ends-with('DEFAULT VALUES RETURNING *'), 'empty format preserves DEFAULT VALUES';\n+for 1..128 -> $mask { cached-command-insert($fresh-driver, shape($mask), Any) }\n+is $layouts - $start, 129, 'different masks build independent layouts';\n+cached-command-insert($fresh-driver, shape(0), Any);\n+is $layouts - $start, 130, 'least recently used layout is evicted at 128 entries';\n+my $clone = $fresh-driver.clone;\n+cached-command-insert($clone, shape(0), Any);\n+is $layouts - $start, 130, 'transaction clones share immutable SQL layouts';\n+my @jobs = (^24).map(-> $i {\n+    start {\n+        my $ast = Red::AST::Insert.new(StoredCommand.new(:entity<InsertTarget>,\n+            :entity-ids{key => $i}, :stream(\"parallel-$i\")));\n+        cached-command-insert($fresh-driver, $ast, Any).value.grep(* eq \"parallel-$i\").elems == 1\n+    }\n+});\n+ok (await @jobs).all, 'concurrent bindings retain their own stream values';\n+done-testing;\n",
+  "validation": {
+    "initial_prototype": {
+      "SQLite": [
+        "04",
+        "52",
+        "53",
+        "59",
+        "54",
+        "65",
+        "66"
+      ],
+      "PostgreSQL": [
+        "45",
+        "55",
+        "59",
+        "66"
+      ],
+      "RakuAST": [
+        "66"
+      ]
+    },
+    "revised_prototype": {
+      "SQLite": [
+        "66 (59 assertions)"
+      ]
+    }
+  },
+  "final_source_hashes": {
+    "lib/RedSourcing/Storage.rakumod": "9358072dfc1b070420b71e9ae5a9e75579a8e946aa650a54eccd4dd1538f5a2f",
+    "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e"
+  }
+}

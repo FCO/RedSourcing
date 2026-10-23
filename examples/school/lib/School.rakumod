@@ -1,5 +1,7 @@
 unit module School;
 use RedSourcing;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
 
 class StudentRegistered does Event is export {
     has Str $.student-id is required;
@@ -81,7 +83,7 @@ aggregate Enrollment is export {
 
     method enroll is command {
         decision-model(
-            StudentClasses.^with-ids(:$!student-id), ClassRoster.^with-ids(:$!class-id),
+            (StudentClasses) => %(:$!student-id), (ClassRoster) => %(:$!class-id),
             -> $student, $class {
                 die "Unknown student: $!student-id" unless $student.exists;
                 die "Unknown class: $!class-id" unless $class.exists;
@@ -117,7 +119,7 @@ projection SchoolOverview is export {
 sub ensure($proxy) {
     my $stream = $proxy.^stream-name;
     my $type = $proxy.^entity-type.^name;
-    $proxy.^create unless StoredEvent.^all.grep({ .class eq $type && .stream eq $stream }).head;
+    $proxy.^create unless storage-stream-exists(journal-connection(), $type, $stream);
     $proxy
 }
 

@@ -1,0 +1,105 @@
+use Test;
+use File::Temp;
+
+# Give the fixture its own repository and record compilation in that unit. The
+# second process must deserialize its HOW metadata, rather than compose it again.
+my $directory = tempdir.IO;
+my $modules = $directory.add('lib');
+$modules.mkdir;
+my $marker = $directory.add('compiled');
+my $fixture = $?FILE.IO.parent.add('lib/ProjectionPlanDomain.rakumod').slurp;
+$modules.add('ProjectionPlanDomain.rakumod').spurt($fixture ~ "\n" ~ q:to/MARKER/);
+BEGIN { %*ENV<PROJECTION_PLAN_COMPILED>.IO.spurt("compiled\n", :append) }
+MARKER
+my $worker = $directory.add('worker.raku');
+$worker.spurt(q:to/WORKER/);
+use Test;
+use RedSourcing;
+use RedSourcing::Utils;
+use RedSourcing::Config;
+use ProjectionPlanDomain;
+use RedSourcing::Predicate;
+
+# Any runtime reflection/preparation through the old path is a failure.
+my $wrapper = &prepare-rule.wrap(-> | { die 'signature prepared at runtime' });
+LEAVE &prepare-rule.unwrap($wrapper);
+my $*RED-DB;
+my $admin;
+my $schema = 'rs_precomp_' ~ $*PID;
+if (%*ENV<PROJECTION_PLAN_DRIVER> // '') eq 'Pg' {
+    require ::('DB::Pg');
+    my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database options='-cclient_min_messages=warning'"));
+    $admin.execute("CREATE SCHEMA $schema");
+    $*RED-DB = store-driver('Pg', $database, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>))
+    });
+} else {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+}
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+schema(StoredEvent, StoredCommand).create;
+PlanFact.emit(:key<a>, :amount(3), :stream<a>, :version(1));
+PlanFact.emit(:key<b>, :amount(7), :stream<b>, :version(1));
+PlanNestedFact.emit(:details{owner => 'a'}, :amount(5), :stream<a-nested>, :version(1));
+PlanNestedFact.emit(:details{owner => 'b'}, :amount(11), :stream<b-nested>, :version(1));
+
+ok PlanTotal.^projection-descriptor<templates>[0]<ast>:exists,
+    'parameterized AST survives precompilation';
+my $analyses = 0;
+my $analysis-wrapper = &predicate-ast.wrap(-> | { $analyses++; callsame });
+LEAVE &predicate-ast.unwrap($analysis-wrapper);
+is PlanTotal.^with-ids(:key<a>).^load.total, 3, 'precompiled filter loads a receiver';
+is PlanTotal.^with-ids(:key<b>).^load.total, 7, 'precompiled filter rebinds receiver IDs';
+is $analyses, 0, 'deserialized AST bypasses predicate analysis';
+
+my $descriptor = PlanCombined.^projection-descriptor;
+is $descriptor<rules>.elems, 2, 'composed descriptor contains multiple candidates';
+ok $descriptor<type> === PlanCombined, 'descriptor refers to the deserialized type';
+ok $descriptor<ids>{'key'}, 'ID metadata survives precompilation';
+ok $descriptor === PlanCombined.^projection-descriptor, 'type keeps the same descriptor';
+is PlanInherited.^with-ids(:key<a>).^load.total, 3, 'inherited candidate survives precompilation';
+is PlanCombined.^with-ids(:key<a>).^load.total, 8, 'ordinary replay uses multiple and nested rules';
+is PlanCombined.^with-ids(:key<b>).^load.total, 18, 'ordinary replay binds current IDs';
+is PlanCombined.^with-ids(:key<a>).^load.total, 8, 'loading again cannot retain the other receiver';
+
+decision-model (PlanCombined) => %(:key<b>), (PlanTotal) => %(:key<a>), -> $b, $a {
+    is $b.total, 18, 'decision binds the same composed descriptor';
+    is $a.total, 3, 'decision preserves list order and independent IDs';
+};
+is PlanNative.^with-ids(:key<a>).^load.count, 1, 'native projection state remains valid for ordinary replay';
+throws-like { decision-model (PlanNative) => %(:key<a>), -> $ { die 'block ran' } },
+    X::AdHoc, message => /'native attribute'/, 'native validation remains specific to decisions';
+throws-like { PlanEmpty.^apply-rules }, X::AdHoc,
+    message => /'Expected a single positional event parameter'/,
+    'non-queryable declarations keep their deferred replay error';
+my $raw = PlanRaw.^with-ids.^load;
+is $raw.count, StoredEvent.^all.elems, 'raw journal replay remains available';
+
+my $stateful = PlanStateful.^restore-state(Nil, :stream<stateful>, :key<a>, :minimum(4));
+$stateful.^apply-new-applyable-events;
+is $stateful.total, 0, 'ordinary predicates can depend on current mutable state';
+$stateful.minimum = 2;
+$stateful.^apply-new-applyable-events;
+is $stateful.total, 3, 'predicates are rebuilt after mutable state changes';
+is PlanTotal.^find_method('APPLY').candidates.head.signature.params[1].type,
+    PlanFact, 'original event signature keeps its nominal type';
+done-testing;
+WORKER
+
+temp %*ENV<PROJECTION_PLAN_COMPILED> = $marker.Str;
+for 1..2 -> $attempt {
+    # Optionally deserialize the same fixture on a different storage driver.
+    temp %*ENV<PROJECTION_PLAN_DRIVER> = $attempt == 2 && %*ENV<RED_SOURCING_TEST_PG_DATABASE>.defined
+        ?? 'Pg' !! 'SQLite';
+    my $process = run $*EXECUTABLE.Str, '-Ilib', "-I$modules", $worker.Str, :out, :err;
+    my $out = $process.out.slurp(:close);
+    my $err = $process.err.slurp(:close);
+    is $process.exitcode, 0, "process $attempt loads and uses projection descriptors";
+    unlike $out, /'not ok'/, "process $attempt passes replay and decision assertions";
+    is $err, '', "process $attempt has no diagnostics";
+    diag $out if $process.exitcode || $out.contains('not ok');
+    is ($marker.e ?? $marker.slurp.lines.elems !! 0), 1, 'fixture is compiled only once across processes';
+}
+done-testing;

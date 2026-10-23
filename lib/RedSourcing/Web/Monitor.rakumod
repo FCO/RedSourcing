@@ -26,12 +26,14 @@ sub run-monitor(Str :$driver = 'SQLite', Str :$database!, Str :$host = '127.0.0.
     my $uninitialized = $allow-new-store && $driver eq 'SQLite' && !$database.IO.f;
     my $connected = !$uninitialized;
     red-defaults :default(store-driver($driver, $database, :%connection)) if $connected;
-    configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot)) if $connected;
+    configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot), :entity-cache-size($settings.entity-cache-size)) if $connected;
     my $inspector = RedSourcing::Inspector.new(:stored-only);
     my $lock = Lock.new;
     my $changes = Supplier.new;
     my $cached;
     my $stamp = '';
+    my $data-stamp = '';
+    my $metrics-view;
     my $stopping = False;
     my $operations = RedSourcing::Web::Operations.new(:settings($settings.clone(:$driver,
         :database($driver eq 'SQLite' ?? $database.IO.absolute.Str !! $database), :$debug,
@@ -42,7 +44,7 @@ sub run-monitor(Str :$driver = 'SQLite', Str :$database!, Str :$host = '127.0.0.
         return 'uninitialized' if $uninitialized && !$database.IO.f;
         unless $connected {
             red-defaults :default(store-driver($driver, $database, :%connection));
-            configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot));
+            configure-lifecycles($settings.entities, :auto-snapshot($settings.auto-snapshot), :entity-cache-size($settings.entity-cache-size));
             $connected = True;
         }
         if $allow-new-store {
@@ -57,12 +59,23 @@ sub run-monitor(Str :$driver = 'SQLite', Str :$database!, Str :$host = '127.0.0.
             my $current = current-stamp();
             if $current eq 'uninitialized' {
                 $stamp = $current;
+                $cached = Nil;
+                $metrics-view = Nil;
+                $data-stamp = '';
                 return %(types => [], instances => [], events => [], commands => [], stored-only => True,
                     store-error => 'The selected store is not initialized. Use init to create its event and command tables.');
             }
-            if !$cached.defined || $current ne $stamp {
+            # A new minute only changes the reporting window, not projected
+            # facts. Reuse the projection until the journal/command revision
+            # changes; rebuild then to include late lower-ID commits as well.
+            my $revision = $current.substr(0, $current.rindex('/'));
+            if !$cached.defined || $revision ne $data-stamp {
                 $cached = $inspector.report;
-                $cached<metrics> = store-metrics(:instances($cached<instances>), :$minutes);
+                $metrics-view = metrics-projection();
+                $data-stamp = $revision;
+            }
+            if $current ne $stamp || !($cached<metrics>:exists) {
+                $cached<metrics> = $metrics-view.report(:instances($cached<instances>), :$minutes);
                 $stamp = $current;
             }
             $cached

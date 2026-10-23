@@ -1,0 +1,231 @@
+use Test;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Tags;
+use RedSourcing::Counters;
+use RedSourcing::Journal;
+use RedSourcing::StoredCounter;
+use RedSourcing::Inspector;
+use RedSourcing::Storage;
+use RedSourcing::Web::Flows;
+
+class StorageFact does Event { has Str $.key; has $.payload }
+class WideStorageFact does Event { has Hash $.values }
+projection StorageGuard {
+    has Str $.key is entity-id;
+    has UInt $.count = 0;
+    method APPLY(StorageFact $event where { .key eqv $!key }) { $!count++ }
+}
+aggregate StorageCounter {
+    has Str $.key is entity-id;
+    has UInt $.count = 0;
+    method APPLY(StorageFact $event) { $!count++ }
+    method increment is command { self.storage-fact(:payload(%(answer => 42))); $!count }
+}
+saga StorageWorkflow[OnDemand] {
+    has Str $.key is entity-id;
+    has UInt $.count = 0;
+    multi method APPLY(StorageFact $event where { .key eqv $!key }) { $!count++ }
+    multi method REACT(StorageFact $event where { .key eqv $!key }) { }
+}
+my @prepared;
+my $sample-stream = '';
+my $payload-rows = 0;
+my role CountPayloadRows {
+    method row(|args) {
+        my $row = callsame;
+        $payload-rows++ if $sample-stream.chars && $row ~~ Associative
+            && ($row<data>:exists) && ($row<stream> // '') eq $sample-stream;
+        $row
+    }
+}
+my @executed;
+my role CountExecutions {
+    has Str $.observed-sql is rw;
+    method execute(|) {
+        @executed.push($!observed-sql);
+        callsame
+    }
+}
+my role QueryCount {
+    multi method prepare(Str $sql, |args) {
+        @prepared.push($sql);
+        my $statement = callsame;
+        my $executor = is-pg(self) ?? $statement
+            !! ($statement.statement.^can('execute') ?? $statement.statement !! $statement);
+        $executor does CountExecutions unless $executor ~~ CountExecutions;
+        $executor.observed-sql = $sql;
+        $statement does CountPayloadRows unless $statement ~~ CountPayloadRows;
+        $statement
+    }
+}
+my $*RED-DB;
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $admin;
+my $schema = 'rs_storage_performance_' ~ $*PID;
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+if $database.defined {
+    die 'Use a simple database name' unless $database ~~ /^ <[\w\-]>+ $/;
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $admin.execute("CREATE SCHEMA $schema");
+    my $pool = ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>));
+    $*RED-DB = store-driver('Pg', $database, :connection{ dbh => $pool });
+} else { $*RED-DB = store-driver('SQLite', ':memory:') }
+$*RED-DB does QueryCount;
+red-sourcing-defaults;
+
+subtest 'cached hydration preserves JSON, nulls, enum values and dirty tracking' => {
+    my $event = StorageFact.emit(:stream<types>, :version(1), :key<types>,
+        :payload(%(number => 1, text => '1', flag => True, null => Any, array => [False, 2])));
+    my $row = StoredEvent.^all.grep(*.id == $event.id).head;
+    is-deeply $row.data<payload>, %(number => 1, text => '1', flag => True, null => Any, array => [False, 2]),
+        'typed JSON survives row materialization';
+    ok $row.created ~~ DateTime, 'timestamp is inflated';
+    nok $row.command-id.defined, 'SQL NULL stays undefined';
+    nok $row.^is-dirty, 'loaded row starts clean';
+    my $raw = storage-query(journal-connection(), 'SELECT * FROM red_sourcing_event WHERE id = ' ~ $row.id).head;
+    my $complete = StoredEvent.^new-from-data($raw);
+    is-deeply $complete.data, $row.data, 'complete-row descriptor preserves JSON';
+    is $complete.created.Instant, $row.created.Instant, 'complete-row descriptor preserves timestamps';
+    is $complete.mro, $row.mro, 'complete-row descriptor preserves logical MRO';
+    my %partial = $raw.Hash;
+    %partial<action_id>:delete;
+    %partial<action-id>:delete;
+    my $partial = StoredEvent.^new-from-data(%partial);
+    is-deeply $partial.data, $complete.data, 'partial rows retain the compatible hydration path';
+    nok $partial.action-id.defined, 'absent optional columns preserve defaults';
+
+    $row.version = 2; $row.^save;
+    is StoredEvent.^all.grep(*.id == $row.id).head.version, 2, 'loaded row can still save changes';
+    my $command = StoredCommand.^create(:stream<types>, :entity<NoSuchAggregate>,
+        :entity-ids{}, :method<noop>, :data(%(null => Any, values => [1, True])));
+    is $command.state, StoredCommand::Pending, 'enum is preserved';
+    my @p = is-pg(journal-connection()) ?? < $1 $2 $3 > !! < ? ? ? >;
+    counter-sql(journal-connection(), 'UPDATE red_sourcing_command SET state = ' ~ @p[0]
+        ~ ', error = ' ~ @p[1] ~ ' WHERE id = ' ~ @p[2], StoredCommand::Failed.Int, 'external', $command.id);
+    $command.^refresh-storage-row;
+    is $command.state, StoredCommand::Failed, 'refresh reads a changed enum';
+    is $command.error, 'external', 'refresh reads changed nullable fields';
+    nok $command.^is-dirty, 'refresh clears dirty tracking';
+    is-deeply $command.data, %(null => Any, values => [1, True]), 'refresh preserves structured command arguments';
+    my %returned = storage-query(journal-connection(),
+        'SELECT * FROM red_sourcing_command WHERE id = ' ~ $command.id).head.Hash;
+    %returned<state> = StoredCommand::Processing.Int;
+    %returned<error> = Any;
+    %returned<result> = to-json(%(answer => [True, Any, 1]));
+    @prepared = ();
+    refresh-storage-data($command, %returned);
+    is @prepared.elems, 0, 'returned-row refresh issues no SQL';
+    is $command.state, StoredCommand::Processing, 'returned row inflates the enum';
+    nok $command.error.defined, 'returned SQL NULL clears a previous error';
+    is-deeply $command.result, %(answer => [True, Any, 1]), 'returned row inflates typed JSON result';
+    nok $command.^is-dirty, 'returned-row refresh leaves the instance clean';
+    my $projection = StoredEvent.^all.grep(*.id == $row.id)
+        .map(-> $r { %(version => $r.version, payload => $r.data) }).head;
+    is $projection<version>, 2, 'structural SQL projections still work';
+    is $projection<payload><payload><text>, '1', 'structural projection retains JSON typing';
+};
+
+subtest 'large field sets use bounded batches and roll back earlier batches on conflict' => {
+    my $guard = 'guard-0';
+    my $key;
+    for ^1000 -> $i {
+        $guard = "guard-$i";
+        $key = counter-key(['key'], $guard);
+        last if $key.key.starts-with('f');
+    }
+    StorageFact.emit(:stream<guard>, :version(1), :key($guard), :payload<guard>);
+    my %values;
+    for ^10000 -> $i {
+        %values{$i.Str} = $i if counter-key(['values', $i.Str], $i).key lt $key.key;
+        last if %values.elems == 150;
+    }
+    is %values.elems, 150, 'fixture places the guarded counter after a full batch';
+    my $before = RedSourcing::StoredCounter.^all.elems;
+    throws-like {
+        decision-model((StorageGuard) => %(:key($guard)), -> $view {
+            update-counter(journal-connection(), $key.key, $key.value, 1);
+            WideStorageFact.emit(:stream<conflict>, :version(1), :%values);
+        });
+    }, RedSourcing::X::OptimisticLockFailed, 'a later batch detects the stale dependency';
+    is RedSourcing::StoredCounter.^all.elems, $before, 'earlier batch inserts are rolled back';
+    is read-counters(journal-connection(), %($key)){$key.key}, 1, 'guard version also rolls back';
+    is StoredEvent.list-events(:stream<conflict>, :row).elems, 0, 'failed append leaves no event';
+    @prepared = ();
+    @executed = ();
+    WideStorageFact.emit(:stream<wide>, :version(1), :%values);
+    is @executed.grep(*.starts-with('WITH changes(')).elems, 2, '151 field keys execute two SQL batches';
+    is RedSourcing::StoredCounter.^all.elems, $before + 151, 'every exact field/value counter was updated';
+};
+subtest 'monitor traversal batches cards and storage INSERT shapes are stable' => {
+    my $counter = StorageCounter.^with-ids(:key<monitor>); $counter.^create;
+    @prepared = ();
+    $counter.increment for ^12;
+    my @insert = @prepared.grep({ .starts-with('INSERT INTO "red_sourcing_event"') }).unique;
+    is @insert.elems, 1, 'same journal fields reuse one SQL statement shape';
+    my %report = RedSourcing::Inspector.new(:stored-only).report;
+    @prepared = ();
+    my %flow = flow-report(%report, :stream($counter.^stream-name));
+    is %flow<nodes>.grep(*.<kind> eq 'command').elems, 12, 'all commands remain visible';
+    is %flow<nodes>.grep(*.<kind> eq 'event').elems, 12, 'all emitted facts remain visible';
+    cmp-ok @prepared.elems, '<=', 7, 'cards do not need a database query per node';
+};
+subtest 'saga restoration loads one complete control and keeps snapshot accounting' => {
+    my $before = RedSourcing::StoredCounter.^all.elems;
+    my $workflow = StorageWorkflow.^with-ids(:key<saga-restore>); $workflow.^create;
+    is RedSourcing::StoredCounter.^all.elems, $before, 'initial snapshot adds no decision counters';
+    my $initial = StoredEvent.^all.grep(*.stream eq $workflow.^stream-name).head;
+    my $source;
+    for 1..5 -> $version {
+        $source = StorageFact.emit(:stream<saga-facts>, :$version, :key<saga-restore>, :payload<fact>);
+    }
+    my $counters = RedSourcing::StoredCounter.^all.elems;
+    my $guard = counter-key(['key'], 'saga-restore');
+    my $generation = read-counters(journal-connection(), %($guard)){$guard.key};
+    $workflow.^advance(:limit(0));
+    is RedSourcing::StoredCounter.^all.elems, $counters, 'native controls add no decision counters';
+    is read-counters(journal-connection(), %($guard)){$guard.key}, $generation,
+        'internal state does not invalidate a domain-fact dependency';
+    $sample-stream = $workflow.^stream-name;
+    $payload-rows = 0;
+    LEAVE $sample-stream = '';
+    my $loaded = $workflow.^load;
+    is $loaded.count, 5, 'complete final control restores the latest domain values';
+    my $copy = $loaded.^clone-state;
+    $copy.^state<actions>.push(%(id => 'detached'));
+    is $loaded.^state<actions>.elems, 0, 'provisional state still owns an isolated deep copy';
+    nok $loaded.^values<saga-state>:exists, 'domain values do not expose runtime state';
+    is $loaded.^current-id, $source.id, 'source cursor is preserved';
+    is $loaded.^version, 6, 'control version is preserved';
+    is $loaded.^snapshot-events, 5, 'automatic snapshot event budget includes every control';
+    is $loaded.^snapshot-at, $initial.created.Instant.Num, 'snapshot time baseline is preserved';
+    is $payload-rows, 2, 'only the initial snapshot and final control payload are fetched';
+    $loaded.^emit-snapshot;
+    my $checkpoint = $workflow.^load;
+    is $checkpoint.^snapshot-events, 0, 'explicit checkpoint resets the control budget';
+    StorageFact.emit(:stream<saga-facts>, :version(6), :key<saga-restore>, :payload<fact>);
+    my $advanced = $workflow.^advance(:limit(0));
+    is $advanced.count, 6, 'new source event applies after checkpoint restoration';
+    is $workflow.^load.^snapshot-events, 1, 'only controls after the checkpoint count';
+    is read-counters(journal-connection(), %($guard)){$guard.key}, $generation + 1,
+        'only the added domain fact advances the dependency';
+};
+subtest 'successful command claim reuses RETURNING without a second SELECT' => {
+    my $counter = StorageCounter.^with-ids(:key<returning-claim>); $counter.^create;
+    my $command = $counter.increment(:!sync);
+    @prepared = ();
+    is $command.run, 1, 'claimed command executes normally';
+    my @reads = @prepared.grep({ .starts-with('SELECT') && .contains('red_sourcing_command') });
+    is @reads.elems, 1, 'only the initial command SELECT remains';
+    my @claims = @prepared.grep(*.starts-with('UPDATE red_sourcing_command SET state'));
+    is @claims.elems, 1, 'command is claimed once';
+    ok @claims.head.ends-with('RETURNING *'), 'claim returns the complete current row';
+    is $command.state, StoredCommand::Done, 'the caller sees the final state';
+    is $command.tries, 1, 'the attempt count is preserved';
+    is $command.run, 1, 'a completed command returns its stored result';
+    is $counter.^load.count, 1, 'a repeated run does not apply the event twice';
+};
+done-testing;

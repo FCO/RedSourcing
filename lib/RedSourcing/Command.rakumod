@@ -48,8 +48,6 @@ multi method emit (::?CLASS:U: Str :$entity!, :%entity-ids!, Str :$method!, Str 
 	.not
 }) {
 	assert-effect-allowed('command submission');
-	my $row = RedSourcing::StoredCommand.^create(:$entity, :%entity-ids, :$method, :$stream, :class(self.^name), :%data);
-	my $parent = try $*COMMAND;
-	flow-link('command', $parent.id.Str, 'command', $row.id.Str, 'submitted') if $parent.defined;
+	my $row = RedSourcing::StoredCommand.^create(:$entity, :%entity-ids, :$method, :$stream, :class(self.^name), :%data, |command-causality());
 	$row
 }

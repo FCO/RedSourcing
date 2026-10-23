@@ -1,0 +1,97 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Lifecycle;
+use RedSourcing::Journal;
+use lib 't/lib';
+use CachedEntityDomain;
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $*RED-DB;
+my $admin;
+my @schemas;
+LEAVE { if $admin.defined { $admin.execute("DROP SCHEMA $_ CASCADE") for @schemas } }
+sub fresh(Int $capacity = 100, %entities = {}) {
+    if $database {
+        require ::('DB::Pg');
+        $admin //= ::('DB::Pg').new(:conninfo("dbname=$database"));
+        my $schema = 'rs_evict_snapshot_' ~ $*PID ~ '_' ~ @schemas.elems;
+        $admin.execute("CREATE SCHEMA $schema"); @schemas.push($schema);
+        $*RED-DB = store-driver('Pg', $database, :connection{
+            dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+                :converters(<DateTime UUID Geometric>)) });
+    } else { $*RED-DB = store-driver('SQLite', ':memory:') }
+    schema(StoredEvent, StoredCommand).create;
+    configure-lifecycles(%entities, :entity-cache-size($capacity));
+}
+sub proxy($type, $id) { $type.^with-ids(:$id) }
+sub shots($type, $id) {
+    my $stream = proxy($type, $id).^stream-name;
+    StoredEvent.^all.grep({ .class eq $type.^name && .stream eq $stream }).sort(*.id).Array
+}
+my $fail-evictions = False;
+my $hook = CacheCheckpoint.HOW.^find_method('write-snapshot').wrap(-> |c {
+    die 'injected eviction snapshot failure' if $fail-evictions && ((try $*REDSOURCING-EVICTION-SNAPSHOT) // False);
+    callsame
+});
+LEAVE $hook.restore;
+
+fresh;
+my $one = proxy(CacheCheckpoint, 1); my $two = proxy(CacheCheckpoint, 2);
+$one.^create; $two.^create;
+$one.add(:amount(7));
+is shots(CacheCheckpoint, 1).elems, 1, 'normal threshold has not been reached';
+$two.^load;
+is shots(CacheCheckpoint, 1).elems, 2, 'type eviction checkpoints committed dirty state';
+is shots(CacheCheckpoint, 1).tail.data<amount>, 7, 'eviction snapshot contains committed state';
+is $one.^load.amount, 7, 'reload uses the eviction snapshot without duplicating facts';
+$two.^load;
+is shots(CacheCheckpoint, 1).elems, 2, 'clean eviction does not duplicate a snapshot';
+
+fresh(1, { CacheCheckpoint.^name => {auto-snapshot => False} });
+$one.^create; $two.^create; $one.add(:amount(3)); $two.^load;
+is shots(CacheCheckpoint, 1).elems, 1, 'disabled auto-snapshot also disables eviction snapshots';
+is $one.^load.amount, 3, 'disabled policy preserves durable replay';
+
+fresh;
+CacheSnapshotFact.emit(:id(1), :amount(5), :stream<view>, :version(1));
+proxy(CacheCheckpointView, 1).^load; proxy(CacheCheckpointView, 2).^load;
+is shots(CacheCheckpointView, 1).elems, 1, 'projection eviction checkpoints its state';
+is shots(CacheCheckpointView, 1).head.replay-cursor, 1, 'projection snapshot preserves its consumed cursor';
+is proxy(CacheCheckpointView, 1).^load.amount, 5, 'projection reload does not replay its consumed fact twice';
+
+fresh;
+my $s1 = proxy(CacheCheckpointSaga, 1); my $s2 = proxy(CacheCheckpointSaga, 2);
+$s1.^create; $s2.^create;
+my $saga = $s1.^load;
+$saga.set-timeout('first', 3600, finish => \());
+ok $saga === $saga.^advance(:limit(0)), 'advance returns the shared owner while it remains cached';
+$s2.^load;
+is shots(CacheCheckpointSaga, 1).elems, 2, 'saga eviction checkpoints committed controls';
+is $s1.^load.^state<timers>.elems, 1, 'saga checkpoint restores timers passively';
+
+fresh;
+$one.^create; $one.add(:amount(9));
+dies-ok { red-do :transaction, { $one.^release; die 'abort release' } }, 'caller rollback propagates';
+is shots(CacheCheckpoint, 1).elems, 1, 'rollback discards deferred snapshot publication';
+is $one.^load.amount, 9, 'rollback retains the committed journal state';
+red-do :transaction, { $one.^release; True };
+is shots(CacheCheckpoint, 1).elems, 2, 'release checkpoints only after caller commit';
+
+fresh;
+$one.^create; $two.^create; $one.add(:amount(11));
+$fail-evictions = True;
+lives-ok { $two.^load }, 'snapshot failure does not fail the already committed load';
+$fail-evictions = False;
+is shots(CacheCheckpoint, 1).elems, 1, 'failed snapshot transaction leaves no row';
+ok (journal-connection().journal-storage<eviction-snapshot-failures> // 0) > 0, 'failure is recorded in bounded store diagnostics';
+is $one.^load.amount, 11, 'journal replay remains correct after checkpoint failure';
+
+fresh(1);
+proxy(CacheOther, 99).^create;
+$s1.^create;
+$saga = $s1.^load;
+$saga.set-timeout('first', 3600, finish => \());
+lives-ok { $saga.pressure }, 'eviction defers checkpointing until the active saga operation finishes';
+is shots(CacheCheckpointSaga, 1).elems, 2, 'deferred eviction creates one checkpoint after the operation';
+is $s1.^load.^state<timers>.elems, 2, 'deferred snapshot includes both committed timers';
+done-testing;

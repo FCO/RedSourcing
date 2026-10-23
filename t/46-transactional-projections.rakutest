@@ -144,7 +144,7 @@ my $total = TransactionTotal.^with-ids(:client-id<ana>);
 
 subtest 'projection declarations configure lifecycle before composition' => {
     is TransactionExplicit.^lifecycle, OnDemand, 'explicit OnDemand is accepted';
-    is TransactionTotal.^lifecycle, OnDemand, 'omitting brackets keeps the default';
+    is TransactionTotal.^lifecycle, Cached, 'omitting brackets keeps the default';
     is TransactionMemory.^lifecycle, Retained, 'Retained is configured by the declaration';
     is TransactionMemory.^name, 'TransactionMemory', 'lifecycle does not change the persisted type name';
     for ^2 {

@@ -1,0 +1,185 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Tags;
+use RedSourcing::StoredCounter;
+use RedSourcing::Counters;
+use RedSourcing::Journal;
+use Red::DB;
+
+class TaggedRename does Event {
+    has Str $.old-nick is tagged<nick identity>;
+    has Str $.new-nick is tagged<nick>;
+    has Int $.amount is tag-field;
+}
+enum TagStatus <TagPending TagDone>;
+class EnumFact does Event { has $.status }
+class OtherFact does Event { has Str $.old-nick; has Int $.amount }
+projection NickDecision {
+    has Str $.nick is entity-id;
+    has Int $.count = 0;
+    method APPLY(TaggedRename $e where { .old-nick eqv $!nick || .new-nick eqv $!nick }) { $!count++ }
+}
+projection RangeDecision {
+    has Int $.minimum is entity-id;
+    has Int $.count = 0;
+    method APPLY(TaggedRename $e where { .amount > $!minimum }) { $!count++ }
+}
+projection UnprotectedRange {
+    has Int $.minimum is entity-id;
+    method APPLY(OtherFact $e where { .amount > $!minimum }) { }
+}
+projection UnfilteredDecision {
+    method APPLY(TaggedRename $e) { }
+}
+projection BothDecision {
+    has Str $.before is entity-id;
+    has Str $.after is entity-id;
+    has Int $.count = 0;
+    method APPLY(TaggedRename $e where { .old-nick eqv $!before && .new-nick eqv $!after }) { $!count++ }
+}
+class UntaggedFact does Event {
+    has Str $.key;
+    has $.payload is not-a-tag;
+}
+projection UntaggedDecision {
+    has Str $.payload is entity-id;
+    method APPLY(UntaggedFact $e where { .payload eqv $!payload }) { }
+}
+projection CoveredUntaggedDecision {
+    has Str $.key is entity-id;
+    has Str $.payload is entity-id;
+    has Int $.count = 0;
+    method APPLY(UntaggedFact $e where { .key eqv $!key && .payload eqv $!payload }) { $!count++ }
+}
+red-sourcing-defaults(:driver<SQLite>, :database(':memory:'));
+
+sub version(@path, $value?, Bool :$field = False) {
+    my $key = counter-key(@path, $value, :$field).key;
+    RedSourcing::StoredCounter.^all.grep(*.key eq $key).head.version
+}
+
+subtest 'all fields, multiple aliases, shared aliases and presence counters' => {
+    TaggedRename.emit(:old-nick<Alice>, :new-nick<Bob>, :amount(20), :stream<rename>, :version(1));
+    is version(['old-nick'], 'Alice'), 1, 'original field is indexed';
+    is version(['nick'], 'Alice'), 1, 'first attribute contributes the shared alias';
+    is version(['nick'], 'Bob'), 1, 'second attribute contributes the shared alias';
+    is version(['identity'], 'Alice'), 1, 'one attribute may declare several aliases';
+    is version(['amount'], :field), 1, 'tag-field maintains a value-independent counter';
+    is version(['amount'], 20), 1, 'tag-field retains the ordinary value counter';
+    is StoredEvent.list-events((TaggedRename) => %(nick => 'Bob')).elems, 1, 'map query resolves aliases';
+    TaggedRename.emit(:old-nick<Alice>, :new-nick<Alice>, :amount(5), :stream<rename>, :version(2));
+    is version(['nick'], 'Alice'), 2, 'a repeated alias/value is counted once per event';
+};
+
+subtest 'not-a-tag retains payloads without creating counter dependencies' => {
+    my %keys = event-counter-keys(UntaggedFact,
+        %(key => 'visible', payload => %(nested => [1, 2])));
+    is %keys.elems, 1, 'excluded object, descendants and array elements create no counters';
+    ok %keys{counter-key(['key'], 'visible').key}:exists, 'other fields remain tags';
+    UntaggedFact.emit(:key<visible>, :payload<private>, :stream<untagged>, :version(1));
+    is StoredEvent.list-events((UntaggedFact) => %(payload => 'private')).elems, 1,
+        'excluded field remains stored and queryable';
+    nok RedSourcing::StoredCounter.^all.grep(*.key eq counter-key(['payload'], 'private').key).elems,
+        'emit creates no counter for the excluded field';
+    my $called = False;
+    dies-ok { decision-model((UntaggedDecision) => %(:payload<private>), -> $v { $called = True }) },
+        'excluded equality cannot protect a decision';
+    nok $called, 'unprotected decision is rejected before callback';
+    is decision-model((CoveredUntaggedDecision) => %(:key<visible>, :payload<private>), -> $v { $v.count }),
+        1, 'another equality can protect a conjunction using an excluded field';
+    dies-ok { EVAL 'use RedSourcing; class InvalidTagA does Event { has $.x is tagged<x> is not-a-tag }' },
+        'tagged then not-a-tag is rejected';
+    dies-ok { EVAL 'use RedSourcing; class InvalidTagB does Event { has $.x is not-a-tag is tagged<x> }' },
+        'not-a-tag then tagged is rejected';
+    dies-ok { EVAL 'use RedSourcing; class InvalidTagC does Event { has $.x is tag-field is not-a-tag }' },
+        'tag-field then not-a-tag is rejected';
+    dies-ok { EVAL 'use RedSourcing; class InvalidTagD does Event { has $.x is not-a-tag is tag-field }' },
+        'not-a-tag then tag-field is rejected';
+};
+
+subtest 'canonical keys preserve JSON types, paths, null and structured values' => {
+    isnt counter-key(['a'], '1').key, counter-key(['a'], 1).key, 'text differs from number';
+    isnt counter-key(['a'], True).key, counter-key(['a'], 1).key, 'boolean differs from number';
+    is counter-key(['a'], 1).key, counter-key(['a'], 1.0).key, 'equivalent JSON numbers use the same key';
+    is counter-key(['a'], 0.9999999e0).key, counter-key(['a'], 0.9999999).key, 'numeric representations do not use approximate rational conversion';
+    isnt counter-key(['a'], 0.9999999e0).key, counter-key(['a'], 1).key, 'nearby numbers remain distinct';
+    is counter-key(['a'], -0e0).key, counter-key(['a'], 0).key, 'negative zero is normalized';
+    is counter-key(['a'], TagPending).key, counter-key(['a'], 'TagPending').key, 'enum follows its JSON representation';
+    isnt counter-key(['a', 'b'], 1).key, counter-key(['a.b'], 1).key, 'paths cannot collide with field names';
+    my %missing = event-counter-keys(TaggedRename, %());
+    my %null = event-counter-keys(TaggedRename, %(old-nick => Any));
+    is %missing.elems, 0, 'absence emits no value key';
+    ok %null{counter-key(['old-nick'], Any).key}:exists, 'null has an explicit key';
+    is counter-key(['a'], %(a => 1, b => 2)).key,
+        counter-key(['a'], %(b => 2, a => 1)).key, 'object member order is normalized';
+    ok counter-key(['a'], 'x' x 10000).key.chars <= 64, 'large payloads do not become oversized B-tree keys';
+};
+
+subtest 'OR, AND and inequalities load isolated views from one fact query' => {
+    is decision-model((NickDecision) => %(:nick<Alice>), -> $v { $v.count }), 2, 'OR selects either old or new nickname';
+    is decision-model((BothDecision) => %(:before<Alice>, :after<Bob>), -> $v { $v.count }), 1, 'AND still filters exactly';
+    is decision-model((RangeDecision) => %(:minimum(10)), -> $v { $v.count }), 1, 'range query uses the field counter';
+    my $called = False;
+    dies-ok { decision-model((UnprotectedRange) => %(:minimum(10)), -> $v { $called = True }) },
+        'unprotected range fails before invoking the block';
+    nok $called, 'invalid range block was not invoked';
+    dies-ok { decision-model((UnfilteredDecision) => %(), -> $v { }) }, 'unbounded query is rejected';
+    my $before = RedSourcing::StoredCounter.^all.elems;
+    is decision-model((NickDecision) => %(:nick<Absent>), -> $v { $v.count }), 0, 'an empty read is valid';
+    is RedSourcing::StoredCounter.^all.elems, $before, 'reading missing counters does not create or reserve rows';
+};
+
+subtest 'event counters are independent of event type and roll back with the append' => {
+    OtherFact.emit(:old-nick<Alice>, :amount(7), :stream<other>, :version(1));
+    is version(['old-nick'], 'Alice'), 3, 'different event types share the field/value counter';
+    my $before = version(['old-nick'], 'Alice');
+    dies-ok {
+        red-do :transaction, {
+            TaggedRename.emit(:old-nick<Alice>, :new-nick<Aborted>, :amount(50), :stream<aborted>, :version(1));
+            die 'rollback';
+        }
+    }, 'transaction aborts';
+    is version(['old-nick'], 'Alice'), $before, 'counter changes roll back too';
+    is StoredEvent.list-events(:row, :stream<aborted>).elems, 0, 'event was not persisted';
+    throws-like {
+        decision-model((NickDecision) => %(:nick<Alice>), -> $v {
+            # Simulate an external version change without changing the local
+            # own-write accounting, to exercise the conditional UPSERT itself.
+            my $key = counter-key(['old-nick'], 'Alice');
+            update-counter(journal-connection(), $key.key, $key.value, 1);
+            OtherFact.emit(:old-nick<Elsewhere>, :amount(99), :stream<stale>, :version(1));
+        })
+    }, RedSourcing::X::OptimisticLockFailed;
+    is StoredEvent.list-events(:row, :stream<stale>).elems, 0, 'all dependencies are checked even when the new event is unrelated';
+};
+
+subtest 'maintenance rebuild preserves the journal and counter versions' => {
+    NickDecision.^with-ids(:nick<Alice>).^load.^emit-snapshot;
+    EnumFact.emit(:status(TagPending), :stream<enum>, :version(1));
+    my %before = RedSourcing::StoredCounter.^all.Seq.map({ .key => .version }).Hash;
+    my $events = StoredEvent.^all.elems;
+    is rebuild-event-counters(), $events, 'rebuild scans every persisted journal row';
+    is StoredEvent.^all.elems, $events, 'rebuild does not insert or remove events';
+    is-deeply RedSourcing::StoredCounter.^all.Seq.map({ .key => .version }).Hash,
+        %before, 'rebuilt versions agree with the recorded emissions';
+    dies-ok { red-do :transaction, { rebuild-event-counters() } },
+        'maintenance cannot run inside an application transaction';
+};
+
+subtest 'several decision models use one combined event SELECT' => {
+    my @queries;
+    my $*RED-DB = get-RED-DB() but role {
+        multi method prepare(Str $sql) {
+            @queries.push($sql) if ($sql.trim-leading.starts-with('SELECT') || $sql.trim-leading.starts-with('WITH'))
+                && $sql.contains('red_sourcing_event');
+            callsame
+        }
+    };
+    is decision-model((NickDecision) => %(:nick<Alice>), (NickDecision) => %(:nick<Bob>),
+        -> $alice, $bob { $alice.count + $bob.count }), 3, 'both isolated projections receive their facts';
+    is @queries.elems, 1, 'one SELECT restores checkpoints and replays facts for both models';
+    like @queries.head, / '__rs_decision_snapshots' .* '__rs_decision_events' /,
+        'checkpoint and fact reads belong to the same statement';
+};
+
+done-testing;

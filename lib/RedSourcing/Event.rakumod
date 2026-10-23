@@ -3,6 +3,7 @@ use RedSourcing::X::OptimisticLockFailed;
 use RedSourcing::Context;
 use RedSourcing::Flow;
 use RedSourcing::Journal;
+use RedSourcing::Tags;
 use RedSourcing::Projection;
 unit role Event;
 has $!StoredEvent;
@@ -62,9 +63,14 @@ multi method emit (::?CLASS:U: UInt :$version!, Str :$stream!, :%data!, *%_ wher
 	my Mu $stored-event = ::("RedSourcing::StoredEvent");
 	my $event-schema-version = self.^api.UInt // 0;
 	my $mro                  = "|" ~ [|self.^mro, |self.^roles].map(*.^name).grep({ $_ !~~ /"<anon|" \d+ ">"/ }).join("|") ~ "|";
-    journal-do {
-        my $row = $stored-event.^create(:event-schema-version($event-schema-version), :version($version), :stream($stream), :class(self.^name), :mro($mro), :data(%data));
-        trace-emission($row);
+    my %payload = normalize-event-data(%data);
+    # Decision queries exclude checkpoints and native saga controls. Counting
+    # their internal state adds contention and false conflicts without protecting
+    # any eligible decision fact.
+    my %keys = ($mro.contains('|Entity|') || $mro.contains('|RedSourcing::Saga::Control|'))
+        ?? %() !! event-counter-keys(self, %payload, :normalized);
+    journal-append %keys, {
+        my $row = $stored-event.^create(:event-schema-version($event-schema-version), :version($version), :stream($stream), :class(self.^name), :mro($mro), :data(%payload), |emission-causality());
         advance-transactional-projections(self, $row);
         $row
     }

@@ -56,8 +56,7 @@ subtest 'the complete walkthrough runs in the actual line-at-a-time REPL' => {
         'C2 confirm Done',
         'E3 -> confirm-order -> C2',
         'C2 -> E6 (emitted)',
-        'E6 -> SimpleFlow::OrderCard: order-id = demo-1 (applied-projection)',
-        'E3 -> SimpleFlow::OrderCard: order-id = demo-1 (applied-projection)';
+        'Projection state: confirmed';
     my $position = 0;
     for @milestones -> $expected {
         my $found = $output.index($expected, $position);

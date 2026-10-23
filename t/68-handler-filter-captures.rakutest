@@ -1,0 +1,88 @@
+use Test;
+
+# Compile in a fresh process: these failures must precede runtime/database setup.
+sub compile(Str $body, :@include = ()) {
+    my $process = run $*EXECUTABLE, '-Ilib', |@include.map({ '-I' ~ $_ }), '-c', '-e',
+        "use RedSourcing; class Fact does Event \{ has Str \$.key };\n" ~ $body,
+        :out, :err;
+    my $output = $process.out.slurp-rest ~ $process.err.slurp-rest;
+    ($process.exitcode, $output)
+}
+for <aggregate projection saga> -> $kind {
+    my $method = $kind eq 'saga' ?? 'REACT' !! 'APPLY';
+    my ($status, $output) = compile(q:to/SOURCE/.subst('KIND', $kind).subst('METHOD', $method).subst('SAGA-APPLY', $kind eq 'saga' ?? 'method APPLY(Fact $event) { }' !! ''));
+        my $external = 'a';
+        KIND Invalid {
+            SAGA-APPLY
+            method METHOD(Fact $event where { .key eq $external }) { }
+        }
+        die 'reached after invalid declaration';
+        SOURCE
+    isnt $status, 0, "$kind rejects captured lexical at compilation";
+    like $output, / 'Invalid.' $method ' where cannot capture external variable $external' /,
+        'diagnostic names the entity, method and variable';
+}
+for (
+    'my @external = <a b>;' => '@external.grep(.key)',
+    'my %external = a => True;' => '%external{.key}',
+    'my $*external = "a";' => '.key eq $*external',
+    'our $external = "a";' => '.key eq $external',
+    'our $external = "a";' => '.key eq $GLOBAL::external',
+    'my $external = "a";' => '"$external" eq .key',
+) -> $case {
+    my ($status, $output) = compile($case.key ~ "\n" ~
+        'projection Invalid { method APPLY(Fact $event where { ' ~ $case.value ~ ' }) { } }');
+    isnt $status, 0, "rejects external reference: {$case.value}";
+    like $output, / 'cannot capture external variable' /, 'capture diagnostic';
+}
+for (
+    'method APPLY(Fact $event where $external) { }',
+    'method APPLY(Fact $event (:$key where { $_ eq $external })) { }',
+) -> $handler {
+    my ($status, $output) = compile('my $external = "a"; projection Invalid { ' ~ $handler ~ ' }');
+    isnt $status, 0, 'direct constraints and sub-signatures also reject captures';
+    like $output, / 'cannot capture external variable $external' | 'cannot be validated: constraint source unavailable' /,
+        'nested/direct constraints fail with a validation diagnostic';
+}
+my ($status, $output) = compile(q:to/SOURCE/);
+    my $external = 'unused';
+    projection Valid {
+        has Str $.key is entity-id;
+        method APPLY(Fact $event where {
+            my $external = 'a';
+            # $another-external is just a comment.
+            .key eq $external && $event.key eq $!key && '$external' ne ''
+        }) { say $external }
+    }
+    saga ValidSaga {
+        method APPLY(Fact $event) { }
+        has Str $.key is entity-id;
+        method REACT(Fact $event where { $event.key eq $!key }) { }
+    }
+    SOURCE
+is $status, 0, 'event, receiver attributes, local shadowing, comments and literal strings remain valid';
+diag $output if $status;
+my $modules = $*TMPDIR.add('redsourcing-filter-validation-' ~ $*PID);
+$modules.mkdir;
+$modules.add('FilterValidationDomain.rakumod').spurt(q:to/MODULE/);
+    unit module FilterValidationDomain;
+    use RedSourcing;
+    my $external = 'a';
+    class ModuleFact does Event is export { has Str $.key }
+    role ExternalFilter is export {
+        method APPLY(ModuleFact $event where { .key eq $external }) { }
+    }
+    projection ValidParent is export {
+        has Str $.key is entity-id;
+        method APPLY(ModuleFact $event where { .key eq $!key }) { }
+    }
+    MODULE
+for 1..2 -> $pass {
+    my ($status, $output) = compile('use FilterValidationDomain; projection Child is ValidParent { }', :include([$modules.Str]));
+    is $status, 0, "validated inherited filter survives precompilation, pass $pass";
+    diag $output if $status;
+}
+($status, $output) = compile('use FilterValidationDomain; projection Invalid does ExternalFilter { }', :include([$modules.Str]));
+isnt $status, 0, 'uninspected precompiled role cannot bypass validation';
+like $output, / 'Invalid.APPLY where cannot be validated' /, 'missing source produces an explicit diagnostic';
+done-testing;

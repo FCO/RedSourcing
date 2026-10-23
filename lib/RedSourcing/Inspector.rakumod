@@ -1,6 +1,9 @@
 use RedSourcing;
 use JSON::Fast;
 use RedSourcing::Flow;
+use Red::DB;
+use RedSourcing::Storage;
+use RedSourcing::EventType;
 unit class RedSourcing::Inspector;
 
 # No web dependency and no commands/advance calls: inspecting cannot run effects.
@@ -14,13 +17,29 @@ has Bool $.stored-only = False;
 # checkpoint. Saga control records already contain complete state and values.
 method !stored-view {
     my %streams;
-    for StoredEvent.^all.sort(*.id) -> $row {
-        my %item := (%streams{$row.stream} //= %(stream => $row.stream, kind => 'stream',
+    # Transfer the latest head and latest restorable state per stream, not every
+    # historical payload. Unknown event classes remain strictly data-only.
+    my @heads = storage-query(get-RED-DB, q[
+        WITH heads AS (SELECT stream, MAX(id) AS id FROM red_sourcing_event GROUP BY stream),
+        states AS (SELECT stream, MAX(id) AS id FROM red_sourcing_event
+            WHERE ] ~ event-type-sql(get-RED-DB, 'Entity') ~ ' OR '
+            ~ event-type-sql(get-RED-DB, 'RedSourcing::Saga::Control') ~ q[ GROUP BY stream)
+        SELECT head.stream AS head_stream, head.id AS head_id, head.version AS head_version, state.*
+        FROM heads JOIN red_sourcing_event head ON head.id = heads.id
+        LEFT JOIN states ON states.stream = heads.stream
+        LEFT JOIN red_sourcing_event state ON state.id = states.id ORDER BY head.id]);
+    for @heads -> %head {
+        my $stream = %head<head_stream>;
+        my %item := (%streams{$stream} //= %( :$stream, kind => 'stream',
             type => '', ids => [], commands => [], data => {}, state-source => 'unavailable'));
-        %item<latest-event-id> = $row.id;
-        %item<head-version> = $row.version;
+        %item<latest-event-id> = %head<head_id>;
+        %item<head-version> = %head<head_version>;
+        next unless %head<id>.defined;
+        my %data = %head.grep({ !.key.starts-with('head_') }).Hash;
+        my $row = StoredEvent.^new-from-data(%data);
+        %item<state-event-at> = $row.created.Str;
         if $row.mro.contains('|RedSourcing::Saga::Control|') {
-            my %data = from-json(to-json($row.data));
+            my %data = $row.data.Hash;
             %item<type> = $row.stream.split(': ').head;
             %item<kind> = 'saga';
             %item<data> = %(|%data<values>, saga-state => %data<state>);
@@ -31,7 +50,7 @@ method !stored-view {
             %item<version> = $row.version;
         } elsif $row.mro.contains('|Entity|') {
             %item<type> = $row.class;
-            %item<data> = from-json(to-json($row.data));
+            %item<data> = $row.data.Hash;
             %item<kind> = (%item<data><saga-state>:exists) ?? 'saga'
                 !! $row.replay-cursor.defined ?? 'projection' !! 'aggregate';
             %item<status> = %item<data><saga-state><status> if %item<kind> eq 'saga';
@@ -41,20 +60,16 @@ method !stored-view {
             %item<version> = $row.version;
         }
     }
-    for observed-flow-entities().List -> %observation {
-        my %item := (%streams{%observation<stream>} //= %(|%observation,
-            ids => %observation<identity>.keys.sort.Array, commands => [],
-            data => %observation<identity>, state-source => 'observed replay'));
-        %item<identity> //= %observation<identity>;
-        %item<ids> = %observation<identity>.keys.sort.Array unless %item<ids>.elems;
-    }
-    for StoredCommand.^all.sort(*.id) -> $row {
-        my %item := (%streams{$row.stream} //= %(stream => $row.stream, kind => 'entity',
-            type => $row.entity, ids => [], commands => [], data => {}, state-source => 'unavailable'));
-        %item<type> ||= $row.entity;
-        %item<ids> = $row.entity-ids.keys.sort.Array;
-        %item<identity> = from-json(to-json($row.entity-ids));
-        %item<commands>.push($row.method) unless $row.method eq any(%item<commands>.List);
+    for storage-query(get-RED-DB,
+            'SELECT stream, entity, entity_ids, method FROM red_sourcing_command ORDER BY id') -> %row {
+        my $stream = %row<stream>;
+        my %identity = %row<entity_ids> ~~ Str ?? from-json(%row<entity_ids>) !! %row<entity_ids>.Hash;
+        my %item := (%streams{$stream} //= %( :$stream, kind => 'entity',
+            type => %row<entity>, ids => [], commands => [], data => {}, state-source => 'unavailable'));
+        %item<type> ||= %row<entity>;
+        %item<ids> = %identity.keys.sort.Array;
+        %item<identity> = %identity;
+        %item<commands>.push(%row<method>) unless %row<method> eq any(%item<commands>.List);
     }
     my %types;
     for %streams.values -> %item {
@@ -217,12 +232,15 @@ method commands(UInt :$limit = 60, Str :$stream = '', Str :$type = '', UInt :$id
     }).Array
 }
 method revision(--> Str) {
-    my $last = StoredEvent.^all.sort(-*.id).head;
-    # Commands can change without an event, including validation failures.
-    ($last ?? $last.id !! 0) ~ ':' ~ StoredCommand.^all.sort(*.id).Seq.map({
-        "{.id}/{.state}/{.tries}"
+    my $last = storage-query(get-RED-DB, 'SELECT MAX(id) AS id FROM red_sourcing_event').head<id> // 0;
+    my $column = StoredCommand.^columns.first(*.name eq '$!state').column;
+    my @commands = storage-query(get-RED-DB, 'SELECT id, state, tries FROM red_sourcing_command ORDER BY id');
+    $last ~ ':' ~ @commands.map({
+        my $state = .<state>.defined ?? $column.inflate.(.<state>, $column.attr.type) !! StoredCommand::Pending;
+        "{.<id>}/{$state.Str}/{.<tries> // 0}"
     }).join(',')
 }
+
 method report(UInt :$limit = 60) {
     if $!stored-only {
         my %stored = self!stored-view;

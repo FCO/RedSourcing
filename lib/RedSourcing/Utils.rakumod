@@ -58,6 +58,15 @@ multi sub rules-from-func($invocant, &func) is export {
 	&func.candidates.map: { signature-to-pair(.signature, $invocant, True) }
 }
 
+sub rules-from-methods($receiver, @names) is export {
+    my @rules;
+    for @names -> $name {
+        my $method = $receiver.^find_method($name);
+        @rules.append(rules-from-func($receiver, $method)) if $method.defined;
+    }
+    @rules
+}
+
 sub validate-sub-signature(Signature $signature) {
 	for $signature.params -> $param {
 		die "Sub-signatures only accept named scalar parameters"
@@ -86,6 +95,11 @@ sub query-signature(Signature $original, Int $index --> Signature) {
 }
 
 sub signature-to-pair(Signature $original, Mu $invocant, Bool $bound --> Pair()) {
+    prepare-rule($original, $bound)($invocant)
+}
+
+# Prepare immutable signature metadata once; bind a fresh receiver on every use.
+sub prepare-rule(Signature $original, Bool $bound = True) is export {
 	my @params = $original.params;
 	my @indexes = @params.keys.grep: {
 		!@params[$_].invocant && !@params[$_].slurpy
@@ -96,18 +110,20 @@ sub signature-to-pair(Signature $original, Mu $invocant, Bool $bound --> Pair())
 	die "Method rules require an invocant: rules-from-func(\$instance, &method)"
 		if $receiver.defined && !$bound;
 	die "A subroutine rule does not accept an invocant" if !$receiver.defined && $bound;
-	die "The invocant does not match the method's type"
-		if $receiver.defined && !($invocant ~~ $receiver.type);
 
 	my $index = @indexes.head;
 	my $param = @params[$index];
 	my $sub-signature = $param.sub_signature;
 	validate-sub-signature($sub-signature) if $sub-signature;
 	my $signature = query-signature($original, $index);
-	$param.type => -> $event-view {
-		my $view = $sub-signature
-			?? SignatureView.new(:json($event-view.json), :$sub-signature)
-			!! $event-view;
-		$signature.ACCEPTS($receiver.defined ?? \($invocant, $view) !! \($view))
+	-> Mu $invocant {
+		die "The invocant does not match the method's type"
+			if $receiver.defined && !($invocant ~~ $receiver.type);
+		$param.type => -> $event-view {
+			my $view = $sub-signature
+				?? SignatureView.new(:json($event-view.json), :$sub-signature)
+				!! $event-view;
+			$signature.ACCEPTS($receiver.defined ?? \($invocant, $view) !! \($view))
+		}
 	}
 }

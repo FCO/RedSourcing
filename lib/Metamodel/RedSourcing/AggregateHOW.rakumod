@@ -5,6 +5,7 @@ use RedSourcing::Context;
 use RedSourcing::Event;
 use RedSourcing::Lifecycle;
 use RedSourcing::Journal;
+use RedSourcing::Storage;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
@@ -95,6 +96,26 @@ method compose(Mu \entity, |) {
 	}
 }
 
+method restore-and-replay(Mu:U \type, Str :$stream!, *%initial) {
+    # Custom reconstruction hooks continue through the original call chain.
+    return callsame unless type.HOW.^find_method('restore') === Metamodel::RedSourcing::EntityHOW.^find_method('restore')
+        && type.HOW.^find_method('replay') === Metamodel::RedSourcing::AggregateHOW.^find_method('replay')
+        && type.HOW.^find_method('apply-new-events-of-stream') === Metamodel::RedSourcing::AggregateHOW.^find_method('apply-new-events-of-stream');
+    return callsame if <restore replay apply-new-events-of-stream>.grep({ type.HOW.^find_method($_).is-wrapped }).elems;
+    require ::("RedSourcing::StoredEvent");
+    my $batch = storage-aggregate-rows(::('RedSourcing::StoredEvent'), type.^name, $stream);
+    return callsame if $batch<unsupported>;
+    my $entity = type.^restore-state($batch<snapshot>, :$stream, |%initial);
+    my $cursor = $batch<snapshot>.replay-cursor // $batch<snapshot>.id;
+    if $entity.^current-id == $cursor && $entity.^stream eq $stream {
+        $entity.^apply-model($_) for $batch<events>.List;
+        return %( :$entity, combined => True );
+    }
+    # A custom restore-state may choose a different stream or cursor.
+    $entity.^replay;
+    %( :$entity, combined => False )
+}
+
 method restore-state(Mu:U \type, $snapshot, Str :$stream!, *%initial) {
 	die "No snapshot for {type.^name} in '$stream'" unless $snapshot;
 	$snapshot.COERCE(type)
@@ -106,6 +127,13 @@ method replay(\entity) {
 
 method apply-new-events-of-stream(\entity) {
 	require ::("RedSourcing::StoredEvent");
+    if entity.^lifecycle == Cached {
+        my $tail = storage-stream-tail(::('RedSourcing::StoredEvent'), entity.^stream, entity.^current-id);
+        if $tail.defined {
+            entity.^apply-model($_) for $tail.List;
+            return;
+        }
+    }
 	entity.^apply-model: $_ for ::("RedSourcing::StoredEvent").list-events:
 		:row,
 		:stream(entity.^stream),

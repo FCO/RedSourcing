@@ -1,0 +1,437 @@
+{
+  "date": "2026-10-21",
+  "runtime": "Rakudo 2026.09 / Red 0.2.7",
+  "driver": "SQLite :memory:",
+  "methodology": "Five alternating samples after one warmup per version/workload, isolated source copies, no concurrent tests. Counter workloads: 1000 operations, eight keys, fresh guarded expectations on each write; setup excluded. Empty: 50 decisions. School includes startup/schema/tracing.",
+  "acceptance": "Both counter medians improve at least 5%, at least four favorable paired samples each, school median regression at most 2%.",
+  "accepted": true,
+  "summary": {
+    "read": {
+      "before_median_seconds": 0.371827635,
+      "after_median_seconds": 0.310268311,
+      "change_percent": -16.555876488308886,
+      "favorable_pairs": 5
+    },
+    "write": {
+      "before_median_seconds": 1.088525074,
+      "after_median_seconds": 0.898571089,
+      "change_percent": -17.450584238907485,
+      "favorable_pairs": 5
+    },
+    "empty": {
+      "before_median_seconds": 0.111548732,
+      "after_median_seconds": 0.090511716,
+      "change_percent": -18.859036425443175,
+      "favorable_pairs": 5
+    },
+    "school": {
+      "before_median_seconds": 5.489881374989636,
+      "after_median_seconds": 5.4860846669762395,
+      "change_percent": -0.06915828875089236,
+      "favorable_pairs": 3
+    }
+  },
+  "samples_raw": {
+    "read": {
+      "before": [
+        {
+          "kind": "read",
+          "sum": 16000,
+          "version": 2,
+          "keys": 8,
+          "iterations": 1000,
+          "seconds": 0.371827635
+        },
+        {
+          "seconds": 0.372727644,
+          "keys": 8,
+          "sum": 16000,
+          "kind": "read",
+          "iterations": 1000,
+          "version": 2
+        },
+        {
+          "seconds": 0.358838912,
+          "version": 2,
+          "iterations": 1000,
+          "kind": "read",
+          "keys": 8,
+          "sum": 16000
+        },
+        {
+          "keys": 8,
+          "iterations": 1000,
+          "version": 2,
+          "seconds": 0.37295623,
+          "sum": 16000,
+          "kind": "read"
+        },
+        {
+          "sum": 16000,
+          "version": 2,
+          "keys": 8,
+          "kind": "read",
+          "iterations": 1000,
+          "seconds": 0.366191992
+        }
+      ],
+      "after": [
+        {
+          "version": 2,
+          "iterations": 1000,
+          "sum": 16000,
+          "kind": "read",
+          "seconds": 0.314495898,
+          "keys": 8
+        },
+        {
+          "version": 2,
+          "kind": "read",
+          "seconds": 0.310268311,
+          "iterations": 1000,
+          "keys": 8,
+          "sum": 16000
+        },
+        {
+          "kind": "read",
+          "sum": 16000,
+          "seconds": 0.309291093,
+          "keys": 8,
+          "version": 2,
+          "iterations": 1000
+        },
+        {
+          "kind": "read",
+          "iterations": 1000,
+          "seconds": 0.305583053,
+          "keys": 8,
+          "sum": 16000,
+          "version": 2
+        },
+        {
+          "sum": 16000,
+          "seconds": 0.311369239,
+          "kind": "read",
+          "iterations": 1000,
+          "version": 2,
+          "keys": 8
+        }
+      ]
+    },
+    "write": {
+      "before": [
+        {
+          "keys": 8,
+          "seconds": 1.096481993,
+          "iterations": 1000,
+          "sum": 0,
+          "version": 1002,
+          "kind": "write"
+        },
+        {
+          "seconds": 1.084072444,
+          "iterations": 1000,
+          "kind": "write",
+          "version": 1002,
+          "sum": 0,
+          "keys": 8
+        },
+        {
+          "seconds": 1.108648414,
+          "sum": 0,
+          "keys": 8,
+          "kind": "write",
+          "iterations": 1000,
+          "version": 1002
+        },
+        {
+          "keys": 8,
+          "seconds": 1.088525074,
+          "version": 1002,
+          "sum": 0,
+          "kind": "write",
+          "iterations": 1000
+        },
+        {
+          "seconds": 1.085193331,
+          "kind": "write",
+          "iterations": 1000,
+          "keys": 8,
+          "sum": 0,
+          "version": 1002
+        }
+      ],
+      "after": [
+        {
+          "kind": "write",
+          "sum": 0,
+          "keys": 8,
+          "version": 1002,
+          "iterations": 1000,
+          "seconds": 0.898571089
+        },
+        {
+          "sum": 0,
+          "version": 1002,
+          "seconds": 0.896085313,
+          "keys": 8,
+          "kind": "write",
+          "iterations": 1000
+        },
+        {
+          "keys": 8,
+          "seconds": 0.892979863,
+          "sum": 0,
+          "version": 1002,
+          "kind": "write",
+          "iterations": 1000
+        },
+        {
+          "keys": 8,
+          "seconds": 0.903640018,
+          "kind": "write",
+          "iterations": 1000,
+          "version": 1002,
+          "sum": 0
+        },
+        {
+          "seconds": 0.902161211,
+          "kind": "write",
+          "version": 1002,
+          "sum": 0,
+          "keys": 8,
+          "iterations": 1000
+        }
+      ]
+    },
+    "empty": {
+      "before": [
+        {
+          "sum": 0,
+          "tail": 0,
+          "iterations": 50,
+          "checkpoint": false,
+          "streams": 4,
+          "history": 0,
+          "applied": 0,
+          "seconds": 0.111548732
+        },
+        {
+          "history": 0,
+          "applied": 0,
+          "seconds": 0.107391187,
+          "sum": 0,
+          "checkpoint": false,
+          "tail": 0,
+          "streams": 4,
+          "iterations": 50
+        },
+        {
+          "iterations": 50,
+          "seconds": 0.1101628,
+          "sum": 0,
+          "history": 0,
+          "applied": 0,
+          "tail": 0,
+          "streams": 4,
+          "checkpoint": false
+        },
+        {
+          "streams": 4,
+          "applied": 0,
+          "tail": 0,
+          "seconds": 0.11224974,
+          "checkpoint": false,
+          "sum": 0,
+          "iterations": 50,
+          "history": 0
+        },
+        {
+          "sum": 0,
+          "tail": 0,
+          "seconds": 0.112511117,
+          "iterations": 50,
+          "checkpoint": false,
+          "history": 0,
+          "applied": 0,
+          "streams": 4
+        }
+      ],
+      "after": [
+        {
+          "iterations": 50,
+          "checkpoint": false,
+          "applied": 0,
+          "streams": 4,
+          "sum": 0,
+          "tail": 0,
+          "history": 0,
+          "seconds": 0.0898575
+        },
+        {
+          "tail": 0,
+          "sum": 0,
+          "checkpoint": false,
+          "seconds": 0.090511716,
+          "streams": 4,
+          "history": 0,
+          "iterations": 50,
+          "applied": 0
+        },
+        {
+          "history": 0,
+          "applied": 0,
+          "checkpoint": false,
+          "sum": 0,
+          "streams": 4,
+          "seconds": 0.090756427,
+          "iterations": 50,
+          "tail": 0
+        },
+        {
+          "streams": 4,
+          "history": 0,
+          "sum": 0,
+          "seconds": 0.089823584,
+          "tail": 0,
+          "applied": 0,
+          "iterations": 50,
+          "checkpoint": false
+        },
+        {
+          "streams": 4,
+          "applied": 0,
+          "tail": 0,
+          "iterations": 50,
+          "seconds": 0.092447778,
+          "checkpoint": false,
+          "sum": 0,
+          "history": 0
+        }
+      ]
+    },
+    "school": {
+      "before": [
+        {
+          "seconds": 5.495100916014053,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.462890916969627,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.489881374989636,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.490739833039697,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.4826235420187,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        }
+      ],
+      "after": [
+        {
+          "seconds": 5.490343249985017,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.45675970800221,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.473444917006418,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.4933106250246055,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        },
+        {
+          "seconds": 5.4860846669762395,
+          "output": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+        }
+      ]
+    }
+  },
+  "prototype_patch": "--- a/lib/RedSourcing/Storage.rakumod\n+++ b/lib/RedSourcing/Storage.rakumod\n@@ -335,31 +335,41 @@\n         }\n         $connection.deflate($value)\n     };\n+    $connection.^mro.map(*.^name).first(* eq 'Red::Driver::SQLite').defined\n+        ?? sqlite-storage-query($connection, $entry.key, @binds, :$cache)\n+        !! storage-query($connection, $entry.key, |@binds)\n+}\n+\n+# Explicit opt-in for trusted statement shapes. Raw binds are deflated exactly\n+# once; PostgreSQL retains its driver's existing prepared-statement cache.\n+sub storage-prepared-query($connection, Str $sql, *@binds --> Array) is export {\n+    return storage-query($connection, $sql, |@binds)\n+        unless $connection.^mro.map(*.^name).first(* eq 'Red::Driver::SQLite').defined;\n+    sqlite-storage-query($connection, $sql, @binds.map({ $connection.deflate($_) }).Array)\n+}\n+\n+sub sqlite-storage-query($connection, Str $sql, @binds, Bool :$cache = True --> Array) {\n     my @rows;\n-    if $connection.^mro.map(*.^name).first(* eq 'Red::Driver::SQLite').defined {\n-        my $attribute = $connection.^attributes.first(*.name eq '$!dbh');\n-        my $native = $attribute.get_value($connection);\n-        $read-install-lock.protect: { $native does SQLiteReadHandles unless $native ~~ SQLiteReadHandles };\n-        my &read = {\n-            CATCH { default { $connection.map-exception($_).throw } }\n-            my $success = False;\n-            my $handle = $cache\n-                ?? $native.acquire-read($entry.key, { $connection.prepare($entry.key).statement })\n-                !! $connection.prepare($entry.key).statement;\n-            LEAVE $native.release-read($entry.key, $handle, $success && $cache) if $handle.defined;\n-            $handle.execute(|@binds);\n-            loop {\n-                my $row = $handle.row(:hash);\n-                last unless $row ~~ Associative && $row.elems;\n-                @rows.push($row);\n-            }\n-            $success = True;\n-        };\n-        my $guard = $connection.?transaction-guard;\n-        $guard.defined ?? $guard.protect(&read) !! read();\n-    } else {\n-        @rows = storage-query($connection, $entry.key, |@binds);\n-    }\n+    my $attribute = $connection.^attributes.first(*.name eq '$!dbh');\n+    my $native = $attribute.get_value($connection);\n+    $read-install-lock.protect: { $native does SQLiteReadHandles unless $native ~~ SQLiteReadHandles };\n+    my &read = {\n+        CATCH { default { $connection.map-exception($_).throw } }\n+        my $success = False;\n+        my $handle = $cache\n+            ?? $native.acquire-read($sql, { $connection.prepare($sql).statement })\n+            !! $connection.prepare($sql).statement;\n+        LEAVE $native.release-read($sql, $handle, $success && $cache) if $handle.defined;\n+        $handle.execute(|@binds);\n+        loop {\n+            my $row = $handle.row(:hash);\n+            last unless $row ~~ Associative && $row.elems;\n+            @rows.push($row);\n+        }\n+        $success = True;\n+    };\n+    my $guard = $connection.?transaction-guard;\n+    $guard.defined ?? $guard.protect(&read) !! read();\n     @rows\n }\n \n--- a/lib/RedSourcing/Counters.rakumod\n+++ b/lib/RedSourcing/Counters.rakumod\n@@ -40,7 +40,7 @@\n     my %versions = %keys.keys.map({ $_ => 0 });\n     for %keys.keys.sort.rotor(128, :partial) -> @chunk {\n         my @binds = placeholders($connection, @chunk.elems);\n-        for counter-sql($connection,\n+        for storage-prepared-query($connection,\n                 'SELECT key, definition, version FROM red_sourcing_counter WHERE key IN ('\n                 ~ @binds.join(',') ~ ')', |@chunk) -> %row {\n             die 'Event counter key collision' unless %keys{%row<key>} eq %row<definition>;\n@@ -67,13 +67,13 @@\n         $sql = 'UPDATE red_sourcing_counter SET version = version + ' ~ @q[0]\n             ~ ' WHERE key = ' ~ @q[1] ~ ' AND definition = ' ~ @q[2]\n             ~ ' AND version = ' ~ @q[3] ~ ' RETURNING definition, version';\n-        my @rows = counter-sql($connection, $sql, $increment, $key, $definition, $expected);\n+        my @rows = storage-prepared-query($connection, $sql, $increment, $key, $definition, $expected);\n         RedSourcing::X::OptimisticLockFailed.new(:boundary<event-tags>).throw unless @rows;\n         return @rows.head<version>.UInt;\n     }\n     my @values = $key, $definition, $increment;\n     @values.push($expected) if $expected.defined;\n-    my @rows = counter-sql($connection, $sql, |@values);\n+    my @rows = storage-prepared-query($connection, $sql, |@values);\n     RedSourcing::X::OptimisticLockFailed.new(:boundary<event-tags>).throw unless @rows;\n     die 'Event counter key collision' unless @rows.head<definition> eq $definition;\n     @rows.head<version>.UInt\n@@ -82,6 +82,10 @@\n # Update a sorted batch in one statement. A guarded row that disappeared or\n # changed produces no RETURNING row; the caller rolls back the complete append.\n sub update-counters($connection, %changes --> Hash) is export {\n+    counter-batches($connection, %changes, :prepared)\n+}\n+\n+sub counter-batches($connection, %changes, Bool :$prepared = False --> Hash) {\n     my %versions;\n     for %changes.keys.sort.rotor(128, :partial) -> @keys {\n         my @values;\n@@ -105,7 +109,8 @@\n             ~ '((SELECT expected FROM changes WHERE changes.key = excluded.key) IS NULL OR '\n             ~ 'red_sourcing_counter.version = (SELECT expected FROM changes WHERE changes.key = excluded.key)) '\n             ~ 'RETURNING key, definition, version';\n-        my @rows = counter-sql($connection, $sql, |@values);\n+        my @rows = $prepared ?? storage-prepared-query($connection, $sql, |@values)\n+            !! counter-sql($connection, $sql, |@values);\n         RedSourcing::X::OptimisticLockFailed.new(:boundary<event-tags>).throw\n             unless @rows.elems == @keys.elems;\n         for @rows -> %row {\n@@ -138,7 +143,7 @@\n         counter-sql($connection, 'DELETE FROM red_sourcing_counter');\n         my %pending;\n         sub flush {\n-            update-counters($connection, %pending);\n+            counter-batches($connection, %pending);\n             %pending = ();\n         }\n         for ::('RedSourcing::StoredEvent').^all.sort(*.id).Seq -> $row {\n--- a/t/59-storage-performance.rakutest\n+++ b/t/59-storage-performance.rakutest\n@@ -40,11 +40,23 @@\n         $row\n     }\n }\n+my @executed;\n+my role CountExecutions {\n+    has Str $.observed-sql is rw;\n+    method execute(|) {\n+        @executed.push($!observed-sql);\n+        callsame\n+    }\n+}\n my role QueryCount {\n     multi method prepare(Str $sql, |args) {\n         @prepared.push($sql);\n         my $statement = callsame;\n-        $statement does CountPayloadRows;\n+        my $executor = is-pg(self) ?? $statement\n+            !! ($statement.statement.^can('execute') ?? $statement.statement !! $statement);\n+        $executor does CountExecutions unless $executor ~~ CountExecutions;\n+        $executor.observed-sql = $sql;\n+        $statement does CountPayloadRows unless $statement ~~ CountPayloadRows;\n         $statement\n     }\n }\n@@ -143,8 +155,9 @@\n     is read-counters(journal-connection(), %($key)){$key.key}, 1, 'guard version also rolls back';\n     is StoredEvent.list-events(:stream<conflict>, :row).elems, 0, 'failed append leaves no event';\n     @prepared = ();\n+    @executed = ();\n     WideStorageFact.emit(:stream<wide>, :version(1), :%values);\n-    is @prepared.grep(*.starts-with('WITH changes(')).elems, 2, '151 field keys need two SQL batches';\n+    is @executed.grep(*.starts-with('WITH changes(')).elems, 2, '151 field keys execute two SQL batches';\n     is RedSourcing::StoredCounter.^all.elems, $before + 151, 'every exact field/value counter was updated';\n };\n subtest 'monitor traversal batches cards and storage INSERT shapes are stable' => {\n",
+  "prototype_test_source": "use Test;\nuse RedSourcing;\nuse RedSourcing::Config;\nuse RedSourcing::Counters;\nuse RedSourcing::Storage;\nuse RedSourcing::Journal;\n\nmy (%prepares, %executions, %disposals);\nmy ($fail-prepare, $fail-execute) = False, False;\nmy role ObserveStatement {\n    has Str $.observed-sql is rw;\n    method execute(|) {\n        %executions{$!observed-sql}++;\n        die 'injected execute failure' if $fail-execute && $!observed-sql.contains('fault');\n        callsame\n    }\n    method dispose(|) { %disposals{$!observed-sql}++; callsame }\n}\nmy role ObserveDriver {\n    multi method prepare(Str $sql, |) {\n        die 'injected prepare failure' if $fail-prepare && $sql.contains('fault');\n        %prepares{$sql}++;\n        my $statement = callsame;\n        $statement.statement does ObserveStatement;\n        $statement.statement.observed-sql = $sql;\n        $statement\n    }\n}\nmy $*RED-DB = store-driver('SQLite', ':memory:');\nschema(StoredEvent, StoredCommand).create;\ninitialize-counters;\n$*RED-DB does ObserveDriver;\nmy $connection = journal-connection();\nsub write($key, $definition, $increment, *%options) {\n    red-do :transaction, { update-counter($connection, $key, $definition, $increment, |%options) }\n}\nis write('a', 'A', 1, :expected(0)), 1, 'missing counter accepts expected zero';\nis write('b', 'B', 3, :expected(0)), 3, 'reused INSERT binds a different key and increment';\nis write('a', 'A', 2, :expected(1)), 3, 'positive expectation advances existing counter';\nis write('b', 'B', 1, :expected(3)), 4, 'reused UPDATE binds the current expectation';\nis write('a', 'A', 1), 4, 'undefined expectation uses unguarded UPSERT';\nis write('b', 'B', 2), 6, 'reused unguarded UPSERT keeps fresh values';\nis read-counters($connection, {a => 'A'})<a>, 4, 'read sees current version';\nis read-counters($connection, {b => 'B'})<b>, 6, 'same read shape binds another key';\nmy $select = %prepares.keys.first(*.starts-with('SELECT key, definition, version'));\nis %prepares{$select}, 1, 'repeated counter read prepares once';\nis %executions{$select}, 2, 'both counter reads execute';\nmy $update = %prepares.keys.first(*.starts-with('UPDATE red_sourcing_counter'));\nis %prepares{$update}, 1, 'guarded UPDATE prepares once';\nis %executions{$update}, 2, 'both guarded updates execute';\nthrows-like { write('a', 'A', 1, :expected(1)) }, RedSourcing::X::OptimisticLockFailed;\nis write('a', 'A', 1, :expected(4)), 5, 'statement remains usable after an optimistic rollback';\ndies-ok { red-do :transaction, { update-counter($connection, 'a', 'A', 10); die 'abort' } }, 'caller rollback propagates';\nis read-counters($connection, {a => 'A'})<a>, 5, 'reused read does not retain the rolled-back version';\nthrows-like { write('a', 'wrong', 1) }, Exception, message => / 'collision' | 'Optimistic' /;\nis read-counters($connection, {a => 'A'})<a>, 5, 'definition collision preserves the durable counter';\nmy %changes = a => {definition => 'A', increment => 1}, b => {definition => 'B', increment => 1};\nred-do :transaction, { update-counters($connection, %changes) };\nred-do :transaction, { update-counters($connection, %changes) };\nis-deeply read-counters($connection, {a => 'A', b => 'B'}), {a => 7, b => 8},\n    'batch RETURNING executes twice with NULL expectations';\nmy $batch = %prepares.keys.first(*.starts-with('WITH changes('));\nis %prepares{$batch}, 1, 'batch statement prepares once';\nis %executions{$batch}, 2, 'batch statement executes twice';\nmy $fault = 'SELECT ? AS fault';\n$fail-prepare = True;\nthrows-like { storage-prepared-query($connection, $fault, 1) }, Exception,\n    message => / 'injected prepare failure' /;\n$fail-prepare = False;\nis storage-prepared-query($connection, $fault, 2).head<fault>, 2, 'prepare failure does not poison the connection';\n$fail-execute = True;\nthrows-like { storage-prepared-query($connection, $fault, 3) }, Exception,\n    message => / 'injected execute failure' /;\n$fail-execute = False;\nis %disposals{$fault}, 1, 'failed execution disposes its leased statement';\nis storage-prepared-query($connection, $fault, 4).head<fault>, 4, 'next execution prepares a healthy replacement';\nis %prepares{$fault}, 2, 'failed native statement is not returned to the cache';\nmy $before-eviction = %prepares{$select};\nfor ^128 -> $slot {\n    storage-prepared-query($connection, \"SELECT ? AS pool_slot_$slot\", $slot);\n}\nis read-counters($connection, {a => 'A'})<a>, 7, 'counter read survives idle-pool eviction';\nis %prepares{$select}, $before-eviction + 1, 'counter statements share the existing bounded pool';\nmy $native = $connection.^attributes.first(*.name eq '$!dbh').get_value($connection);\nlives-ok { $native.teardown-connection-state }, 'teardown closes cached counter statements';\nmy $old = %prepares{$select};\nis read-counters($connection, {a => 'A'})<a>, 7, 'counter read works after connection-state reset';\nis %prepares{$select}, $old + 1, 'reset forces a new native preparation';\n{\n    my $*RED-DB = store-driver('SQLite', ':memory:');\n    schema(StoredEvent, StoredCommand).create;\n    initialize-counters;\n    $*RED-DB does ObserveDriver;\n    my $other = journal-connection();\n    is read-counters($other, {a => 'A'})<a>, 0, 'another connection has its own counter state';\n    is %prepares{$select}, $old + 2, 'physical connections do not share native statements';\n}\ndone-testing;\n",
+  "prototype_source_sha256": {
+    "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+    "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+    "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+    "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+    "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+    "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+    "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+    "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+    "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+    "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+    "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+    "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+    "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+    "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+    "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+    "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+    "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+    "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+    "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+    "lib/RedSourcing/Storage.rakumod": "e807bda2a5c90a1b5724bdddd0a1e91ea8386377e9b8d828462b4baaa7f5b204",
+    "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+    "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+    "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+    "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+    "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+    "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+    "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+    "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+    "lib/RedSourcing/Lifecycle.rakumod": "ec845dccdd3705a985dd024a6f73dbccbe7c90368bd72b9bf9354e82f0b20e2c",
+    "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+    "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+    "lib/RedSourcing/Decision.rakumod": "678447f16dc275cd80a268e5a45ff5e4d28647a037b8ad341188ed88f0ed2ffa",
+    "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+    "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+    "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+    "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+    "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+    "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+    "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+    "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+    "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+    "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+    "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+    "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+    "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+    "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+    "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+    "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+    "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+    "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+    "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+    "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+    "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+    "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+    "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+  },
+  "retained": true,
+  "validation": {
+    "main_suite": {
+      "files": 70,
+      "failed": 0
+    },
+    "postgresql_integrations": {
+      "files": 13,
+      "failed": 0,
+      "note": "59 rerun after correcting execution instrumentation; PostgreSQL production execution remains unchanged."
+    },
+    "rakuast_files": [
+      "t/61-query-templates.rakutest",
+      "t/69-decision-snapshots.rakutest",
+      "t/70-counter-statements.rakutest"
+    ],
+    "counter_statement_assertions": 34
+  }
+}

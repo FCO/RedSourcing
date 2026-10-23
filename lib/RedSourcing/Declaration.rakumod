@@ -3,6 +3,7 @@ unit module RedSourcing::Declaration;
 use nqp;
 use experimental :rakuast;
 use RedSourcing::Lifecycle;
+use RedSourcing::QueryTemplate;
 
 # Reuse the package trait hook so configuration happens before composition.
 # The compiler's cursor and declarand may be NQP objects, hence Mu parameters.
@@ -62,6 +63,22 @@ my role DeclarationGrammar {
 }
 
 my role DeclarationActions {
+    method post_constraint(Mu $/) {
+        callsame;
+        my Mu $expression := nqp::atkey($/.hash, 'EXPR');
+        return if nqp::isnull($expression);
+        my Mu $info := nqp::getlexdyn('%*PARAM_INFO');
+        return unless nqp::ishash($info);
+        my Mu $constraints := nqp::atkey($info, 'post_constraints');
+        return unless nqp::islist($constraints) && nqp::elems($constraints);
+        record-query-constraint(nqp::atpos($constraints, nqp::elems($constraints) - 1), $expression.Str,
+            :ast($expression.ast));
+    }
+    method post-constraint(Mu $/) {
+        callsame;
+        my Mu $expression := nqp::atkey($/.hash, 'EXPR');
+        record-query-constraint($expression.ast, $expression.Str, :ast($expression.ast)) unless nqp::isnull($expression);
+    }
     method trait_mod:sym<entity-options>(Mu $/) {
         my Mu $arguments := nqp::atkey($/.hash, 'circumfix').ast;
         if nqp::can(self, 'attach') {
@@ -75,9 +92,10 @@ my role DeclarationActions {
     method trait_mod:sym<entity-lifecycle>(Mu $/) {
         my $name = nqp::atkey($/.hash, 'identifier').Str;
         my $lifecycle = do given $name {
+            when 'Cached' { Cached }
             when 'Retained' { Retained }
             when 'OnDemand' { OnDemand }
-            default { die "Unknown entity lifecycle '$name': expected OnDemand or Retained" }
+            default { die "Unknown entity lifecycle '$name': expected OnDemand, Retained or Cached" }
         };
         if nqp::can(self, 'attach') {
             self.attach($/, ASTLifecycleTrait.new(:$lifecycle));

@@ -6,13 +6,13 @@ Use `use RedSourcing` for the public declarations, roles, traits, `StoredEvent`,
 Configure a connection and initialize tables before using the examples below;
 see [shared configuration](configuration.md).
 
-`decision-model` takes projection proxies followed by a block receiving isolated,
+`decision-model` takes `(ProjectionType) => %ids` pairs followed by a block receiving isolated,
 loaded projections. It infers their combined event query from `APPLY` and guards
 all appends in the block with an optimistic consistency check. Conflicts retry
 the complete stored command. See [decision models](decision-models.md) and the
 [school example](../examples/school/README.md).
 
-`EntityLifecycle` exposes `OnDemand` and `Retained` for all three entity kinds.
+`EntityLifecycle` exposes `Cached` (the default), `OnDemand` and `Retained` for all three entity kinds.
 Declarations accept brackets, such as `aggregate Account[:retained] { ... }`,
 `projection Balance[:retained] { ... }` and `saga PurchaseWorkflow[:retained] { ... }`.
 `.^lifecycle` queries the effective mode; `.^lifecycle(:declared)` queries the
@@ -445,7 +445,7 @@ $projection = $totals.^load; # Restore, then replay newer events
 $projection.^apply-new-applyable-events;  # Incremental replay on this instance
 ```
 
-Initial loading returns a new entity with the default `OnDemand` lifecycle.
+Initial loading reconstructs an entity; the default `Cached` lifecycle reuses it while it remains in the bounded cache.
 `Retained` lifecycle reuses registered instances on the connection/pool. For an
 already initialized projection, use:
 
@@ -585,7 +585,7 @@ reconstruction before the handler is invoked do not increment this counter.
 command row lock, rechecks state/schedule, reconstructs the entity from committed
 events and runs the same handler with its stored normalized arguments. It makes
 up to **five attempts per execution pass**. Only the successful attempt commits
-its events, telemetry and result. Defaults are not evaluated again.
+its events, causal metadata and result. Defaults are not evaluated again.
 
 If all five attempts conflict, the command remains `Pending`, retains its schedule
 and invocation count, and has no saved failure/result. The last conflict is

@@ -1,0 +1,68 @@
+use Test;
+use RedSourcing;
+use MONKEY-SEE-NO-EVAL;
+
+my $builds = 0;
+my $tweaks = 0;
+class ConversionHook does Event {
+    has Str $.name is required;
+    has Int $.amount = 7;
+    submethod BUILD(:$name!, :$amount = 7, |) {
+        $builds++;
+        die 'bad payload' if $name eq 'bad';
+        $!name = $name; $!amount = $amount;
+    }
+    submethod TWEAK(|) { $tweaks++ }
+}
+class ConversionInherited is ConversionHook { }
+class ConversionParallel does Event { has Str $.name is required }
+
+sub row($type, %data, UInt :$id = 1) {
+    StoredEvent.new(:$id, :class($type.^name), :mro('|' ~ $type.^name ~ '|'),
+        :stream("conversion-$id"), :version(1), :created(DateTime.new('2026-01-01T00:00:00Z')),
+        :command-id($id + 100), :action-id("action-$id"), :data(%data))
+}
+
+for ConversionHook, ConversionInherited -> $type {
+    for ^3 -> $i {
+        my $record = row($type, %(name => "payload-$i"), :id($i + 1));
+        my ($before-builds, $before-tweaks) = $builds, $tweaks;
+        my $event = $record.COERCE;
+        is $builds, $before-builds + 1, 'BUILD runs on every conversion';
+        is $tweaks, $before-tweaks + 1, 'TWEAK runs on every conversion';
+        is $event.name, "payload-$i", 'cached descriptor reads current payload';
+        is $event.amount, 7, 'constructor default is preserved';
+        ok $event.StoredEvent === $record, 'current metadata object is attached after custom hooks';
+        is $event.StoredEvent.command-id, $i + 101, 'causal metadata is preserved';
+        is $event.emitted-at.Instant, $record.created.Instant, 'emission time is preserved';
+        isnt $record.COERCE.WHICH, $event.WHICH, 'conversions construct separate instances';
+    }
+    dies-ok { row($type, %(name => 'bad')).COERCE }, 'construction errors propagate after cache warmup';
+    is row($type, %(name => 'good', amount => 9)).COERCE.amount, 9,
+        'failed construction does not poison subsequent conversions';
+}
+dies-ok { row(ConversionHook, %(name => 'ok')).COERCE(ConversionParallel) },
+    'explicit target must match the stored class';
+
+my $late = StoredEvent.new(:class<LateConversionFact>, :mro<|LateConversionFact|>,
+    :stream<late>, :version(1), :data(%(name => 'loaded-later')));
+dies-ok { $late.COERCE }, 'unresolved class initially fails';
+EVAL 'class GLOBAL::LateConversionFact does Event { has Str $.name }';
+is $late.COERCE.name, 'loaded-later', 'resolution failures are not cached';
+
+my $ready = Channel.new;
+my $go = Promise.new;
+my @workers = (^4).map: -> $i {
+    start {
+        $ready.send(True); await $go;
+        (gather for ^20 -> $n {
+            my $record = row(ConversionParallel, %(name => "$i-$n"), :id($i + 1));
+            my $event = $record.COERCE;
+            take $event.name eq "$i-$n" && $event.StoredEvent === $record;
+        }).all.so
+    }
+};
+$ready.receive for ^4; $go.keep(True);
+ok (await Promise.allof(@workers)).defined, 'concurrent first use completes';
+ok @workers.map(*.result).all, 'shared descriptors isolate concurrent payloads and metadata';
+done-testing;

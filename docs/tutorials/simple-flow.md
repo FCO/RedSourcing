@@ -54,7 +54,7 @@ red-sourcing-defaults(:database(%*ENV<REDSOURCING_EXAMPLE_DATABASE> // ':memory:
 ```
 
 By default this connection uses an isolated in-memory database. The local
-example configuration enables tracing and takes precedence over parent files.
+example configuration takes precedence over parent files.
 `red-sourcing-defaults` creates missing tables automatically. Docker sets the
 optional `REDSOURCING_EXAMPLE_DATABASE` environment variable to persist this
 same walkthrough in its stack volume.
@@ -161,7 +161,7 @@ it to set `confirmed=True`, and reacts by completing.
 Expect a `completed` saga, a `done` action with one attempt and command `C2`,
 and an aggregate status of `confirmed`. The old `$card` still says `placed`:
 loaded projections are ordinary objects, not live subscriptions. Reloading it
-produces `Pizza: confirmed` and records its consumption of the new event.
+produces `Pizza: confirmed` without writing consumption telemetry.
 
 ## 8. Inspect the causal links
 
@@ -169,15 +169,15 @@ produces `Pizza: confirmed` and records its consumption of the new event.
 my $action = $saga.^state<actions>[0];
 say "E{$action<source-event-id>} -> confirm-order -> C{$action<row-id>}";
 say flow-links(:source-kind<command>, :source($action<row-id>.Str)).map({ "C{.<source>} -> E{.<target>} ({.<relation>})" }).join("\n");
-say flow-links(:target-kind<entity>, :target($view.^stream-name)).map({ "E{.<source>} -> {.<target>} ({.<relation>})" }).join("\n");
+say 'Projection state: ' ~ $view.^load.status;
 ```
 
 The source event is `E3`. The saga's persisted action links it to `C2`.
 The command's recorded emission links `C2` to `OrderConfirmed` (`E6` in this fresh
-store). The projection has observed consumer links from both domain events.
+store). The final line independently reloads the projection state.
 Intervening IDs belong to saga controls, which is why domain event IDs are not
-consecutive. These links describe actual work, including the projection loads
-you performed, rather than inferred subscriptions.
+consecutive. Command/event links are reconstructed from durable metadata;
+ordinary projection loads no longer record historical consumption links.
 
 Finally, reload the completed saga:
 
@@ -197,8 +197,8 @@ For a new REPL session, replace only the `red-sourcing-defaults` line in step 1 
 red-sourcing-defaults;
 ```
 
-The supplied configuration selects `examples/simple-flow/simple-flow.db`, enables
-tracing and tells the monitor where to load `SimpleFlow`. On a new database,
+The supplied configuration selects `examples/simple-flow/simple-flow.db`
+and tells the monitor where to load `SimpleFlow`. On a new database,
 continue with all the other lines as printed. On subsequent visits, missing tables are still initialized idempotently. Load
 existing identities instead of creating them again; alternatively, use a fresh
 `order-id` consistently for all three proxies.
@@ -212,7 +212,7 @@ raku -I../../lib ../../bin/red-sourcing.raku web-monitor
 
 Open `http://127.0.0.1:3001/monitor/flow` and select
 `SimpleFlow::Confirmation: order-id = demo-1`. Repeat the walkthrough and watch
-the diagram gain an action, a command, an emitted fact and an observed projection.
+the diagram gain an action, a command and an emitted fact.
 The monitor reads the shared database; the REPL does not import or start it.
 
 Continue with [saga retries and compensation](../sagas.md) or

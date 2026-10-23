@@ -1,0 +1,170 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Journal;
+use RedSourcing::Lifecycle;
+use RedSourcing::Storage;
+use RedSourcing::Counters;
+
+my $applied = 0;
+class StateCacheFact does Event { has Str $.key; has Int $.amount }
+class StateCachePadding does Event { }
+projection StateCacheTotal[:!auto-snapshot] {
+    has Str $.key is entity-id;
+    has Int $.amount is rw = 0;
+    has @.seen;
+    method APPLY(StateCacheFact $e where { .key eqv $!key }) {
+        $applied++; $!amount += $e.amount; @!seen.push($e.amount);
+    }
+}
+projection StateCacheDemand[:!cached, :!auto-snapshot] is StateCacheTotal { }
+projection StateCacheBroad[:!auto-snapshot] {
+    has Str $.key is entity-id;
+    has Int $.amount = 0;
+    method APPLY(StateCacheFact $e where { .key eqv $!key && .amount > 0 }) {
+        $applied++; $!amount += $e.amount;
+    }
+}
+class StateCacheBox { has Int $.value is rw = 0 }
+projection StateCacheObject[:!auto-snapshot] {
+    has Str $.key is entity-id;
+    has StateCacheBox $.box .= new;
+    method APPLY(StateCacheFact $e where { .key eqv $!key }) { $!box.value += $e.amount }
+}
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my ($admin, $schema);
+my $*RED-DB;
+LEAVE { $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined }
+if $database {
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $schema = 'rs_decision_cache_' ~ $*PID;
+    $admin.execute("CREATE SCHEMA $schema");
+    $*RED-DB = store-driver('Pg', $database, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>)) });
+} else { $*RED-DB = store-driver('SQLite', ':memory:') }
+schema(StoredEvent, StoredCommand).create;
+configure-lifecycles({}, :entity-cache-size(3));
+my $serial = 0;
+sub fact($key, $amount) { StateCacheFact.emit(:$key, :$amount, :stream('state-cache-' ~ ++$serial), :version(1)) }
+sub read($key, Mu:U $type = StateCacheTotal) {
+    decision-model ($type) => %(:$key), -> $v { $v.amount }
+}
+my @batches;
+my $hook = &storage-decision-rows.wrap(-> |c {
+    my $batch = callsame;
+    @batches.push($batch<events>.elems);
+    $batch
+});
+LEAVE $hook.restore;
+fact('a', 2); fact('a', 0); fact('a', 0); fact('a', 3);
+is read('a'), 5, 'cold decision reconstructs state';
+$applied = 0; @batches = ();
+is read('a'), 5, 'warm decision reuses state';
+is $applied, 0, 'warm read executes no historical APPLY';
+is-deeply @batches.Array, [0], 'warm query returns no old facts';
+fact('a', 7);
+$applied = 0; @batches = ();
+is read('a'), 12, 'new fact advances cached state';
+is $applied, 1, 'only the new tail reaches APPLY';
+is-deeply @batches.Array, [1], 'tail is fetched once';
+decision-model (StateCacheTotal) => %(:key<a>), (StateCacheTotal) => %(:key<a>), -> $a, $b {
+    $a.amount = 999; $a.seen.push(999);
+    is $b.amount, 12, 'repeated position has independent scalar state';
+    is-deeply $b.seen.Array, [2,0,0,3,7], 'repeated position has independent nested state';
+    decision-model (StateCacheTotal) => %(:key<a>), -> $nested {
+        is $nested.amount, 12, 'nested decision cannot observe user mutations';
+    };
+};
+is read('a'), 12, 'user mutation never enters committed decision base';
+dies-ok {
+    red-do :transaction, {
+        fact('a', 11);
+        is read('a'), 23, 'decision sees its own transaction append';
+        die 'rollback';
+    }
+}, 'outer transaction aborts';
+$applied = 0;
+is read('a'), 12, 'rolled-back tail is not published';
+is $applied, 0, 'rollback preserves the earlier committed base';
+red-do :transaction, {
+    fact('a', 13);
+    dies-ok {
+        red-do :transaction, { fact('a', 17); is read('a'), 42, 'inner decision sees inner fact'; die 'inner' }
+    }, 'inner savepoint aborts';
+    is read('a'), 25, 'decision after savepoint rollback excludes inner fact';
+};
+is read('a'), 25, 'outer commit publishes only surviving state';
+my $p = StateCacheTotal.^with-ids(:key<a>);
+my $view = $p.^load;
+$view.amount = 70; $view.^emit-snapshot;
+is read('a'), 70, 'new checkpoint supersedes cached decision state';
+$p.^release;
+$applied = 0;
+is read('a'), 70, 'release falls back to durable checkpoint';
+for <b c d> -> $key { fact($key, 0) for ^3 }
+fact('b', 4); read('b'); fact('c', 5); read('c'); fact('d', 6); read('d');
+is read('a'), 70, 'global capacity eviction preserves durable state';
+$applied = 0; read('b', StateCacheDemand); read('b', StateCacheDemand);
+is $applied, 8, 'OnDemand declarations bypass decision state caching';
+# The guard is wider than this predicate. An unselected fact must cause a
+# conservative rebuild, rather than accepting incomplete counter coverage.
+fact('broad', 1) for ^3;
+is read('broad', StateCacheBroad), 3, 'broad guard initial state';
+fact('broad', 1); read('broad', StateCacheBroad);
+fact('broad', -1); @batches = ();
+is read('broad', StateCacheBroad), 4, 'unselected guard change preserves state';
+is-deeply @batches.Array, [0,4], 'incomplete guard coverage falls back to full query';
+# Deterministically model an ID reserved by an earlier transaction: leave a
+# gap before the cached cursor, then publish a counted fact into that gap.
+my $gap = StateCachePadding.emit(:stream<reserved-gap>, :version(1)).id;
+my $conn = journal-connection();
+my $p1 = is-pg($conn) ?? '$1' !! '?';
+storage-query($conn, 'DELETE FROM red_sourcing_event WHERE id = ' ~ $p1, $gap);
+fact('late', 0) for ^3;
+fact('late', 10); is read('late'), 10, 'cache crosses reserved earlier ID';
+red-do :transaction, {
+    my $row = fact('late', 20);
+    my $c = journal-connection();
+    my @p = is-pg($c) ?? < $1 $2 > !! < ? ? >;
+    storage-query($c, 'UPDATE red_sourcing_event SET id = ' ~ @p[0] ~ ' WHERE id = ' ~ @p[1], $gap, $row.id);
+};
+@batches = ();
+is read('late'), 30, 'late lower-ID fact cannot be skipped by cached cursor';
+is-deeply @batches.Array, [0,5], 'counter gap triggers a complete reconstruction';
+is read('late'), 30, 'reconstructed cache does not duplicate the late fact';
+decision-model (StateCacheObject) => %(:key<late>), -> $v { $v.box.value = 999 };
+decision-model (StateCacheObject) => %(:key<late>), -> $v {
+    is $v.box.value, 30, 'mutable domain objects fall back instead of sharing state with user blocks';
+};
+if $database {
+    fact('concurrent', 0) for ^3;
+    fact('concurrent', 1);
+    is read('concurrent'), 1, 'prime a committed decision base before a competing writer';
+    my $worker = q:to/WORKER/;
+use RedSourcing;
+use RedSourcing::Config;
+use DB::Pg;
+class StateCacheFact does Event { has Str $.key; has Int $.amount }
+my ($database, $schema) = @*ARGS;
+my $*RED-DB = store-driver('Pg', $database, :connection{
+    dbh => DB::Pg.new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>)) });
+StateCacheFact.emit(:key<concurrent>, :amount(2), :stream<external-concurrent>, :version(1));
+WORKER
+    my $observed;
+    throws-like {
+        decision-model (StateCacheTotal) => %(:key<concurrent>), -> $v {
+            $observed = $v.amount;
+            my $process = run $*EXECUTABLE.Str, '-Ilib', '-e', $worker, $database, $schema, :out, :err;
+            my $out = $process.out.slurp(:close);
+            my $err = $process.err.slurp(:close);
+            die "Competing writer failed: $err $out" if $process.exitcode;
+            fact('concurrent', 3);
+        }
+    }, RedSourcing::X::OptimisticLockFailed, 'cache hit retains optimistic protection against independent commits';
+    is $observed, 1, 'warm decision starts from the validated cached state';
+    is read('concurrent'), 3, 'retry sees competing fact and excludes the rolled-back append';
+}
+done-testing;

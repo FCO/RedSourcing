@@ -1,0 +1,835 @@
+{
+  "runtime": "Rakudo/MoarVM 2026.09, Red 0.2.7, RAKUDO_RAKUAST=0",
+  "database": "PostgreSQL local, default durability",
+  "runs": [
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": true,
+      "iteration": 0,
+      "replay-seconds": 0.385785168,
+      "query-seconds": 0.296016094,
+      "plan": [
+        {
+          "Plan": {
+            "Plans": [
+              {
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)",
+                "Disabled": false,
+                "Parent Relationship": "Outer",
+                "Node Type": "Seq Scan",
+                "Alias": "red_sourcing_event",
+                "Plan Width": 0,
+                "Startup Cost": 0.0,
+                "Total Cost": 1538.38,
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Plan Rows": 57,
+                "Relation Name": "red_sourcing_event"
+              }
+            ],
+            "Total Cost": 1538.53,
+            "Node Type": "Aggregate",
+            "Async Capable": false,
+            "Plan Width": 8,
+            "Partial Mode": "Simple",
+            "Startup Cost": 1538.52,
+            "Strategy": "Plain",
+            "Plan Rows": 1,
+            "Parallel Aware": false,
+            "Disabled": false
+          }
+        }
+      ],
+      "index-bytes": 0,
+      "count": 5000,
+      "native": false,
+      "replay-total": 500,
+      "queries": 100,
+      "rows": 50000,
+      "append-seconds": 0.379914906,
+      "appends": 100
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": true,
+      "iteration": 0,
+      "query-seconds": 0.016287233,
+      "replay-seconds": 0.359734304,
+      "replay-total": 500,
+      "append-seconds": 0.394119453,
+      "index-bytes": 2973696,
+      "queries": 100,
+      "native": true,
+      "rows": 50000,
+      "plan": [
+        {
+          "Plan": {
+            "Startup Cost": 219.08,
+            "Total Cost": 219.09,
+            "Disabled": false,
+            "Strategy": "Plain",
+            "Plan Rows": 1,
+            "Plan Width": 8,
+            "Node Type": "Aggregate",
+            "Async Capable": false,
+            "Plans": [
+              {
+                "Plans": [
+                  {
+                    "Disabled": false,
+                    "Index Name": "red_sourcing_event_mro_gin",
+                    "Startup Cost": 0.0,
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                    "Node Type": "Bitmap Index Scan",
+                    "Async Capable": false,
+                    "Plan Rows": 55,
+                    "Parallel Aware": false,
+                    "Plan Width": 0,
+                    "Total Cost": 37.91,
+                    "Parent Relationship": "Outer"
+                  }
+                ],
+                "Alias": "red_sourcing_event",
+                "Plan Width": 0,
+                "Parallel Aware": false,
+                "Plan Rows": 55,
+                "Startup Cost": 37.93,
+                "Disabled": false,
+                "Node Type": "Bitmap Heap Scan",
+                "Total Cost": 218.95,
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Relation Name": "red_sourcing_event",
+                "Parent Relationship": "Outer",
+                "Async Capable": false
+              }
+            ],
+            "Parallel Aware": false,
+            "Partial Mode": "Simple"
+          }
+        }
+      ],
+      "appends": 100,
+      "count": 5000
+    },
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": false,
+      "iteration": 1,
+      "replay-total": 500,
+      "native": false,
+      "count": 5000,
+      "rows": 50000,
+      "index-bytes": 0,
+      "plan": [
+        {
+          "Plan": {
+            "Node Type": "Aggregate",
+            "Partial Mode": "Simple",
+            "Parallel Aware": false,
+            "Startup Cost": 1538.53,
+            "Async Capable": false,
+            "Strategy": "Plain",
+            "Plan Width": 8,
+            "Disabled": false,
+            "Plans": [
+              {
+                "Total Cost": 1538.38,
+                "Async Capable": false,
+                "Node Type": "Seq Scan",
+                "Plan Width": 0,
+                "Startup Cost": 0.0,
+                "Relation Name": "red_sourcing_event",
+                "Parallel Aware": false,
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)",
+                "Plan Rows": 60,
+                "Disabled": false,
+                "Parent Relationship": "Outer",
+                "Alias": "red_sourcing_event"
+              }
+            ],
+            "Total Cost": 1538.54,
+            "Plan Rows": 1
+          }
+        }
+      ],
+      "appends": 100,
+      "queries": 100,
+      "append-seconds": 0.388696736,
+      "query-seconds": 0.294247244,
+      "replay-seconds": 0.394370955
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": false,
+      "iteration": 1,
+      "rows": 50000,
+      "appends": 100,
+      "queries": 100,
+      "query-seconds": 0.016597402,
+      "replay-seconds": 0.360846439,
+      "append-seconds": 0.392583522,
+      "native": true,
+      "plan": [
+        {
+          "Plan": {
+            "Startup Cost": 203.82,
+            "Partial Mode": "Simple",
+            "Async Capable": false,
+            "Parallel Aware": false,
+            "Total Cost": 203.83,
+            "Disabled": false,
+            "Plans": [
+              {
+                "Parallel Aware": false,
+                "Relation Name": "red_sourcing_event",
+                "Node Type": "Bitmap Heap Scan",
+                "Plan Rows": 50,
+                "Plan Width": 0,
+                "Async Capable": false,
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Parent Relationship": "Outer",
+                "Startup Cost": 37.9,
+                "Plans": [
+                  {
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                    "Plan Rows": 50,
+                    "Disabled": false,
+                    "Startup Cost": 0.0,
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Index Name": "red_sourcing_event_mro_gin",
+                    "Plan Width": 0,
+                    "Parent Relationship": "Outer",
+                    "Total Cost": 37.89,
+                    "Node Type": "Bitmap Index Scan"
+                  }
+                ],
+                "Alias": "red_sourcing_event",
+                "Disabled": false,
+                "Total Cost": 203.7
+              }
+            ],
+            "Plan Rows": 1,
+            "Strategy": "Plain",
+            "Plan Width": 8,
+            "Node Type": "Aggregate"
+          }
+        }
+      ],
+      "index-bytes": 2973696,
+      "replay-total": 500,
+      "count": 5000
+    },
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": false,
+      "iteration": 2,
+      "query-seconds": 0.29992888,
+      "appends": 100,
+      "count": 5000,
+      "plan": [
+        {
+          "Plan": {
+            "Plans": [
+              {
+                "Async Capable": false,
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)",
+                "Relation Name": "red_sourcing_event",
+                "Parent Relationship": "Outer",
+                "Alias": "red_sourcing_event",
+                "Disabled": false,
+                "Node Type": "Seq Scan",
+                "Startup Cost": 0.0,
+                "Parallel Aware": false,
+                "Plan Width": 0,
+                "Total Cost": 1538.38,
+                "Plan Rows": 40
+              }
+            ],
+            "Node Type": "Aggregate",
+            "Plan Rows": 1,
+            "Total Cost": 1538.48,
+            "Partial Mode": "Simple",
+            "Disabled": false,
+            "Plan Width": 8,
+            "Async Capable": false,
+            "Startup Cost": 1538.47,
+            "Parallel Aware": false,
+            "Strategy": "Plain"
+          }
+        }
+      ],
+      "native": false,
+      "replay-total": 500,
+      "rows": 50000,
+      "append-seconds": 0.378520768,
+      "index-bytes": 0,
+      "replay-seconds": 0.395344422,
+      "queries": 100
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": false,
+      "iteration": 2,
+      "count": 5000,
+      "native": true,
+      "query-seconds": 0.016679154,
+      "replay-seconds": 0.361109067,
+      "append-seconds": 0.39912579,
+      "appends": 100,
+      "plan": [
+        {
+          "Plan": {
+            "Plan Rows": 1,
+            "Node Type": "Aggregate",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Plan Width": 8,
+            "Partial Mode": "Simple",
+            "Startup Cost": 209.95,
+            "Plans": [
+              {
+                "Disabled": false,
+                "Parent Relationship": "Outer",
+                "Relation Name": "red_sourcing_event",
+                "Total Cost": 209.82,
+                "Plan Rows": 52,
+                "Plans": [
+                  {
+                    "Disabled": false,
+                    "Index Name": "red_sourcing_event_mro_gin",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Parent Relationship": "Outer",
+                    "Plan Rows": 52,
+                    "Node Type": "Bitmap Index Scan",
+                    "Total Cost": 37.9,
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                    "Plan Width": 0,
+                    "Startup Cost": 0.0
+                  }
+                ],
+                "Async Capable": false,
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Plan Width": 0,
+                "Parallel Aware": false,
+                "Alias": "red_sourcing_event",
+                "Startup Cost": 37.91,
+                "Node Type": "Bitmap Heap Scan"
+              }
+            ],
+            "Strategy": "Plain",
+            "Total Cost": 209.96,
+            "Disabled": false
+          }
+        }
+      ],
+      "queries": 100,
+      "replay-total": 500,
+      "index-bytes": 2973696,
+      "rows": 50000
+    },
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": false,
+      "iteration": 3,
+      "count": 5000,
+      "replay-seconds": 0.398608286,
+      "append-seconds": 0.39031796,
+      "plan": [
+        {
+          "Plan": {
+            "Partial Mode": "Simple",
+            "Node Type": "Aggregate",
+            "Async Capable": false,
+            "Disabled": false,
+            "Plans": [
+              {
+                "Node Type": "Seq Scan",
+                "Disabled": false,
+                "Startup Cost": 0.0,
+                "Alias": "red_sourcing_event",
+                "Plan Width": 0,
+                "Async Capable": false,
+                "Parallel Aware": false,
+                "Parent Relationship": "Outer",
+                "Plan Rows": 57,
+                "Relation Name": "red_sourcing_event",
+                "Total Cost": 1538.38,
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)"
+              }
+            ],
+            "Strategy": "Plain",
+            "Startup Cost": 1538.52,
+            "Plan Rows": 1,
+            "Plan Width": 8,
+            "Parallel Aware": false,
+            "Total Cost": 1538.53
+          }
+        }
+      ],
+      "native": false,
+      "queries": 100,
+      "rows": 50000,
+      "replay-total": 500,
+      "index-bytes": 0,
+      "query-seconds": 0.296092261,
+      "appends": 100
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": false,
+      "iteration": 3,
+      "replay-seconds": 0.363666798,
+      "queries": 100,
+      "query-seconds": 0.016720028,
+      "native": true,
+      "plan": [
+        {
+          "Plan": {
+            "Plan Rows": 1,
+            "Total Cost": 182.03,
+            "Partial Mode": "Simple",
+            "Parallel Aware": false,
+            "Plan Width": 8,
+            "Disabled": false,
+            "Async Capable": false,
+            "Plans": [
+              {
+                "Startup Cost": 37.86,
+                "Async Capable": false,
+                "Parallel Aware": false,
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Alias": "red_sourcing_event",
+                "Parent Relationship": "Outer",
+                "Plan Rows": 42,
+                "Plan Width": 0,
+                "Node Type": "Bitmap Heap Scan",
+                "Relation Name": "red_sourcing_event",
+                "Total Cost": 181.92,
+                "Disabled": false,
+                "Plans": [
+                  {
+                    "Parent Relationship": "Outer",
+                    "Plan Width": 0,
+                    "Disabled": false,
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                    "Plan Rows": 42,
+                    "Async Capable": false,
+                    "Startup Cost": 0.0,
+                    "Node Type": "Bitmap Index Scan",
+                    "Parallel Aware": false,
+                    "Total Cost": 37.85,
+                    "Index Name": "red_sourcing_event_mro_gin"
+                  }
+                ]
+              }
+            ],
+            "Node Type": "Aggregate",
+            "Startup Cost": 182.02,
+            "Strategy": "Plain"
+          }
+        }
+      ],
+      "rows": 50000,
+      "append-seconds": 0.395116962,
+      "count": 5000,
+      "index-bytes": 2973696,
+      "appends": 100,
+      "replay-total": 500
+    },
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": false,
+      "iteration": 4,
+      "replay-seconds": 0.399378501,
+      "native": false,
+      "rows": 50000,
+      "replay-total": 500,
+      "index-bytes": 0,
+      "append-seconds": 0.383070059,
+      "plan": [
+        {
+          "Plan": {
+            "Partial Mode": "Simple",
+            "Plans": [
+              {
+                "Plan Width": 0,
+                "Node Type": "Seq Scan",
+                "Startup Cost": 0.0,
+                "Plan Rows": 52,
+                "Parallel Aware": false,
+                "Disabled": false,
+                "Alias": "red_sourcing_event",
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)",
+                "Parent Relationship": "Outer",
+                "Relation Name": "red_sourcing_event",
+                "Async Capable": false,
+                "Total Cost": 1538.38
+              }
+            ],
+            "Async Capable": false,
+            "Plan Rows": 1,
+            "Disabled": false,
+            "Strategy": "Plain",
+            "Startup Cost": 1538.51,
+            "Plan Width": 8,
+            "Total Cost": 1538.52,
+            "Node Type": "Aggregate",
+            "Parallel Aware": false
+          }
+        }
+      ],
+      "count": 5000,
+      "appends": 100,
+      "queries": 100,
+      "query-seconds": 0.298448783
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": false,
+      "iteration": 4,
+      "appends": 100,
+      "append-seconds": 0.39997284,
+      "queries": 100,
+      "query-seconds": 0.01668207,
+      "replay-total": 500,
+      "plan": [
+        {
+          "Plan": {
+            "Startup Cost": 197.65,
+            "Partial Mode": "Simple",
+            "Plan Rows": 1,
+            "Total Cost": 197.66,
+            "Strategy": "Plain",
+            "Node Type": "Aggregate",
+            "Plans": [
+              {
+                "Relation Name": "red_sourcing_event",
+                "Plans": [
+                  {
+                    "Plan Rows": 48,
+                    "Plan Width": 0,
+                    "Startup Cost": 0.0,
+                    "Node Type": "Bitmap Index Scan",
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                    "Async Capable": false,
+                    "Disabled": false,
+                    "Total Cost": 37.88,
+                    "Index Name": "red_sourcing_event_mro_gin",
+                    "Parallel Aware": false,
+                    "Parent Relationship": "Outer"
+                  }
+                ],
+                "Alias": "red_sourcing_event",
+                "Plan Width": 0,
+                "Parallel Aware": false,
+                "Node Type": "Bitmap Heap Scan",
+                "Total Cost": 197.53,
+                "Disabled": false,
+                "Async Capable": false,
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Plan Rows": 48,
+                "Startup Cost": 37.89,
+                "Parent Relationship": "Outer"
+              }
+            ],
+            "Disabled": false,
+            "Async Capable": false,
+            "Parallel Aware": false,
+            "Plan Width": 8
+          }
+        }
+      ],
+      "rows": 50000,
+      "count": 5000,
+      "index-bytes": 2973696,
+      "native": true,
+      "replay-seconds": 0.366518325
+    },
+    {
+      "workload": "membership",
+      "version": "before",
+      "warmup": false,
+      "iteration": 5,
+      "query-seconds": 0.322027666,
+      "plan": [
+        {
+          "Plan": {
+            "Startup Cost": 1538.49,
+            "Parallel Aware": false,
+            "Plan Rows": 1,
+            "Total Cost": 1538.5,
+            "Node Type": "Aggregate",
+            "Plans": [
+              {
+                "Alias": "red_sourcing_event",
+                "Startup Cost": 0.0,
+                "Disabled": false,
+                "Parent Relationship": "Outer",
+                "Plan Width": 0,
+                "Total Cost": 1538.38,
+                "Relation Name": "red_sourcing_event",
+                "Filter": "(mro ~~ '%|MroBenchmarkRare|%'::text)",
+                "Async Capable": false,
+                "Plan Rows": 48,
+                "Parallel Aware": false,
+                "Node Type": "Seq Scan"
+              }
+            ],
+            "Partial Mode": "Simple",
+            "Async Capable": false,
+            "Strategy": "Plain",
+            "Disabled": false,
+            "Plan Width": 8
+          }
+        }
+      ],
+      "index-bytes": 0,
+      "append-seconds": 0.385375915,
+      "appends": 100,
+      "rows": 50000,
+      "native": false,
+      "count": 5000,
+      "replay-seconds": 0.399856256,
+      "queries": 100,
+      "replay-total": 500
+    },
+    {
+      "workload": "membership",
+      "version": "after",
+      "warmup": false,
+      "iteration": 5,
+      "query-seconds": 0.016863822,
+      "index-bytes": 2973696,
+      "replay-total": 500,
+      "append-seconds": 0.399439127,
+      "rows": 50000,
+      "appends": 100,
+      "queries": 100,
+      "native": true,
+      "count": 5000,
+      "replay-seconds": 0.366184613,
+      "plan": [
+        {
+          "Plan": {
+            "Startup Cost": 197.65,
+            "Plans": [
+              {
+                "Disabled": false,
+                "Plan Width": 0,
+                "Total Cost": 197.53,
+                "Async Capable": false,
+                "Plan Rows": 48,
+                "Node Type": "Bitmap Heap Scan",
+                "Startup Cost": 37.89,
+                "Relation Name": "red_sourcing_event",
+                "Parallel Aware": false,
+                "Alias": "red_sourcing_event",
+                "Recheck Cond": "(mro @> '{MroBenchmarkRare}'::text[])",
+                "Plans": [
+                  {
+                    "Node Type": "Bitmap Index Scan",
+                    "Async Capable": false,
+                    "Parent Relationship": "Outer",
+                    "Disabled": false,
+                    "Index Name": "red_sourcing_event_mro_gin",
+                    "Plan Rows": 48,
+                    "Plan Width": 0,
+                    "Parallel Aware": false,
+                    "Total Cost": 37.88,
+                    "Startup Cost": 0.0,
+                    "Index Cond": "(mro @> '{MroBenchmarkRare}'::text[])"
+                  }
+                ],
+                "Parent Relationship": "Outer"
+              }
+            ],
+            "Strategy": "Plain",
+            "Total Cost": 197.66,
+            "Disabled": false,
+            "Node Type": "Aggregate",
+            "Plan Rows": 1,
+            "Async Capable": false,
+            "Plan Width": 8,
+            "Parallel Aware": false,
+            "Partial Mode": "Simple"
+          }
+        }
+      ]
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": true,
+      "iteration": 0,
+      "seconds": 18.286746375000803,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": true,
+      "iteration": 0,
+      "seconds": 18.07728404199588,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": false,
+      "iteration": 1,
+      "seconds": 18.30928899999708,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": false,
+      "iteration": 1,
+      "seconds": 18.19924429198727,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": false,
+      "iteration": 2,
+      "seconds": 18.44215279101627,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": false,
+      "iteration": 2,
+      "seconds": 17.377965541993035,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": false,
+      "iteration": 3,
+      "seconds": 18.452380915987305,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": false,
+      "iteration": 3,
+      "seconds": 18.08577820798382,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": false,
+      "iteration": 4,
+      "seconds": 18.559538208006416,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": false,
+      "iteration": 4,
+      "seconds": 18.10176049999427,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "warmup": false,
+      "iteration": 5,
+      "seconds": 18.343500415998278,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "warmup": false,
+      "iteration": 5,
+      "seconds": 18.121218042011606,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "source_sha256": {
+    "before": "948a5675353e1b1dd33df2239dee79dfe67338c4c9cccd8e1cd339e4060fa3df",
+    "after": "91d8625490dd8df18c1e27e69a8fd2c30646d814ae1497a2ac57d9fd0acbd956"
+  },
+  "server_version": "18.4 (Homebrew)",
+  "durability": {
+    "fsync": "on",
+    "synchronous_commit": "on",
+    "full_page_writes": "on"
+  },
+  "summary": {
+    "membership": {
+      "query-seconds": {
+        "before": 0.298448783,
+        "after": 0.01668207
+      },
+      "replay-seconds": {
+        "before": 0.398608286,
+        "after": 0.363666798
+      },
+      "append-seconds": {
+        "before": 0.385375915,
+        "after": 0.39912579
+      },
+      "index-bytes": {
+        "before": 0,
+        "after": 2973696
+      }
+    },
+    "school": {
+      "seconds": {
+        "before": 18.44215279101627,
+        "after": 18.10176049999427
+      }
+    }
+  },
+  "equal_results": true,
+  "status": "complete",
+  "methodology": {
+    "samples_per_version": 5,
+    "warmup_per_version": 1,
+    "order": "alternating before/after with no concurrent test jobs",
+    "before": "projection AST/SQL caches enabled; pipe-delimited text MRO and LIKE",
+    "after": "native text[] MRO, GIN membership, ORM string rendering in PostgreSQL",
+    "membership": "50000 events, 50 matching a rare type; 100 count queries; 10 ordinary projection loads; 100 real journal appends",
+    "school": "unchanged full school demo, fresh isolated Pg schema per run, tracing enabled, warmed precomp, full process elapsed time",
+    "scope": "setup and bulk inserts excluded from membership phase timers; school includes startup and initialization",
+    "index_size": "physical GIN size after bulk load, VACUUM/ANALYZE and 101 real appends"
+  },
+  "changes": {
+    "membership:query-seconds": {
+      "elapsed_percent": -94.4104077650067,
+      "speedup": 17.890392679085988
+    },
+    "membership:replay-seconds": {
+      "elapsed_percent": -8.765870963354727,
+      "speedup": 1.096081050544515
+    },
+    "membership:append-seconds": {
+      "elapsed_percent": 3.5679123849760908,
+      "speedup": 0.9655500212101052
+    },
+    "school:seconds": {
+      "elapsed_percent": -1.8457296980416205,
+      "speedup": 1.0188043749127111
+    }
+  }
+}

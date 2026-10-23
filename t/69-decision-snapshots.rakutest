@@ -1,0 +1,114 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Journal;
+use RedSourcing::Storage;
+
+my $applied = 0;
+class SnapshotDecisionFact does Event { has Str $.key; has Int $.amount }
+projection SnapshotDecisionTotal[:!auto-snapshot] {
+    has Str $.key is entity-id;
+    has Int $.amount is rw = 0;
+    has %.details;
+    method APPLY(SnapshotDecisionFact $event where { .key eqv $!key }) {
+        $applied++;
+        $!amount += $event.amount;
+        (%!details<amounts> //= []).push($event.amount);
+    }
+}
+projection SnapshotDecisionMirror is SnapshotDecisionTotal { }
+projection SnapshotDecisionFallback[:!auto-snapshot] {
+    has Str $.key is entity-id;
+    has Int $.amount = 0;
+    method APPLY(SnapshotDecisionFact $event (:$key where { $_ eqv $!key }, :$amount)) {
+        $applied++;
+        $!amount += $event.amount;
+    }
+}
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $*RED-DB;
+my $admin;
+my $schema;
+LEAVE { $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined }
+if $database {
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $schema = 'rs_decision_snapshots_' ~ $*PID;
+    $admin.execute("CREATE SCHEMA $schema");
+    $*RED-DB = store-driver('Pg', $database, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>)) });
+} else { $*RED-DB = store-driver('SQLite', ':memory:') }
+schema(StoredEvent, StoredCommand).create;
+sub fact($key, $amount) {
+    SnapshotDecisionFact.emit(:$key, :$amount, :stream("fact-$key-$amount"), :version(1))
+}
+sub checkpoint($type, $key) { $type.^with-ids(:$key).^load.^emit-snapshot }
+fact('a', 2);
+checkpoint(SnapshotDecisionMirror, 'a');
+checkpoint(SnapshotDecisionFallback, 'a');
+fact('b', 5);
+fact('a', 3);
+checkpoint(SnapshotDecisionTotal, 'a');
+checkpoint(SnapshotDecisionTotal, 'b');
+fact('a', 7);
+fact('b', 11);
+checkpoint(SnapshotDecisionTotal, 'a');
+$applied = 0;
+my @fetched;
+my $hook = &storage-decision-rows.wrap(-> |c {
+    my $batch = callsame;
+    @fetched.push($_) for $batch<events>.List;
+    $batch
+});
+LEAVE $hook.restore;
+my @queries;
+$*RED-DB does role {
+    multi method prepare(Str $sql, |) {
+        @queries.push($sql) if $sql.contains('__rs_decision_requested');
+        callsame
+    }
+};
+decision-model (SnapshotDecisionTotal) => %(:key<a>), (SnapshotDecisionTotal) => %(:key<b>),
+        (SnapshotDecisionMirror) => %(:key<a>), (SnapshotDecisionTotal) => %(:key<a>), -> $a, $b, $older, $repeat {
+    is $a.amount, 12, 'latest checkpoint restores the first identity';
+    is $b.amount, 16, 'a different checkpoint cursor replays only its tail';
+    is $older.amount, 12, 'overlapping older view replays facts skipped by the newer view';
+    is $repeat.amount, 12, 'repeated positions restore the same snapshot independently';
+    isnt $a.WHICH, $repeat.WHICH, 'repeated positions have detached instances';
+    is $applied, 3, 'only one b fact and two older a facts reach APPLY';
+    is @fetched.elems, 3, 'the combined SQL query fetches only the union of replay tails';
+    is @queries.elems, 1, 'all snapshots and replay tails come from one statement';
+    $a.amount = 999;
+    $a.details<amounts>.push(99);
+    is $repeat.amount, 12, 'decision mutation cannot affect another position';
+    is-deeply $repeat.details<amounts>, [2, 3, 7], 'nested snapshot containers are isolated between repeated positions';
+    decision-model (SnapshotDecisionTotal) => %(:key<b>), -> $nested {
+        is $nested.amount, 16, 'nested decision binds its own checkpoint and cursor';
+    };
+    is $repeat.amount, 12, 'outer state survives nested restoration';
+};
+$applied = 0;
+decision-model (SnapshotDecisionFallback) => %(:key<a>), -> $view {
+    is $view.amount, 12, 'runtime signature fallback also starts from its checkpoint';
+    is $applied, 2, 'fallback excludes its checkpointed fact';
+};
+$applied = 0;
+@fetched = ();
+decision-model (SnapshotDecisionTotal) => %(:key<a>), -> $view {
+    is $view.amount, 12, 'snapshot-only decision restores its complete state';
+    is $applied, 0, 'snapshot-only decision executes no historical APPLY';
+    is @fetched.elems, 0, 'snapshot-only SQL replay fetches no historical facts';
+};
+decision-model (SnapshotDecisionTotal) => %(:key<missing>), -> $view {
+    is $view.amount, 0, 'identity without a checkpoint or facts starts empty';
+};
+fact('fresh', 17);
+decision-model (SnapshotDecisionTotal) => %(:key<fresh>), -> $view {
+    is $view.amount, 17, 'identity without a checkpoint still replays source facts';
+};
+is SnapshotDecisionTotal.^with-ids(:key<a>).^load.amount, 12, 'decision mutation never updates the entity cache';
+my $before = StoredEvent.^all.elems;
+decision-model (SnapshotDecisionTotal) => %(:key<a>), -> $view { $view.amount };
+is StoredEvent.^all.elems, $before, 'decision restoration writes no snapshots';
+done-testing;

@@ -1,11 +1,26 @@
 use Test;
 use RedSourcing;
 use RedSourcing::Inspector;
+use RedSourcing::Config;
+use Red::DB;
 use RedSourcing::Web::Metrics;
 use RedSourcing::Web::Charts;
 
-red-defaults 'SQLite', :database(':memory:');
-schema(StoredEvent, StoredCommand).create;
+my $*RED-DB;
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $admin;
+my $schema = 'rs_metrics_' ~ $*PID;
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+if $database.defined {
+    die 'Use a simple database name' unless $database ~~ /^ <[\w\-]>+ $/;
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $admin.execute("CREATE SCHEMA $schema");
+    my $pool = ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>));
+    $*RED-DB = store-driver('Pg', $database, :connection{ dbh => $pool });
+} else { $*RED-DB = store-driver('SQLite', ':memory:') }
+red-sourcing-defaults;
 my $now = DateTime.new('2026-10-11T12:05:20Z');
 my @instances = %(stream => 'account/a', type => 'Account', kind => 'aggregate'),
     %(stream => 'Saga: id = a', type => 'Saga', kind => 'saga');
@@ -60,4 +75,69 @@ ok $html.contains('Snapshots / minute'), 'snapshot chart exists';
 ok $html.contains('snapshot-only history'), 'timing limits are disclosed';
 dies-ok { store-metrics(:minutes(0)) }, 'zero-minute window rejected';
 dies-ok { store-metrics(:minutes(1441)) }, 'unbounded window rejected';
+subtest 'metrics use a replayable projection with a reusable window-independent state' => {
+    my $view = metrics-projection();
+    ok $view.HOW ~~ Metamodel::RedSourcing::ProjectionHOW, 'ordinary projection metamodel';
+    is-deeply $view.report(:@instances, :minutes(3), :$now), %m, 'projection report preserves the public response';
+    my $before = $view.^data.raku;
+    $view.report(:@instances, :minutes(1), :$now);
+    $view.report(:instances([]), :minutes(1440), :now($now.later(:minutes(2))));
+    is $view.^data.raku, $before, 'reports do not mutate projected state';
+    is-deeply $view.report(:@instances, :minutes(1), :$now),
+        store-metrics(:@instances, :minutes(1), :$now), 'one projection serves different time windows';
+    $view.^replay;
+    is-deeply $view.report(:@instances, :minutes(3), :$now), %m, 'repeated advancement does not double count';
+
+    my $bounded = $view.WHAT.^restore-state(Nil, :stream<bounded-metrics>);
+    $bounded.^apply-new-applyable-events(:through-id(4));
+    is $bounded.^current-id, 4, 'source honors the upper replay bound';
+    is $bounded.report(:$now)<totals><events>, 2, 'bounded replay counts matching domain records';
+    is $bounded.report(:$now)<totals><controls>, 0, 'bounded replay excludes later controls';
+    $bounded.^replay;
+    is-deeply $bounded.counts, $view.counts, 'incremental replay agrees with full reconstruction';
+
+    my $checkpoint = StoredEvent.new(:id(999), :class($view.^name), :mro('|Entity|'),
+        :stream<restored-metrics>, :version(1), :replay-cursor($view.^current-id), :data($view.^data.Hash));
+    my $restored = $view.WHAT.^restore-state($checkpoint, :stream<restored-metrics>);
+    is-deeply $restored.report(:@instances, :minutes(3), :$now), %m, 'normal projection checkpoint restores metrics';
+    emit-row('Deposit', 'account/a', 5, '|Event|', %(amount => 2), 0);
+    emit-row('RedSourcing::Saga::StepFailed', 'Saga: id = a', 6, '|RedSourcing::Saga::Control|',
+        %(state => state(2, 'blocked'), values => {}, cursor => 2, action-id => 'action/1'), 0);
+    $restored.^replay;
+    is $restored.report(:$now)<totals><events>, 3, 'checkpoint consumes later records once';
+    is $restored.report(:$now)<totals><saga-failures>, 1, 'repeated outcomes remain deduplicated after restoration';
+    is-deeply $restored.report(:@instances, :minutes(3), :$now),
+        store-metrics(:@instances, :minutes(3), :$now), 'restored incremental projection agrees with full replay';
+};
+
+subtest 'command refresh replaces contributions and reads only metric columns' => {
+    my $pending = StoredCommand.^all.grep(*.state == StoredCommand::Pending).head;
+    my $view = metrics-projection();
+    $pending.state = StoredCommand::Done;
+    $pending.tries = 2;
+    $pending.^save;
+    $view.include-command(:id($pending.id), :stream($pending.stream), :state($pending.state.Str), :tries($pending.tries));
+    is $view.report(:$now)<totals><commands>, 3, 'updating an existing command adds no submission';
+    is $view.report(:$now)<totals><pending>, 0, 'previous pending contribution disappears';
+    is $view.report(:$now)<totals><retries>, 4, 'new command attempt replaces its old contribution';
+    is-deeply $view.report(:@instances, :minutes(3), :$now),
+        store-metrics(:@instances, :minutes(3), :$now), 'fresh report observes mutable command changes';
+    my @queries;
+    my role MetricQueries {
+        multi method prepare(Str $sql, |args) { @queries.push($sql); callsame }
+    }
+    $*RED-DB does MetricQueries;
+    my $fresh = metrics-projection();
+    is @queries.elems, 2, 'one journal source and one command metadata read';
+    ok @queries.first(*.contains('SELECT id, stream, state, tries FROM red_sourcing_command')).defined,
+        'command arguments and results are not fetched';
+    @queries = ();
+    $fresh.report(:@instances, :minutes(3), :$now);
+    $fresh.report(:@instances, :minutes(1), :$now);
+    is @queries.elems, 0, 'formatting time windows does not query the store';
+    my @rows = $fresh.journal-records(:from-id(1), :through-id(4));
+    is-deeply @rows.map(*.id).Array, [2, 3, 4], 'raw source honors both cursor bounds';
+    nok @rows[0].data.defined, 'domain payload is not fetched';
+    nok (@rows[1].data<amount>:exists), 'snapshot domain values are not fetched';
+};
 done-testing;

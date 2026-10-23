@@ -1,5 +1,6 @@
 use RedSourcing;
 use RedSourcing::Flow;
+use RedSourcing::Storage;
 use RedSourcing::Web::HTML;
 unit module RedSourcing::Web::Flows;
 
@@ -78,6 +79,7 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
     my $selection = $action.chars ?? 'action:' ~ $action !! 'entity:' ~ $selected;
     my $root = @instances.first(*.<stream> eq $selected);
     return %(stream => $selected, focus => $selection, :$internal, nodes => [], edges => [], available => False, truncated => False) unless $root.defined;
+    my $*REDSOURCING-FLOW-PROJECTION = try flow-projection();
     my %nodes;
     my %edges;
     my $truncated = False;
@@ -102,11 +104,51 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
         $truncated = True if $result.elems >= $limit;
         $result
     }
+    # Bound row caches to this report. Seed stream history and action references
+    # in batches, rather than rebuilding a SQL query for every displayed card.
+    my @stream-rows = StoredEvent.^all.where(StoredEvent.journal-filter(:stream($selected)))
+        .sort(-*.id).head($limit).Seq.Array;
+    my @stream-commands = $root<kind> eq 'saga' ?? () !! StoredCommand.^all
+        .grep(*.stream eq $selected).sort(-*.id).head($limit).Seq.Array;
+    my $first = StoredEvent.^all.where(StoredEvent.journal-filter(:stream($selected), :version(1))).head;
+    my %event-rows = @stream-rows.map({ .id => $_ });
+    %event-rows{$first.id} = $first if $first.DEFINITE;
+    my %command-rows = @stream-commands.map({ .id => $_ });
+    my %command-ids;
+    my %event-ids;
+    my %action-ids;
+    for @stream-rows -> $row {
+        my %state = $row.mro.contains('|RedSourcing::Saga::Control|') ?? ($row.data<state> // {})
+            !! ($row.data<saga-state> // {});
+        for (%state<actions> // []).List -> %action {
+            %command-ids{%action<row-id>} = True if %action<kind> eq 'command' && %action<row-id>;
+            %event-ids{%action<source-event-id>} = True if %action<source-event-id>;
+            %action-ids{%action<id>} = True;
+        }
+    }
+    my @missing-commands = %command-ids.keys.grep({ !(%command-rows{$_}:exists) }).head($limit);
+    %command-rows{.id} = $_ for storage-read-ids(StoredCommand, |@missing-commands);
+    if $*REDSOURCING-FLOW-PROJECTION.DEFINITE {
+        for %command-rows.keys -> $id {
+            for $*REDSOURCING-FLOW-PROJECTION.find-links(:source-kind<command>, :source($id.Str), :$limit).List -> %link {
+                %event-ids{%link<target>} = True if %link<target-kind> eq 'event';
+            }
+        }
+        for %action-ids.keys -> $id {
+            for $*REDSOURCING-FLOW-PROJECTION.find-links(:source-kind<action>, :source($id.Str), :$limit).List -> %link {
+                %event-ids{%link<target>} = True if %link<target-kind> eq 'event';
+            }
+        }
+    }
+    my @missing-events = %event-ids.keys.grep({ !(%event-rows{$_}:exists) }).head($limit);
+    %event-rows{.id} = $_ for storage-read-ids(StoredEvent, |@missing-events);
     my %checkpoints;
     my sub checkpoint($instance --> Str) {
         return '' unless $instance<state-event-id>;
+        return timestamp($instance<state-event-at>) if $instance<state-event-at>.defined;
         %checkpoints{$instance<state-event-id>} //= do {
-            my $row = StoredEvent.^all.grep(*.id == $instance<state-event-id>).head;
+            my $id = $instance<state-event-id>;
+            my $row = %event-rows{$id} //= StoredEvent.^all.where(StoredEvent.journal-filter(:$id)).head;
             $row.defined ?? timestamp($row.created) !! ''
         }
     }
@@ -125,7 +167,8 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
             return $key;
         }
         %event-seen{$id} = True;
-        my $row = StoredEvent.^all.grep(*.id == $id).head;
+        if %nodes.elems >= $limit { $truncated = True; return '' }
+        my $row = %event-rows{$id} //= StoredEvent.^all.where(StoredEvent.journal-filter(:$id)).head;
         return '' unless $row.defined;
         # Keep domain flow legible; raw controls remain in the journal detail.
         return '' if $row.mro.contains('|RedSourcing::Saga::Control|');
@@ -164,7 +207,8 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
             return $key;
         }
         %command-seen{$id} = True;
-        my $row = StoredCommand.^all.grep(*.id == $id).head;
+        if %nodes.elems >= $limit { $truncated = True; return '' }
+        my $row = %command-rows{$id} //= StoredCommand.^all.grep(*.id == $id).head;
         return '' unless $row.defined;
         my $key = node("command:$id", 'command', "#$id {$row.entity}.{$row.method}", 2,
             detail-url('command', $id), $row.state.Str,
@@ -178,11 +222,10 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
         }
         $key
     }
-    my $first = StoredEvent.^all.grep({ .stream eq $selected && .version == 1 }).head;
     event($first.id, $root-id, 'created', :stage(0)) if $first.defined;
     # Controls retain attempted child row IDs, including earlier retry records.
     my %actions;
-    for StoredEvent.^all.grep(*.stream eq $selected).sort(-*.id).head($limit).Seq -> $row {
+    for @stream-rows -> $row {
         my %state = $row.mro.contains('|RedSourcing::Saga::Control|') ?? ($row.data<state> // {})
             !! ($row.data<saga-state> // {});
         for (%state<actions> // []).List -> %action {
@@ -209,7 +252,7 @@ sub flow-report(%report, Str :$stream = '', Str :$focus = '', Bool :$internal = 
         }
     }
     unless $root<kind> eq 'saga' {
-        for StoredCommand.^all.grep(*.stream eq $selected).sort(-*.id).head($limit).Seq -> $row { command($row.id, $root-id) }
+        command($_.id, $root-id) for @stream-commands;
         for links(target-kind => 'entity', target => $selected).List -> %link {
             event(%link<source>.UInt) if %link<source-kind> eq 'event';
         }

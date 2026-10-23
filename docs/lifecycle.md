@@ -1,26 +1,32 @@
 # Entity lifecycle
 
-Aggregates, projections and sagas support the same `EntityLifecycle` enum:
-`OnDemand` creates a new instance on each load; `Retained` reuses a loaded instance
-for its type and stream on the current connection or PostgreSQL pool. The default
-is `OnDemand`. Lifecycle is independent of transactional projection subscriptions.
+Aggregates, projections and sagas default to `Cached`: loaded instances are reused
+within a bounded LRU cache on the current connection or PostgreSQL pool.
+`OnDemand` creates a new instance on each load. Explicit `Retained` reuses loaded
+instances without automatic eviction. Lifecycle is independent of transactional
+projection subscriptions.
 
 ## Choose a declaration default
 
 ```raku
-aggregate Account[:retained] { ... }
-projection Balance[:retained] { ... }
-saga PurchaseWorkflow[:retained] { ... }
+aggregate Account { ... }              # Cached, at most 100 for this type
+projection Balance[:50cached] { ... }  # Cached, at most 50 for this type
+saga PurchaseWorkflow[:cached] { ... } # Cached, at most 100 for this type
+aggregate Temporary[OnDemand] { ... }  # No instance reuse
+aggregate Pinned[Retained] { ... }     # Explicit retention without eviction
 ```
 
-`[:!retained]` explicitly chooses `OnDemand`, the default. Use named pairs in
-declarations so lifecycle and snapshot options share the same syntax. The aliases
-`[Retained]` and `[OnDemand]` remain supported. Brackets configure the metaclass
-before composition, and survive module precompilation. They do not change the
-class or stream name, so the same persisted identity can use either lifecycle.
-`.^lifecycle(:retained)` is available for programmatic declaration
-configuration before the type's first use. `.^lifecycle` reports the effective
-mode; `.^lifecycle(:declared)` reports the declaration default.
+`[:Ncached]` sets the type capacity; `[:cached]` uses 100. `[:!cached]` and
+`[:!retained]` explicitly select `OnDemand`. `[:0cached]` keeps the `Cached`
+lifecycle with storage disabled for that type. Accept only Bool or nonnegative
+Int values. `cached`, `retained` and `lifecycle` cannot be combined in one option
+map. `[Cached]`, `[Retained]` and `[OnDemand]` are supported aliases. Declaration
+options survive precompilation without serializing cached instances and do not
+change persisted class or stream names.
+
+`.^lifecycle(:50cached)` configures the declaration before first use.
+`.^lifecycle` queries the effective mode; `.^lifecycle(:declared)` queries the
+declaration. `.^cache-size` and `.^cache-size(:declared)` query the type capacity.
 Configuration calls return the type and accept the same named pairs as brackets:
 
 ```raku
@@ -38,20 +44,21 @@ use RedSourcing::Config;
 config {
     .driver = 'SQLite';
     .database = 'events.db';
+    .entity-cache-size = 200; # Total across all Cached types
     .includes = <lib>;
     .modules = <App::Domain App::Services>;
     .entities = {
-        'App::Account' => { retained => True },
+        'App::Account' => { cached => 100 },
         'App::Balance' => { retained => False },
-        'App::PurchaseWorkflow' => { retained => True },
+        'App::PurchaseWorkflow' => { cached => 50 },
     };
 }
 ```
 
 The file takes precedence over the declaration; an omitted type keeps its own
-default. Keys are exact full class names. Entries accept `retained` (Bool),
-`auto-snapshot`, or the enum spelling
-`lifecycle` (`OnDemand`/`Retained`). Choose one lifecycle spelling per entry.
+default. Keys are exact full class names. Entries accept `cached` (Bool or
+nonnegative Int), `retained` (Bool), `auto-snapshot`, or the enum spelling
+`lifecycle` (`Cached`/`OnDemand`/`Retained`). Choose one lifecycle spelling per entry.
 Invalid values fail when reading the file. See [automatic snapshots](auto-snapshot.md)
 for the default policy, declaration options and explicit `Nil`.
 
@@ -69,22 +76,36 @@ is allowed; changing a used type's mode fails before replacing any settings.
 Restart the application to change modes on a running store. A different connection
 can use a different mode for the same class.
 
+## Cache limits
+
+The default total capacity is 100, shared by all `Cached` types in the store.
+Each type also defaults to 100; both limits apply simultaneously. A full total
+cache evicts its globally least recently accessed entry even when every type is
+below its individual limit. A full type cache evicts that type's least recently
+accessed entry first. Hits renew recency. Explicit `Retained` entries are outside
+these limits. Transaction working copies are temporary and are not cache entries.
+
+`.entity-cache-size = 0` disables the entire bounded cache. Programmatic setup
+accepts `configure-lifecycles(%entities, :entity-cache-size(200))` from
+`RedSourcing::Lifecycle`. Configure capacities before first use; identical settings
+can be reapplied. Cache state is local to the process and connection/pool.
+
 ## Load, update and release
 
 ```raku
 my $proxy = Account.^with-ids(:account-id<a1>);
 $proxy.^create;
 my $account = $proxy.^load;
-my $same = $proxy.^load; # Same object when this type uses Retained
+my $same = $proxy.^load; # Same object while still cached
 $proxy.credit(:amount(5)); # Existing reference updates after commit
-$proxy.^release; # Future loads create a new retained instance
+$proxy.^release; # Future loads reconstruct a new instance
 ```
 
 Retention starts at `.^load`, including internal loads performed by commands
 and saga controllers. Choosing `Retained` does not preload every identity.
-Applications with many identities should release ones they no longer need.
-Automatic eviction is not implemented. Retention is local to the process and
-connection/pool, not a distributed cache.
+Eviction and release stop automatic updates to old references without invalidating
+them. Pending commits do not resurrect removed entries. `Retained` users should
+release identities they no longer need. This is not a distributed cache.
 
 Each type retains its existing update policy:
 
@@ -94,10 +115,18 @@ Each type retains its existing update policy:
 | Projection | `.^advance` replays its matching events. An `is transactional` candidate triggers ordered replay and checkpointing in the emitting transaction. Retained subscriptions target loaded identities only. |
 | Saga | `.^advance` consumes source facts, executes eligible actions and checks timers. Each committed control publishes its state. Ordinary loading restores snapshots and controls without running `REACT` or services. |
 
-Checkpoint/snapshot APIs support every lifecycle. Retention does not change the
-automatic snapshot policy or start a background
-controller. By default all types checkpoint after 100 applied records at their
-existing operation boundaries; see [automatic snapshots](auto-snapshot.md).
+Checkpoint/snapshot APIs support every lifecycle. By default all types checkpoint
+after 100 applied records at their existing operation boundaries. In addition,
+evicting or explicitly releasing a dirty `Cached` entity saves a snapshot even
+below that threshold. Clean entities do not create another snapshot, and
+`:!auto-snapshot` or an effective `auto-snapshot => False` disables this behavior.
+
+Eviction snapshots run outside the cache lock, after the caller commits. Active
+entity operations finish before checkpointing; rollback discards deferred work.
+A checkpoint failure does not fail an already committed operation: journal replay
+remains available, and the store records `eviction-snapshot-failures` and
+`eviction-snapshot-error` diagnostics. No background controller is started.
+See [automatic snapshots](auto-snapshot.md).
 
 ## Transactions and freshness
 
@@ -116,6 +145,18 @@ Saga advances preserve their existing durability boundaries: a claim is committe
 before an external action executes; individual controls record progress. A later
 failure does not undo controls that already committed. Loading never reissues an
 external effect. Retry and compensation semantics remain unchanged.
+
+A `Cached` load checks the latest checkpoint metadata and replays only new events
+when the checkpoint has not superseded its state. Reads and commands therefore
+still query the journal; caching avoids full reconstruction and historical replay.
+Projection filters and passive saga controls retain their existing semantics.
+Projections whose selection depends on mutable non-ID attributes, raw journal
+providers or unsupported predicates reconstruct on each
+load instead of reusing accumulated state. Their lifecycle remains `Cached`, but
+this conservative fallback preserves runtime filter changes. Explicit `Retained`
+continues to provide its existing opt-in retention behavior.
+External variable captures in `APPLY`/`REACT` filters are rejected during type
+composition; see [projection filters](projections.md).
 
 Another process does not push updates into retained references. Aggregates catch
 up before commands; projections and sagas catch up through their existing advance

@@ -1,0 +1,150 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Storage;
+
+class CombinedFact does Event { has Int $.amount }
+aggregate CombinedSum[OnDemand] {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    has @.seen;
+    method APPLY(CombinedFact $event) { $!total += $event.amount; @!seen.push($event.amount) }
+}
+aggregate CombinedOther[OnDemand] is CombinedSum { }
+aggregate CombinedRetained[Retained] is CombinedSum { }
+aggregate CombinedCustom[OnDemand] is CombinedSum { }
+my $custom-replays = 0;
+my role CustomReplay {
+    method replay(\entity) { $custom-replays++; callsame }
+}
+CombinedCustom.HOW does CustomReplay;
+my @sql;
+my role CountSQL {
+    multi method prepare(Str $sql, |args) { @sql.push($sql); callsame }
+}
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my $*RED-DB;
+my $admin;
+my $schema = 'rs_combined_load_' ~ $*PID;
+if $database {
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $admin.execute("CREATE SCHEMA $schema");
+    $*RED-DB = store-driver('Pg', $database, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>))
+    });
+} else { $*RED-DB = store-driver('SQLite', ':memory:') }
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+$*RED-DB does CountSQL;
+schema(StoredEvent, StoredCommand).create;
+my $combined = 0;
+my $handle = &storage-aggregate-rows.wrap(-> |c { $combined++; callsame });
+LEAVE &storage-aggregate-rows.unwrap($handle);
+
+my $a = CombinedSum.^with-ids(:key<a>);
+my $first = $a.^create;
+CombinedFact.emit(:stream($first.stream), :version(2), :amount(5));
+CombinedFact.emit(:stream<foreign>, :version(1), :amount(999));
+@sql = ();
+my $loaded = $a.^load;
+is $loaded.total, 5, 'combined load applies only its stream';
+is-deeply $loaded.seen.Array, [5], 'snapshot is not passed to domain APPLY';
+is $combined, 1, 'one combined read reconstructs the aggregate';
+is @sql.grep(*.starts-with('WITH snapshot AS')).elems, 1, 'initial read prepares one CTE';
+is @sql.grep({ .starts-with('SELECT') && .contains('red_sourcing_event') }).elems, 0,
+    'combined reconstruction issues no separate event SELECT';
+unless $database {
+    my $cte = @sql.grep(*.starts-with('WITH snapshot AS')).head;
+    my @plan = storage-query($*RED-DB, 'EXPLAIN QUERY PLAN ' ~ $cte, CombinedSum.^name, $first.stream);
+    ok @plan.grep({ .<detail>.contains('SEARCH e USING INDEX') && .<detail>.contains('stream=') }).elems,
+        'SQLite seeks replay rows through the stream index';
+    nok @plan.grep({ .<detail>.starts-with('SCAN e') }).elems,
+        'SQLite does not scan the complete event history';
+}
+
+my $checkpoint = $loaded.^emit-snapshot;
+CombinedFact.emit(:stream($first.stream), :version($checkpoint.version + 1), :amount(7));
+@sql = ();
+is $a.^load.total, 12, 'latest snapshot and its tail reconstruct current state';
+is @sql.grep(*.starts-with('WITH snapshot AS')).elems, 0,
+    'SQLite reuses the physical prepared CTE' unless $database;
+
+for CombinedSum, CombinedOther -> $type {
+    my $proxy = $type.^with-ids(:key($type.^name));
+    my $row = $proxy.^create;
+    is $proxy.^load.total, 0, 'snapshot-only load binds a new class and stream';
+    CombinedFact.emit(:stream($row.stream), :version(2), :amount(3));
+    is $proxy.^load.total, 3, 'fresh binds see newly appended events';
+}
+throws-like { CombinedSum.^with-ids(:key<missing>).^load }, X::AdHoc,
+    message => /'No snapshot'/, 'missing snapshots retain their error';
+
+for 0, 1 -> $mode {
+    my $proxy = CombinedSum.^with-ids(:key("cursor-$mode"));
+    my $initial = $proxy.^create;
+    my $fact = CombinedFact.emit(:stream($initial.stream), :version(2), :amount(5));
+    my %payload = $initial.data.Hash;
+    %payload<total> = $mode ?? 5 !! 0;
+    %payload<seen> = $mode ?? [5] !! [];
+    my $row = StoredEvent.^create(:class(CombinedSum.^name), :mro($initial.mro),
+        :stream($initial.stream), :version(3), :data(%payload),
+        :replay-cursor($mode ?? $fact.id !! 0));
+    CombinedFact.emit(:stream($initial.stream), :version(4), :amount(7));
+    my $expected = CombinedSum.^restore(:stream($initial.stream));
+    $expected.^replay;
+    my $actual = $proxy.^load;
+    is $actual.total, 12, 'explicit cursor restores the same domain state';
+    is-deeply $actual.seen.Array, $expected.seen.Array, 'cursor replay order matches the original path';
+    is $actual.^current-id, $expected.^current-id, 'cursor matches the original path';
+    is $actual.^version, $expected.^version, 'version matches the original path';
+    is $actual.^snapshot-events, $expected.^snapshot-events, 'snapshot budget matches the original path';
+}
+
+my $retained = CombinedRetained.^with-ids(:key<retained>);
+my $retained-row = $retained.^create;
+CombinedRetained.^release(:stream($retained-row.stream));
+my $before = $combined;
+@sql = ();
+red-do :transaction, {
+    is $retained.^load.total, 0, 'cold retained load reconstructs inside a transaction';
+};
+is $combined, $before + 1, 'cold retained load uses one combined read';
+is @sql.grep({ .starts-with('SELECT') && .contains('red_sourcing_event') }).elems, 0,
+    'cold retained transaction does not repeat replay';
+CombinedFact.emit(:stream($retained-row.stream), :version(2), :amount(9));
+red-do :transaction, { is $retained.^load.total, 9, 'existing retained instance catches up transactionally' };
+
+my $custom = CombinedCustom.^with-ids(:key<custom>); $custom.^create;
+$before = $combined;
+is $custom.^load.total, 0, 'custom replay remains callable';
+is $combined, $before, 'custom reconstruction retains the original query path';
+ok $custom-replays > 0, 'custom replay hook is invoked';
+
+my $wrapped-replays = 0;
+my $replay-handle = Metamodel::RedSourcing::AggregateHOW.^find_method('replay').wrap(-> |c {
+    $wrapped-replays++; callsame
+});
+$before = $combined;
+is $a.^load.total, 12, 'wrapped replay retains its behavior';
+is $combined, $before, 'wrapped reconstruction keeps the original query path';
+is $wrapped-replays, 1, 'replay wrapper executes once';
+$replay-handle.restore;
+
+dies-ok {
+    red-do :transaction, {
+        CombinedFact.emit(:stream($first.stream), :version($checkpoint.version + 2), :amount(100));
+        is $a.^load.total, 112, 'combined read sees uncommitted writes';
+        die 'rollback';
+    }
+}, 'transaction rolls back after a combined read';
+is $a.^load.total, 12, 'cached query retains no rolled-back rows';
+class UnsupportedReadDriver {
+    method prepare(|) { die 'unsupported driver must not execute the combined SQL' }
+}
+{
+    my $*RED-DB = UnsupportedReadDriver.new;
+    ok storage-aggregate-rows(StoredEvent, 'unused', 'unused')<unsupported>,
+        'other drivers decline the optimized query without executing SQL';
+}
+done-testing;

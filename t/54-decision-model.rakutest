@@ -23,8 +23,8 @@ schema(StoredEvent, StoredCommand).create;
 my $proxy = DecisionTotal.^with-ids(:key<a>);
 
 subtest 'empty decisions, several models, return value and own appends' => {
-    is decision-model($proxy, -> $view { $view.amount }), 0, 'empty model has its initial state';
-    is decision-model($proxy, DecisionTotal.^with-ids(:key<b>), -> $a, $b {
+    is decision-model((DecisionTotal) => %(:key<a>), -> $view { $view.amount }), 0, 'empty model has its initial state';
+    is decision-model((DecisionTotal) => %(:key<a>), (DecisionTotal) => %(:key<b>), -> $a, $b {
         is $a.amount, 0, 'first model is loaded';
         is $b.amount, 0, 'second model is loaded';
         DecisionFact.emit(:key<a>, :amount(2), :stream<one>, :version(1));
@@ -37,7 +37,7 @@ subtest 'empty decisions, several models, return value and own appends' => {
 subtest 'an exception rolls back a complete batch even when the caller catches it' => {
     red-do :transaction, {
         dies-ok {
-            decision-model $proxy, -> $view {
+            decision-model (DecisionTotal) => %(:key<a>), -> $view {
                 DecisionFact.emit(:key<a>, :amount(7), :stream<aborted>, :version(1));
                 die 'abort batch';
             }
@@ -49,9 +49,9 @@ subtest 'an exception rolls back a complete batch even when the caller catches i
 };
 
 subtest 'nested decisions share writes without conflicting with themselves' => {
-    decision-model $proxy, -> $outer {
+    decision-model (DecisionTotal) => %(:key<a>), -> $outer {
         DecisionFact.emit(:key<a>, :amount(1), :stream<nested>, :version(1));
-        decision-model $proxy, -> $inner {
+        decision-model (DecisionTotal) => %(:key<a>), -> $inner {
             is $inner.amount, 6, 'inner decision includes earlier writes in this transaction';
             DecisionFact.emit(:key<a>, :amount(1), :stream<nested>, :version(2));
         }
@@ -60,11 +60,11 @@ subtest 'nested decisions share writes without conflicting with themselves' => {
 };
 
 subtest 'invalid inputs and mutable filters fail before the block' => {
-    dies-ok { decision-model -> { } }, 'at least one proxy is required';
-    dies-ok { decision-model DecisionTotal, -> $ { } }, 'a type is not a proxy';
-    dies-ok { decision-model 42, -> $ { } }, 'ordinary values are not proxies';
+    dies-ok { decision-model -> { } }, 'at least one model is required';
+    dies-ok { decision-model DecisionTotal, -> $ { } }, 'IDs must be supplied explicitly';
+    dies-ok { decision-model 42, -> $ { } }, 'ordinary values are not model descriptions';
     my $called = False;
-    throws-like { decision-model InvalidDecision.^with-ids, -> $ { $called = True } },
+    throws-like { decision-model (InvalidDecision) => %(), -> $ { $called = True } },
         X::AdHoc, message => /'mutable projection state'/;
     nok $called, 'invalid filter never executes the block';
 };
@@ -72,14 +72,14 @@ subtest 'invalid inputs and mutable filters fail before the block' => {
 subtest 'snapshots and retained projections remain isolated from the decision' => {
     my $view = $proxy.^load;
     $view.^emit-snapshot;
-    decision-model $proxy, -> $copy {
-        is $copy.amount, 7, 'restores checkpoint and replays through the boundary';
+    decision-model (DecisionTotal) => %(:key<a>), -> $copy {
+        is $copy.amount, 7, 'restores checkpoint state without duplicating its facts';
         $copy.amount = 100;
     }
     is $proxy.^load.amount, 7, 'decision reads do not write snapshots';
     my $retained = RetainedDecision.^with-ids(:key<a>);
     my $cached = $retained.^load;
-    decision-model $retained, -> $copy {
+    decision-model (RetainedDecision) => %(:key<a>), -> $copy {
         isnt $copy.WHICH, $cached.WHICH, 'retained decision is an isolated instance';
         $copy.amount = 100;
     }
@@ -87,7 +87,7 @@ subtest 'snapshots and retained projections remain isolated from the decision' =
 };
 
 subtest 'savepoint rollback restores a still-active decision check' => {
-    decision-model $proxy, -> $view {
+    decision-model (DecisionTotal) => %(:key<a>), -> $view {
         try {
             red-do :transaction, {
                 DecisionFact.emit(:key<a>, :amount(20), :stream<discarded-check>, :version(1));
@@ -120,7 +120,7 @@ subtest 'SQLite rejects an empty read invalidated by an independent committed wr
         WORKER
     my ($read, $status, $errors);
     throws-like {
-        decision-model DecisionTotal.^with-ids(:key<empty>), -> $view {
+        decision-model (DecisionTotal) => %(:key<empty>), -> $view {
             $read = $view.amount;
             my $p = run $*EXECUTABLE.Str, '-Ilib', $worker.Str, $file, :out, :err;
             $status = $p.exitcode;
@@ -136,4 +136,95 @@ subtest 'SQLite rejects an empty read invalidated by an independent committed wr
     my $total = DecisionTotal.^with-ids(:key<empty>).^load.amount;
     is $total, 1, 'only the competing fact remains';
 };
+
+subtest 'ordered plans reuse signatures while binding current IDs' => {
+    use RedSourcing::Utils;
+    use RedSourcing::QueryTemplate;
+    projection CachedTotal {
+        has Str $.key is entity-id;
+        has Int $.amount is rw = 0;
+        multi method APPLY(DecisionFact $e where { .key eqv $!key }) { $!amount += $e.amount }
+        # REACT is deliberately unsuitable for a decision query.
+        method REACT(DecisionFact $e where { .amount > $!amount }) { }
+    }
+    projection OtherCachedTotal is CachedTotal { }
+    projection DestructuredTotal {
+        has Str $.key is entity-id;
+        has Int $.amount is rw = 0;
+        multi method APPLY(DecisionFact $e (:$key where { $_ eqv $!key }, :$amount where { $_ > 0 })) {
+            $!amount += $e.amount;
+        }
+        multi method APPLY(DecisionFact $e where { .key eqv $!key && .amount < 0 }) {
+            $!amount += $e.amount;
+        }
+    }
+    projection ConcurrentTotal is DestructuredTotal { }
+    projection ConcurrentCompiledTotal is CachedTotal { }
+    my $compositions = 0;
+    my $composition-wrapper = &prepare-query-bindings.wrap(-> |args { $compositions++; callsame });
+    LEAVE &prepare-query-bindings.unwrap($composition-wrapper);
+    my $prepared = 0;
+    my $wrapper = &prepare-rule.wrap(-> |args { $prepared++; callsame });
+    LEAVE &prepare-rule.unwrap($wrapper);
+    my &read = -> $type, $key {
+        decision-model $type => %(:$key), -> $view { $view.amount }
+    };
+    is read(CachedTotal, 'a'), 9, 'initial descriptor binds first ID';
+    my $first-composition = $compositions;
+    ok $first-composition > 0, 'first list builds combined binding paths';
+    my $first = $prepared;
+    is $first, 0, 'signatures were already prepared during composition';
+    is read(CachedTotal, 'b'), 1, 'same plan binds a different ID';
+    is $prepared, $first, 'same list does not prepare signatures again';
+    is $compositions, $first-composition, 'different IDs reuse combined binding paths';
+    is read(OtherCachedTotal, 'a'), 9, 'inherited APPLY is included';
+    my $both = $prepared;
+    for 1..2 -> $order {
+        my @types = $order == 1 ?? (CachedTotal, OtherCachedTotal) !! (OtherCachedTotal, CachedTotal);
+        decision-model @types[0] => %(:key<a>), @types[1] => %(:key<b>), -> $a, $b {
+            is $a.amount, 9, 'first position retains its IDs';
+            is $b.amount, 1, 'second position retains its IDs';
+        }
+    }
+    is $prepared, $both, 'new list orders reuse type descriptors';
+    decision-model (CachedTotal) => %(:key<a>), (CachedTotal) => %(:key<b>), -> $a, $b {
+        isnt $a.WHICH, $b.WHICH, 'repeated type has separate views';
+        is read(CachedTotal, 'b'), 1, 'nested decision binds its own ID';
+        is $a.amount, 9, 'outer first ID remains intact';
+        is $b.amount, 1, 'outer second ID remains intact';
+    }
+    my $repeated-compositions = $compositions;
+    decision-model (CachedTotal) => %(:key<b>), (CachedTotal) => %(:key<a>), -> $b, $a {
+        is $b.amount, 1, 'cached repeated-type plan rebinds its first position';
+        is $a.amount, 9, 'cached repeated-type plan rebinds its second position';
+    }
+    is $compositions, $repeated-compositions, 'repeated-type plan keeps its combined binding paths';
+    is $prepared, $both, 'repeated types and nested calls reuse descriptors';
+    is read(DestructuredTotal, 'a'), 9, 'multiple candidates include a sub-signature';
+    is read(DestructuredTotal, 'b'), 1, 'cached sub-signature binds new ID';
+    # Each worker has a separate database, while sharing the signature cache.
+    my $ready = Channel.new;
+    my $go = Promise.new;
+    my @workers = (^4).map: -> $i {
+        start {
+            my $*RED-DB = database 'SQLite', :database(':memory:');
+            schema(StoredEvent, StoredCommand).create;
+            my $key = "parallel-$i";
+            DecisionFact.emit(:$key, :amount($i + 1), :stream($key), :version(1));
+            $ready.send(True);
+            await $go;
+            (gather for ^10 {
+                take read(ConcurrentCompiledTotal, $key) == $i + 1;
+                take read(ConcurrentCompiledTotal, "absent-$i") == 0;
+                take read(ConcurrentTotal, $key) == $i + 1;
+                take read(ConcurrentTotal, "absent-$i") == 0;
+            }).all.so
+        }
+    };
+    $ready.receive for ^4;
+    $go.keep(True);
+    ok (await Promise.allof(@workers)).defined, 'concurrent decisions finish';
+    ok @workers.map(*.result).all, 'shared signatures isolate concurrent IDs';
+};
+
 done-testing;

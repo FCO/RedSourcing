@@ -1,3 +1,4 @@
+use RedSourcing::Storage;
 use Red <refreshable>;
 use Red::AST::Value;
 use Red::Type::Json;
@@ -7,6 +8,7 @@ use RedSourcing::Utils;
 use RedSourcing::Context;
 use RedSourcing::Flow;
 use RedSourcing::Journal;
+use RedSourcing::Counters;
 use RedSourcing::Lifecycle;
 unit model RedSourcing::StoredCommand is table<red_sourcing_command>;
 
@@ -26,14 +28,14 @@ has UInt     $.tries      is column is rw = 0;
 has Json     $.data       is column{ :nullable };
 has Any      $.result     is column{ :nullable, :type<jsonb>, :inflate(&from-json), :deflate(&to-json) } is rw;
 has Str      $.error      is column{ :nullable } is rw;
+has UInt $.parent-command-id is column{ :nullable };
+has Str $.action-id is column{ :nullable };
 has $.stream-history is index{ .stream, .id };
 has $.due-work is index{ .state, .next-run, .id };
 
 method run(::?CLASS:D: Bool :$wait) {
 	assert-effect-allowed('command execution');
 	my $*REDSOURCING-COMMAND-DEPTH = ((try $*REDSOURCING-COMMAND-DEPTH) // 0) + 1;
-	my $flow-scope = flow-tracing-enabled;
-	my $*REDSOURCING-FLOW-SCOPE = $flow-scope;
 	my $failure;
 	my $claimed = False;
 	CATCH {
@@ -58,7 +60,7 @@ method run(::?CLASS:D: Bool :$wait) {
 	my UInt $conflicts = 0;
 	my UInt $invocations = 0;
 	loop {
-		self.^refresh;
+		self.^refresh-storage-row;
 		return $!result if $!state == Done;
 		die $!error if $!state == Failed;
 		return unless $!state == Pending;
@@ -79,19 +81,32 @@ method run(::?CLASS:D: Bool :$wait) {
 					.rethrow unless $owns-transaction;
 					$conflict = $_;
 				}
+                default {
+                    .rethrow unless retryable-journal-error($_);
+                    my $retry = RedSourcing::X::OptimisticLockFailed.new(:boundary<transaction-conflict>);
+                    $retry.throw unless $owns-transaction;
+                    $conflict = $retry;
+                }
 			}
 			transaction-do {
-				self.WHAT.^all.grep(*.id == $!id).map({ .state = .state }).save;
-				self.^refresh;
-				return $!result if $!state == Done;
-				die $!error if $!state == Failed;
-				return unless $!state == Pending;
+                my $connection = journal-connection();
+                my @p = is-pg($connection) ?? < $1 $2 $3 > !! < ? ? ? >;
+                my @claim = counter-sql($connection,
+                    'UPDATE red_sourcing_command SET state = ' ~ @p[0]
+                    ~ ' WHERE id = ' ~ @p[1] ~ ' AND state = ' ~ @p[2] ~ ' RETURNING *',
+                    Processing.Int, $!id, Pending.Int);
+                # A successful claim returns the exact in-transaction row.
+                # A lost claim must still observe the winner's current state.
+                @claim ?? refresh-storage-data(self, @claim.head) !! self.^refresh-storage-row;
+                return $!result if $!state == Done;
+                die $!error if $!state == Failed;
+                return unless @claim;
 				if $!next-run > DateTime.now {
+					self.state = Pending;
+                    self.^save;
 					$again = True;
 					False
 				} else {
-					self.state = Processing;
-					self.^save;
 					$claimed = True;
 					require ::("RedSourcing::StoredEvent");
 					my Mu $type = resolve-class($!entity);
@@ -122,7 +137,7 @@ method run(::?CLASS:D: Bool :$wait) {
 			# update cannot overwrite a result committed by another executor.
 			self.WHAT.^all.grep({ .id == $!id && .state == Pending })
 				.map({ .tries += $invocations }).save if $invocations;
-			self.^refresh;
+			self.^refresh-storage-row;
 			return $!result if $!state == Done;
 			$conflict.rethrow;
 		}
@@ -143,4 +158,10 @@ method list-commands(
 	$rs   .= grep: *.state  == $_ with $state;
 
 	$rs.Seq
+}
+
+# Cache immutable column metadata instead of rebuilding it for every row/query.
+INIT {
+    RedSourcing::StoredCommand.HOW does CachedStorageRows;
+    RedSourcing::StoredCommand.^cache-storage-columns;
 }

@@ -85,7 +85,7 @@ sub with-store(Str $driver, Str $database, Bool $debug, &work) {
     my $path = config-database($driver, $database, $cli-config-directory,
         :explicit(so %*CLI-OPTIONS<database>:exists));
     red-defaults :default(store-driver($driver, $path, :connection($cli-config.connection)));
-    configure-lifecycles($cli-config.entities, :auto-snapshot($cli-config.auto-snapshot));
+    configure-lifecycles($cli-config.entities, :auto-snapshot($cli-config.auto-snapshot), :entity-cache-size($cli-config.entity-cache-size));
     work()
 }
 

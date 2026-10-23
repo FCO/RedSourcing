@@ -1,0 +1,918 @@
+{
+  "measured_at": "2026-10-21",
+  "red": "0.2.7",
+  "rakudo": "2026.09",
+  "driver": "SQLite",
+  "database": ":memory:",
+  "samples": {
+    "school": {
+      "before": [
+        {
+          "seconds": 4.988262415979989
+        },
+        {
+          "seconds": 5.289448917028494
+        },
+        {
+          "seconds": 4.985957374970894
+        },
+        {
+          "seconds": 5.093996124982368
+        },
+        {
+          "seconds": 5.066648750042077
+        }
+      ],
+      "after": [
+        {
+          "seconds": 4.8578150409739465
+        },
+        {
+          "seconds": 4.87606987496838
+        },
+        {
+          "seconds": 4.891726333997212
+        },
+        {
+          "seconds": 4.823606458026916
+        },
+        {
+          "seconds": 4.889842416974716
+        }
+      ]
+    },
+    "empty": {
+      "before": [
+        {
+          "sum": 0,
+          "seconds": 0.111709998,
+          "iterations": 50,
+          "streams": 4,
+          "history": 0,
+          "tail": 0,
+          "checkpoint": false,
+          "applied": 0
+        },
+        {
+          "streams": 4,
+          "sum": 0,
+          "iterations": 50,
+          "applied": 0,
+          "seconds": 0.119212452,
+          "history": 0,
+          "tail": 0,
+          "checkpoint": false
+        },
+        {
+          "tail": 0,
+          "sum": 0,
+          "checkpoint": false,
+          "iterations": 50,
+          "applied": 0,
+          "history": 0,
+          "seconds": 0.108620567,
+          "streams": 4
+        },
+        {
+          "sum": 0,
+          "checkpoint": false,
+          "iterations": 50,
+          "applied": 0,
+          "history": 0,
+          "tail": 0,
+          "seconds": 0.113473799,
+          "streams": 4
+        },
+        {
+          "iterations": 50,
+          "history": 0,
+          "applied": 0,
+          "streams": 4,
+          "sum": 0,
+          "checkpoint": false,
+          "seconds": 0.108269315,
+          "tail": 0
+        }
+      ],
+      "after": [
+        {
+          "sum": 0,
+          "history": 0,
+          "tail": 0,
+          "streams": 4,
+          "seconds": 0.133148269,
+          "applied": 0,
+          "iterations": 50,
+          "checkpoint": false
+        },
+        {
+          "applied": 0,
+          "streams": 4,
+          "checkpoint": false,
+          "iterations": 50,
+          "tail": 0,
+          "sum": 0,
+          "history": 0,
+          "seconds": 0.153121741
+        },
+        {
+          "tail": 0,
+          "history": 0,
+          "checkpoint": false,
+          "seconds": 0.138210085,
+          "streams": 4,
+          "sum": 0,
+          "applied": 0,
+          "iterations": 50
+        },
+        {
+          "tail": 0,
+          "applied": 0,
+          "iterations": 50,
+          "sum": 0,
+          "streams": 4,
+          "seconds": 0.139517383,
+          "history": 0,
+          "checkpoint": false
+        },
+        {
+          "seconds": 0.13207968,
+          "applied": 0,
+          "history": 0,
+          "checkpoint": false,
+          "tail": 0,
+          "iterations": 50,
+          "sum": 0,
+          "streams": 4
+        }
+      ]
+    },
+    "history": {
+      "before": [
+        {
+          "seconds": 6.353412908,
+          "sum": 10200,
+          "checkpoint": false,
+          "iterations": 50,
+          "history": 100,
+          "applied": 10200,
+          "streams": 4,
+          "tail": 2
+        },
+        {
+          "checkpoint": false,
+          "tail": 2,
+          "iterations": 50,
+          "history": 100,
+          "applied": 10200,
+          "streams": 4,
+          "seconds": 6.567895487,
+          "sum": 10200
+        },
+        {
+          "iterations": 50,
+          "applied": 10200,
+          "streams": 4,
+          "history": 100,
+          "sum": 10200,
+          "tail": 2,
+          "checkpoint": false,
+          "seconds": 6.371737662
+        },
+        {
+          "sum": 10200,
+          "tail": 2,
+          "iterations": 50,
+          "applied": 10200,
+          "seconds": 6.300153357,
+          "streams": 4,
+          "history": 100,
+          "checkpoint": false
+        },
+        {
+          "seconds": 6.332488097,
+          "tail": 2,
+          "iterations": 50,
+          "streams": 4,
+          "applied": 10200,
+          "checkpoint": false,
+          "history": 100,
+          "sum": 10200
+        }
+      ],
+      "after": [
+        {
+          "sum": 10200,
+          "iterations": 50,
+          "history": 100,
+          "checkpoint": false,
+          "tail": 2,
+          "seconds": 0.252740931,
+          "applied": 0,
+          "streams": 4
+        },
+        {
+          "seconds": 0.213523158,
+          "checkpoint": false,
+          "sum": 10200,
+          "iterations": 50,
+          "history": 100,
+          "streams": 4,
+          "applied": 0,
+          "tail": 2
+        },
+        {
+          "streams": 4,
+          "seconds": 0.196892995,
+          "checkpoint": false,
+          "sum": 10200,
+          "history": 100,
+          "tail": 2,
+          "applied": 0,
+          "iterations": 50
+        },
+        {
+          "history": 100,
+          "tail": 2,
+          "checkpoint": false,
+          "applied": 0,
+          "iterations": 50,
+          "sum": 10200,
+          "streams": 4,
+          "seconds": 0.261963517
+        },
+        {
+          "applied": 0,
+          "history": 100,
+          "tail": 2,
+          "streams": 4,
+          "iterations": 50,
+          "checkpoint": false,
+          "seconds": 0.247855533,
+          "sum": 10200
+        }
+      ]
+    }
+  },
+  "results": {
+    "school": {
+      "before_median_seconds": 5.066648750042077,
+      "after_median_seconds": 4.87606987496838,
+      "change_percent": -3.7614384670363155,
+      "favorable_pairs": 5
+    },
+    "empty": {
+      "before_median_seconds": 0.111709998,
+      "after_median_seconds": 0.138210085,
+      "change_percent": 23.722215982852312,
+      "favorable_pairs": 0
+    },
+    "history": {
+      "before_median_seconds": 6.353412908,
+      "after_median_seconds": 0.247855533,
+      "change_percent": -96.09885998928374,
+      "favorable_pairs": 5
+    }
+  },
+  "expected": {
+    "school": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+    "empty": 0,
+    "history": 10200
+  },
+  "methodology": "Exact isolated before/after lib trees; one warmup per workload/variant, five alternating pairs without concurrent tests. Microbench times exclude seed/warmup; school times include process startup/schema/tracing.",
+  "source_sha256": {
+    "before": {
+      "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+      "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+      "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+      "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+      "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+      "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+      "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+      "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+      "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+      "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+      "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+      "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+      "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+      "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+      "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+      "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+      "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+      "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+      "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+      "lib/RedSourcing/Storage.rakumod": "d51fbf6f2359fb97928ee80220fabe01fc96c842b7844fe1ff6beb318768695d",
+      "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+      "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+      "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+      "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+      "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+      "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+      "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+      "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+      "lib/RedSourcing/Lifecycle.rakumod": "ec845dccdd3705a985dd024a6f73dbccbe7c90368bd72b9bf9354e82f0b20e2c",
+      "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+      "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+      "lib/RedSourcing/Decision.rakumod": "678447f16dc275cd80a268e5a45ff5e4d28647a037b8ad341188ed88f0ed2ffa",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+      "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+      "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+      "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+      "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+      "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+      "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+      "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+      "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+      "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+      "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+      "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+      "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+      "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+      "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+      "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+      "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+      "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+      "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+      "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+      "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+      "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+    },
+    "after": {
+      "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+      "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+      "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+      "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+      "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+      "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+      "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+      "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+      "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+      "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+      "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+      "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+      "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+      "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+      "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+      "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+      "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+      "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+      "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+      "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+      "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+      "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+      "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+      "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+      "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+      "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+      "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+      "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+      "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+      "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+      "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+      "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+      "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+      "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+      "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+      "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+      "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+      "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+      "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+      "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+      "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+      "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+      "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+      "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+      "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+      "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+      "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+      "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+      "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+      "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+      "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+      "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+      "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+    }
+  },
+  "retained": true,
+  "admission": "Only Cached lifecycle projections with compiled ID-only filters, safely detachable state and at least four applied facts since checkpoint. Shared ordinary entity pool/type/global limits.",
+  "rejected_unconditional_admission": {
+    "retained": false,
+    "measured_at": "2026-10-21",
+    "red": "0.2.7",
+    "rakudo": "2026.09",
+    "driver": "SQLite",
+    "database": ":memory:",
+    "samples": {
+      "empty": {
+        "before": [
+          {
+            "iterations": 50,
+            "tail": 0,
+            "history": 0,
+            "sum": 0,
+            "seconds": 0.140492338,
+            "applied": 0,
+            "checkpoint": false,
+            "streams": 4
+          },
+          {
+            "checkpoint": false,
+            "streams": 4,
+            "applied": 0,
+            "tail": 0,
+            "sum": 0,
+            "seconds": 0.100631804,
+            "iterations": 50,
+            "history": 0
+          },
+          {
+            "applied": 0,
+            "history": 0,
+            "checkpoint": false,
+            "streams": 4,
+            "iterations": 50,
+            "tail": 0,
+            "seconds": 0.111725208,
+            "sum": 0
+          },
+          {
+            "streams": 4,
+            "tail": 0,
+            "seconds": 0.113669273,
+            "sum": 0,
+            "history": 0,
+            "checkpoint": false,
+            "iterations": 50,
+            "applied": 0
+          },
+          {
+            "checkpoint": false,
+            "streams": 4,
+            "history": 0,
+            "seconds": 0.102285205,
+            "iterations": 50,
+            "tail": 0,
+            "sum": 0,
+            "applied": 0
+          }
+        ],
+        "after": [
+          {
+            "sum": 0,
+            "checkpoint": false,
+            "history": 0,
+            "iterations": 50,
+            "streams": 4,
+            "applied": 0,
+            "tail": 0,
+            "seconds": 0.232209774
+          },
+          {
+            "applied": 0,
+            "history": 0,
+            "checkpoint": false,
+            "streams": 4,
+            "iterations": 50,
+            "tail": 0,
+            "seconds": 0.209798564,
+            "sum": 0
+          },
+          {
+            "tail": 0,
+            "checkpoint": false,
+            "history": 0,
+            "iterations": 50,
+            "sum": 0,
+            "applied": 0,
+            "streams": 4,
+            "seconds": 0.211051253
+          },
+          {
+            "sum": 0,
+            "applied": 0,
+            "history": 0,
+            "seconds": 0.239543066,
+            "tail": 0,
+            "checkpoint": false,
+            "iterations": 50,
+            "streams": 4
+          },
+          {
+            "applied": 0,
+            "streams": 4,
+            "history": 0,
+            "iterations": 50,
+            "seconds": 0.208272055,
+            "sum": 0,
+            "checkpoint": false,
+            "tail": 0
+          }
+        ]
+      },
+      "history": {
+        "before": [
+          {
+            "history": 100,
+            "iterations": 50,
+            "streams": 4,
+            "sum": 10200,
+            "tail": 2,
+            "seconds": 6.537310791,
+            "applied": 10200,
+            "checkpoint": false
+          },
+          {
+            "seconds": 6.270860992,
+            "iterations": 50,
+            "streams": 4,
+            "tail": 2,
+            "applied": 10200,
+            "history": 100,
+            "sum": 10200,
+            "checkpoint": false
+          },
+          {
+            "applied": 10200,
+            "history": 100,
+            "seconds": 6.266286662,
+            "checkpoint": false,
+            "tail": 2,
+            "streams": 4,
+            "sum": 10200,
+            "iterations": 50
+          },
+          {
+            "checkpoint": false,
+            "applied": 10200,
+            "tail": 2,
+            "seconds": 6.341069508,
+            "iterations": 50,
+            "history": 100,
+            "sum": 10200,
+            "streams": 4
+          },
+          {
+            "tail": 2,
+            "seconds": 6.253724564,
+            "checkpoint": false,
+            "streams": 4,
+            "sum": 10200,
+            "applied": 10200,
+            "iterations": 50,
+            "history": 100
+          }
+        ],
+        "after": [
+          {
+            "iterations": 50,
+            "applied": 0,
+            "tail": 2,
+            "streams": 4,
+            "seconds": 0.251842511,
+            "checkpoint": false,
+            "history": 100,
+            "sum": 10200
+          },
+          {
+            "tail": 2,
+            "sum": 10200,
+            "checkpoint": false,
+            "streams": 4,
+            "seconds": 0.202382408,
+            "applied": 0,
+            "iterations": 50,
+            "history": 100
+          },
+          {
+            "streams": 4,
+            "checkpoint": false,
+            "tail": 2,
+            "history": 100,
+            "seconds": 0.302783886,
+            "iterations": 50,
+            "applied": 0,
+            "sum": 10200
+          },
+          {
+            "history": 100,
+            "applied": 0,
+            "streams": 4,
+            "seconds": 0.257631938,
+            "tail": 2,
+            "checkpoint": false,
+            "iterations": 50,
+            "sum": 10200
+          },
+          {
+            "checkpoint": false,
+            "sum": 10200,
+            "seconds": 0.200015679,
+            "streams": 4,
+            "applied": 0,
+            "history": 100,
+            "tail": 2,
+            "iterations": 50
+          }
+        ]
+      },
+      "school": {
+        "before": [
+          {
+            "seconds": 5.029084584035445
+          },
+          {
+            "seconds": 5.236673625011463
+          },
+          {
+            "seconds": 5.510963584005367
+          },
+          {
+            "seconds": 5.068338999990374
+          },
+          {
+            "seconds": 5.0363238750142045
+          }
+        ],
+        "after": [
+          {
+            "seconds": 5.330982915998902
+          },
+          {
+            "seconds": 5.331827707996126
+          },
+          {
+            "seconds": 5.85506145801628
+          },
+          {
+            "seconds": 5.467878124967683
+          },
+          {
+            "seconds": 5.381469083018601
+          }
+        ]
+      }
+    },
+    "results": {
+      "empty": {
+        "before_median_seconds": 0.111725208,
+        "after_median_seconds": 0.211051253,
+        "change_percent": 88.9020900278834,
+        "favorable_pairs": 0
+      },
+      "history": {
+        "before_median_seconds": 6.270860992,
+        "after_median_seconds": 0.251842511,
+        "change_percent": -95.98392451497033,
+        "favorable_pairs": 5
+      },
+      "school": {
+        "before_median_seconds": 5.068338999990374,
+        "after_median_seconds": 5.381469083018601,
+        "change_percent": 6.178159807953287,
+        "favorable_pairs": 0
+      }
+    },
+    "expected": {
+      "empty": 0,
+      "history": 10200,
+      "school": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    "methodology": "Exact isolated before/after lib trees; one warmup per workload/variant, five alternating pairs without concurrent tests. Microbench times exclude seed/warmup; school times include process startup/schema/tracing.",
+    "source_sha256": {
+      "before": {
+        "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+        "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+        "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+        "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+        "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+        "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+        "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+        "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+        "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+        "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+        "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+        "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+        "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+        "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+        "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+        "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+        "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+        "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+        "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+        "lib/RedSourcing/Storage.rakumod": "d51fbf6f2359fb97928ee80220fabe01fc96c842b7844fe1ff6beb318768695d",
+        "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+        "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+        "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+        "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+        "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+        "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+        "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+        "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+        "lib/RedSourcing/Lifecycle.rakumod": "ec845dccdd3705a985dd024a6f73dbccbe7c90368bd72b9bf9354e82f0b20e2c",
+        "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+        "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+        "lib/RedSourcing/Decision.rakumod": "678447f16dc275cd80a268e5a45ff5e4d28647a037b8ad341188ed88f0ed2ffa",
+        "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+        "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+        "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+        "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+        "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+        "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+        "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+        "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+        "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+        "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+        "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+        "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+        "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+        "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+        "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+        "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+        "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+        "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+        "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+        "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+        "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+        "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+        "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+      },
+      "after": {
+        "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+        "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+        "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+        "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+        "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+        "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+        "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+        "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+        "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+        "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+        "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+        "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+        "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+        "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+        "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+        "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+        "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+        "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+        "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+        "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+        "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+        "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+        "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+        "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+        "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+        "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+        "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+        "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+        "lib/RedSourcing/Lifecycle.rakumod": "c8deee9d42d2d04d39b4faf7f187d53cc78931ae453fea92f7727c9f39b1e3e9",
+        "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+        "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+        "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+        "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+        "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+        "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+        "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+        "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+        "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+        "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+        "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+        "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+        "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+        "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+        "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+        "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+        "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+        "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+        "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+        "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+        "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+        "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+        "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+        "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+        "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+        "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+      }
+    }
+  },
+  "notes": [
+    "Counter versions remain live reads; changed dependency counts must be fully accounted for by fetched fact tags, otherwise full reconstruction.",
+    "Latest checkpoint version is checked in the same SQL statement as replay tails.",
+    "Only pre-user-block state is published after commit; user mutations do not enter bases.",
+    "Stage totals and profiling are not used for these timing samples.",
+    "Empty workload regressed; school improvement is modest. No Pg speedup is claimed."
+  ],
+  "implementation_patch": "--- a/lib/RedSourcing/Decision.rakumod\n+++ b/lib/RedSourcing/Decision.rakumod\n@@ -98,12 +98,16 @@\n }\n \n sub combined-counter-keys($plan, @models, %keys) {\n+    .<keys> = {} for @models;\n     for $plan<dependencies>.List -> $entry {\n         my %dependencies = bind-counter-plan($entry<recipe>, -> $constant {\n             $constant ~~ ReceiverParameter\n                 ?? @models[$entry<position>]<ids>{$constant.name} !! $constant.value\n         });\n-        for %dependencies.kv -> $key, $definition { %keys{$key} = $definition }\n+        for %dependencies.kv -> $key, $definition {\n+            %keys{$key} = $definition;\n+            @models[$entry<position>]<keys>{$key} = $definition;\n+        }\n     }\n }\n \n@@ -266,6 +270,28 @@\n     bind-counter-plan(rule-counter-plan($event, $predicate), -> $constant { $constant.value })\n }\n \n+# A cursor is not a commit watermark on Pg. Every changed guard must be fully\n+# accounted for by fetched facts; otherwise a lower-ID late commit (or a broad\n+# dependency outside this query) requires a fresh reconstruction.\n+sub complete-cache-tail(@models, $batch, %versions --> Bool) {\n+    my @cached = @models.grep({ .<base>.defined\n+        && (.<base><entity>.^version == ($batch<snapshots>{.<type>.^name}{.<stream>}.?version // 0)) });\n+    return True unless @cached;\n+    my @facts = $batch<events>.List.map(-> $row {\n+        %(id => $row.id, keys => event-counter-keys($row.COERCE.WHAT, $row.data, :normalized))\n+    });\n+    for @cached -> $model {\n+        my %counts;\n+        for @facts.grep({ .<id> > $model<base><entity>.^current-id }) -> $fact {\n+            %counts{$_}++ for $fact<keys>.keys;\n+        }\n+        for $model<keys>.keys -> $key {\n+            return False unless (%versions{$key} - ($model<base><versions>{$key} // 0)) == (%counts{$key} // 0);\n+        }\n+    }\n+    True\n+}\n+\n # Explicit type => IDs pairs avoid creating/loading proxies just to describe a read.\n sub decision-model(*@arguments) is export {\n     my $*RED-FALLBACK = False;\n@@ -303,11 +329,20 @@\n         if $combined.defined {\n             combined-counter-keys($combined, @models, %keys);\n         } else {\n-            @filters = @models.map({ decision-filter(.<descriptor>, .<ids>, %keys, @values) });\n+            @filters = @models.map({\n+                my %local;\n+                my $filter = decision-filter(.<descriptor>, .<ids>, %local, @values);\n+                .<keys> = %local.Hash;\n+                %keys{$_} = %local{$_} for %local.keys;\n+                $filter\n+            });\n         }\n         my %versions = read-counters($connection, %keys);\n         my $state = $connection.journal-state;\n         my %own = $state<counter-increments>.Hash;\n+        if $combined.defined {\n+            .<base> = decision-cache-read(.<type>, .<stream>) for @models;\n+        }\n         my $filter;\n         if $combined.defined {\n             $filter = bind-combined-plan($combined, @models, @values);\n@@ -322,10 +357,17 @@\n         my $has-fallback = !$combined.defined;\n         my $batch = storage-decision-rows(RedSourcing::StoredEvent, $key, @models,\n             $filter, @values, :cache(!$has-fallback));\n+        unless complete-cache-tail(@models, $batch, %versions) {\n+            .<base>:delete for @models;\n+            $batch = storage-decision-rows(RedSourcing::StoredEvent, $key, @models,\n+                $filter, @values, :cache(!$has-fallback));\n+        }\n         my %restored;\n         my @views = @models.map({\n             my $snapshot = $batch<snapshots>{.<type>.^name}{.<stream>};\n-            if $snapshot.defined && (%restored{$snapshot.id}:exists) {\n+            if .<base>.defined && .<base><entity>.^version == ($snapshot.?version // 0) {\n+                .<base><entity>\n+            } elsif $snapshot.defined && (%restored{$snapshot.id}:exists) {\n                 # The same row's decoded nested containers must not leak\n                 # between repeated positions in a decision.\n                 entity-copy(%restored{$snapshot.id})\n@@ -346,6 +388,12 @@\n                 $view.^current-id = $row.id;\n             }\n         }\n+        if $combined.defined {\n+            for @views.kv -> $i, $view {\n+                my %local = @models[$i]<keys>.keys.map({ $_ => %versions{$_} });\n+                decision-cache-stage($view, %local);\n+            }\n+        }\n         my $decision = { :%keys, :%versions, :%own, validated => False };\n         my $scope = $decision.WHICH.Str;\n         $decision<scope> = $scope;\n--- a/lib/RedSourcing/Lifecycle.rakumod\n+++ b/lib/RedSourcing/Lifecycle.rakumod\n@@ -219,7 +219,7 @@\n     $entry<entity>;\n }\n \n-sub publish-cached(Str $store, Str $key, $entity, $entry, Int $epoch, Int $size, Int $access = 0) {\n+sub publish-cached(Str $store, Str $key, $entity, $entry, Int $epoch, Int $size, Int $access = 0, :$decision) {\n     my @evicted;\n     $cache-lock.protect({\n         my $current = %cached{$store}{$key};\n@@ -227,8 +227,11 @@\n         if $current.defined {\n             $current<access> max= $access;\n             my $owner = $current<entity>;\n-            entity-adopt($owner, $entity) if $entity.^version > $owner.^version\n-                || ($entity.^version == $owner.^version && $entity.^current-id >= $owner.^current-id);\n+            if $entity.^version > $owner.^version\n+                    || ($entity.^version == $owner.^version && $entity.^current-id >= $owner.^current-id) {\n+                entity-adopt($owner, $entity);\n+                $decision.defined ?? ($current<decision> = $decision) !! ($current<decision>:delete);\n+            }\n             return;\n         }\n         return if $epoch != (%cache-epochs{$store} // 0);\n@@ -247,6 +250,7 @@\n             @evicted.push(remove-cached($store, $oldest));\n         }\n         %cached{$store}{$key} = { :$type, :$entity, access => $stamp };\n+        %cached{$store}{$key}<decision> = $decision if $decision.defined;\n     });\n     snapshot-evicted($_) for @evicted;\n }\n@@ -306,6 +310,57 @@\n     my $store = journal-store();\n     my $size = $type.^cache-size;\n     $cache-lock.protect({ $size && (%cache-limits{$store} // 100) })\n+}\n+\n+# Decision bases are detached from both public cache references and user blocks.\n+# They share the ordinary bounded pool, release/epoch rules and commit hooks.\n+sub decision-cache-read(Mu:U $type, Str $stream) is export {\n+    return Nil unless $type.^lifecycle == Cached && cache-enabled($type);\n+    my $store = journal-store();\n+    $cache-lock.protect({\n+        my $entry = %cached{$store}{entity-key($type, $stream)};\n+        return Nil unless $entry.defined && $entry<decision>.defined;\n+        $entry<access> = ++$cache-clock;\n+        %(entity => entity-copy($entry<decision><entity>),\n+            versions => $entry<decision><versions>.Hash.clone)\n+    })\n+}\n+\n+sub decision-cache-stage($entity, %versions) is export {\n+    my $type = $entity.WHAT;\n+    return unless $type.^lifecycle == Cached && cache-enabled($type);\n+    $type.^use-lifecycle;\n+    # Tiny reconstructions cost less than copying and admitting their state.\n+    # Avoid filling the shared pool with one-off views and evicting useful owners.\n+    return if $entity.^snapshot-events < 4;\n+    # entity-copy detaches JSON-shaped containers, not arbitrary domain objects.\n+    # Keep reconstruction semantics for state that cannot be safely detached.\n+    my %seen;\n+    return unless $type.^attributes.map({ decision-copyable(.get_value($entity), %seen) }).all;\n+    my $store = journal-store();\n+    my $key = entity-key($type, $entity.^stream);\n+    my ($entry, $epoch, $access);\n+    $cache-lock.protect({\n+        $entry = %cached{$store}{$key};\n+        $epoch = %cache-epochs{$store} // 0;\n+        $access = ++$cache-clock;\n+    });\n+    my $copy = entity-copy($entity);\n+    my $decision = %(entity => entity-copy($copy), versions => %versions.Hash.clone);\n+    my $size = $type.^cache-size;\n+    journal-publish('decision|' ~ $key, {\n+        publish-cached($store, $key, $copy, $entry, $epoch, $size, $access, :$decision)\n+    });\n+}\n+\n+sub decision-copyable($value, %seen --> Bool) {\n+    return True unless $value.defined;\n+    return True if $value ~~ Str|Bool|Int|Rat|FatRat|Num|Complex|Date|DateTime|Instant|Version;\n+    if $value ~~ Hash|Array|Map {\n+        return False if %seen{$value.WHICH.Str}++;\n+        return $value.values.map({ decision-copyable($_, %seen) }).all.so;\n+    }\n+    False\n }\n \n sub cached-load(Mu:U $type, Str $stream, &load, Bool :$replay = True) is export {\n--- a/lib/RedSourcing/Storage.rakumod\n+++ b/lib/RedSourcing/Storage.rakumod\n@@ -194,8 +194,12 @@\n }\n role CompiledReads {\n     multi method translate(SnapshotCursor $cursor, $context?) {\n-        '(COALESCE((SELECT __rs_cursor FROM __rs_decision_snapshots WHERE __rs_position = '\n-            ~ $cursor.position ~ '), 0))' => []\n+        '(SELECT CASE WHEN COALESCE(s.version, 0) = r.__rs_cached_version'\n+            ~ ' AND r.__rs_cached_cursor > COALESCE(s.__rs_cursor, 0)'\n+            ~ ' THEN r.__rs_cached_cursor ELSE COALESCE(s.__rs_cursor, 0) END'\n+            ~ ' FROM __rs_decision_requested r LEFT JOIN __rs_decision_snapshots s'\n+            ~ ' ON s.__rs_position = r.__rs_position WHERE r.__rs_position = '\n+            ~ $cursor.position ~ ')' => []\n     }\n     multi method translate(EventTypeMembership $node, $context?) {\n         my ($column, @binds) := self.translate($node.column, 'table-dot-column').kv;\n@@ -418,7 +422,9 @@\n         || $connection.^mro.map(*.^name).first(* eq 'Red::Driver::SQLite').defined;\n     my $*RED-INTERNAL = True;\n     my $identity-offset = @values.elems;\n-    my @all-values = |@values, |@identities.map({ .<type>.^name, .<stream> }).flat;\n+    my @all-values = |@values, |@identities.map({ .<type>.^name, .<stream>,\n+        (.<base><entity>.defined ?? .<base><entity>.^current-id !! 0),\n+        (.<base><entity>.defined ?? .<base><entity>.^version !! 0) }).flat;\n     my &compile = {\n         my $query = $model.^all.where($filter).sort(*.id).ast;\n         my @translated = $connection.translate($connection.optimize($query));\n@@ -444,13 +450,12 @@\n         };\n         my @requested = @identities.keys.map(-> $i {\n             my @p = $pg\n-                ?? ('$' ~ (@event-binds.elems + 2*$i + 1), '$' ~ (@event-binds.elems + 2*$i + 2))\n-                !! ('?', '?');\n-            @identity-binds.append(ReadArgument.new(:index($identity-offset + 2*$i)),\n-                ReadArgument.new(:index($identity-offset + 2*$i + 1)));\n-            \"($i, {@p[0]}, {@p[1]})\"\n+                ?? (1..4).map({ '$' ~ (@event-binds.elems + 4*$i + $_) })\n+                !! ('?' xx 4);\n+            @identity-binds.append((^4).map({ ReadArgument.new(:index($identity-offset + 4*$i + $_)) }));\n+            \"($i, {@p[0]}, {@p[1]}, CAST({@p[2]} AS BIGINT), CAST({@p[3]} AS BIGINT))\"\n         });\n-        my $sql = 'WITH __rs_decision_requested (__rs_position, __rs_class, __rs_stream) AS (VALUES '\n+        my $sql = 'WITH __rs_decision_requested (__rs_position, __rs_class, __rs_stream, __rs_cached_cursor, __rs_cached_version) AS (VALUES '\n             ~ @requested.join(', ') ~ '), __rs_decision_snapshots AS ('\n             ~ \"SELECT r.__rs_position, e.{%names<replay-cursor>} AS __rs_cursor, e.*\"\n             ~ \" FROM __rs_decision_requested r JOIN $table e ON e.{%names<id>} = (\"\n",
+  "validation": {
+    "main_suite_files": 72,
+    "main_suite_failed": 0,
+    "final_focused": [
+      {
+        "frontend": "main",
+        "test": "29-cli-describe-constraints",
+        "exitcode": 0
+      },
+      {
+        "frontend": "main",
+        "test": "54-decision-model",
+        "exitcode": 0
+      },
+      {
+        "frontend": "main",
+        "test": "56-school-example",
+        "exitcode": 0
+      },
+      {
+        "frontend": "main",
+        "test": "66-cached-entities",
+        "exitcode": 0
+      },
+      {
+        "frontend": "main",
+        "test": "69-decision-snapshots",
+        "exitcode": 0
+      },
+      {
+        "frontend": "main",
+        "test": "72-decision-state-cache",
+        "exitcode": 0
+      },
+      {
+        "frontend": "ast",
+        "test": "61-query-templates",
+        "exitcode": 0
+      },
+      {
+        "frontend": "ast",
+        "test": "69-decision-snapshots",
+        "exitcode": 0
+      },
+      {
+        "frontend": "ast",
+        "test": "72-decision-state-cache",
+        "exitcode": 0
+      }
+    ],
+    "final_postgresql": [
+      {
+        "test": "55-decision-model-pg",
+        "exitcode": 0
+      },
+      {
+        "test": "66-cached-entities",
+        "exitcode": 0
+      },
+      {
+        "test": "67-eviction-snapshots",
+        "exitcode": 0
+      },
+      {
+        "test": "69-decision-snapshots",
+        "exitcode": 0
+      },
+      {
+        "test": "72-decision-state-cache",
+        "exitcode": 0
+      }
+    ],
+    "earlier_postgresql_integrations": [
+      {
+        "test": "t/55-decision-model-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/61-query-templates.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/65-aggregate-combined-load.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/66-cached-entities.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/67-eviction-snapshots.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/69-decision-snapshots.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/71-stream-existence.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/72-decision-state-cache.rakutest",
+        "exitcode": 0
+      }
+    ],
+    "diff_check": "passed",
+    "note": "Initial stale precomp/HTTP environment failures were rerun successfully; CLI 29 passed after preserving old precomp directories and rebuilding cleanly. Final selective-admission focused main/Pg/RakuAST checks all passed."
+  }
+}

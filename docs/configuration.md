@@ -58,8 +58,9 @@ working directory. Absolute paths, `:memory:`, SQLite `file:` names and server
 database names preserve their meaning. A SQLite file's parent directory must exist.
 
 The `entities` map uses exact full class names and supports aggregates, projections
-and sagas. An entry accepts `retained` (Bool), `auto-snapshot`, or `lifecycle`
-(`OnDemand`/`Retained`). Use one lifecycle spelling per entry. `.auto-snapshot`
+and sagas. An entry accepts `cached` (Bool or nonnegative Int), `retained` (Bool),
+`auto-snapshot`, or `lifecycle`
+(`Cached`/`OnDemand`/`Retained`). Use one lifecycle spelling per entry. `.auto-snapshot`
 sets the global policy; omitted policies default to `{ :100count }`. Explicit
 `False` or `Nil` disables optional snapshots. See [automatic snapshots](auto-snapshot.md)
 for declaration precedence and operation boundaries. Native bootstrap and the
@@ -72,13 +73,11 @@ The repository's root configuration targets the Hearth PostgreSQL example. Every
 example has a closer file. Select one from the root with, for example,
 `-f=examples/counter/red-sourcing.rakuconf`.
 
-`.flow-tracing = True` enables recorded command/event/consumer links when the
-application configures its connection. It creates two additional telemetry
-tables and adds SQL work during emission/replay; domain event payloads remain
-unchanged. Recording defaults to False without configuration. The examples turn
-it on for their configured stores. Call `red-sourcing-defaults(:!flow-tracing)`
-to override a file, or `enable-flow-tracing` after using `red-defaults` directly.
-See [workflow visualization](flows.md) for the recorded evidence and its limits.
+`.flow-tracing` remains a compatibility flag for the flow read model. It creates
+no auxiliary tables and adds no tracing queries during emission or replay.
+Causal command/action metadata is always stored outside domain JSON, including
+when this flag is False. See [workflow visualization](flows.md) for the projected
+evidence and its limits.
 
 ## Use from application code
 
@@ -110,18 +109,17 @@ of discovery and the base of relative configuration filenames. A caller's
 
 `Bool :$initialize = True` controls table creation. Repeated initialization uses
 `:unless-exists` and preserves existing rows. It also calls `.^create-indexes`
-to add the declared query indexes to existing tables. Flow tracing replaces its
-three matching legacy indexes after creating their declarative replacements;
-conflicting legacy definitions are preserved. Initialization creates missing
-tables, not a missing PostgreSQL database, and does not migrate columns. For a
+to add the declared query indexes to existing tables. Initialization creates
+missing tables, not a missing PostgreSQL database, and does not migrate columns. For a
 connection to an existing store without any table/index creation, use:
 
 ```raku
 red-sourcing-defaults(:!initialize);
 ```
 
-The option also controls initialization of configured flow-tracing tables. With
-`:!initialize`, recording can still use tracing tables that already exist.
+Flow reconstruction uses a projection over existing journal records and creates
+no auxiliary tracing tables. Causal command/action metadata is always stored,
+independently of `.flow-tracing`.
 
 The returned settings include normalized `.includes`, `.modules`, `.connection`,
 `.monitor` and `.worker`. This runtime call does not import modules,
@@ -214,3 +212,41 @@ DYLD_LIBRARY_PATH=/opt/homebrew/opt/openssl@3/lib:/opt/homebrew/opt/libpq/lib \
 Use the same prefix for CLI/monitor processes and Cro tests. Adjust paths for your
 Homebrew installation. The libpq directory resolves a missing native `pq`
 library; the OpenSSL directory addresses the Cro/OpenSSL binding.
+
+## PostgreSQL MRO storage
+
+PostgreSQL stores `red_sourcing_event.mro` as native `text[]`, with the
+`red_sourcing_event_mro_gin` GIN index. SQLite and other drivers retain the
+pipe-delimited text format. The Raku `StoredEvent.mro` accessor and reports
+continue returning the pipe-delimited string on every driver.
+
+Framework queries test type membership with `@>` on PostgreSQL and `LIKE` on
+other drivers. Classes, ancestors and roles retain their recorded membership;
+reading an old event never recomputes its MRO from the current application code.
+New stores create the native column and index during initialization. Repeating
+`StoredEvent.^create-indexes` also ensures the GIN exists.
+
+Existing PostgreSQL stores require an explicit migration before using this
+version. Initialization detects a legacy text column and reports the migration
+path; it does not convert historical rows automatically.
+
+1. Stop application processes and writers, and back up the database.
+2. Select the application's database and schema and run:
+
+   ```sh
+   PGOPTIONS='-csearch_path=app,public' psql --dbname=DATABASE \
+     --set=ON_ERROR_STOP=1 --file=tools/migrate-pg-mro-array.sql
+   ```
+
+3. Restart all clients, so prepared statements and cached result metadata are
+   recreated for the new column type.
+
+Replace `app` and `DATABASE` with the actual schema and database. The migration
+runs in one transaction, preserves event IDs, versions, payloads and type order,
+and can be repeated. It accepts legacy `text`/`varchar` or already-converted
+`text[]`; unexpected types abort the transaction. Conversion takes an exclusive
+table lock and index creation adds work proportional to the stored history.
+Direct SQL clients must use the new array type after migration; the compatibility
+string interface applies to the framework's Raku objects and internal row reads.
+
+`.entity-cache-size` limits the total number of `Cached` instances per store (default 100; zero disables caching). Per-type `entities` entries accept `cached => N` or `cached => True` (100). Both limits apply simultaneously; see [entity lifecycle](lifecycle.md).

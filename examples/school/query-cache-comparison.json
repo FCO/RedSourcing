@@ -1,0 +1,61 @@
+{
+  "school": {
+    "samples": {
+      "before": [
+        17.326655457989546,
+        17.259436209016712,
+        17.396638999984134,
+        17.375368917011656,
+        17.447757332993206
+      ],
+      "after": [
+        18.451011666998966,
+        18.48149283300154,
+        18.73645716701867,
+        18.446307958016405,
+        18.507670084014535
+      ]
+    },
+    "medians": {
+      "before": 17.375368917011656,
+      "after": 18.48149283300154
+    },
+    "equal_output": true,
+    "reduction_percent": -6.366045643536888
+  },
+  "replay": {
+    "samples": {
+      "before": [
+        2.082468935,
+        2.095094288,
+        2.11881748,
+        2.119550133,
+        2.12658987
+      ],
+      "after": [
+        1.109990478,
+        1.109337815,
+        1.111285327,
+        1.108430333,
+        1.101448617
+      ]
+    },
+    "medians": {
+      "before": 2.11881748,
+      "after": 1.109337815
+    },
+    "equal_output": true,
+    "reduction_percent": 47.64354053752663
+  },
+  "methodology": {
+    "runtime": "Rakudo/MoarVM 2026.09, Red 0.2.7, RAKUDO_RAKUAST=0",
+    "database": "SQLite :memory:",
+    "samples": 5,
+    "warmup_runs_per_version": 1,
+    "order": "alternating before then after, no concurrent verification jobs",
+    "before": "composed projection descriptors and prepared signatures; runtime predicate analysis and SQL translation",
+    "after": "serialized AST and bind paths, cached SQL layouts and native SQLite reads",
+    "school": "full school demo process, precompilation warmed, identical stdout",
+    "replay": "200 ordinary projection loads over ten facts with alternating string IDs; schema, appends, startup and first load excluded; sum=900"
+  }
+}

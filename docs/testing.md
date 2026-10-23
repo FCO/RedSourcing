@@ -14,7 +14,7 @@ CLI/monitor forwarding and the `advance-sagas` CLI controller.
 `t/52-journal-savepoints.rakutest` covers explicit nested Red transactions,
 rollback of provisional callbacks and retained state, manual guards, projection
 cursors and automatic snapshots. `t/53-storage-indexes.rakutest` covers new and
-existing stores, idempotent initialization and legacy tracing index migration.
+existing stores, idempotent initialization and tracing without auxiliary tables.
 Both accept `RED_SOURCING_TEST_PG_DATABASE` to repeat the checks on PostgreSQL.
 The JSON checks in `t/34-postgres-json.rakutest` use Red's native translator and
 also execute against PostgreSQL when that variable is set.
@@ -190,3 +190,62 @@ PostgreSQL writers and complete-command retries), and `t/56-school-example.rakut
 (school limits, cancellations, replay and persistent CLI operations). Set
 `RED_SOURCING_TEST_PG_DATABASE` to a disposable PostgreSQL database name for the
 PostgreSQL checks, using normal libpq environment variables for connection settings.
+
+`t/72-decision-state-cache.rakutest` runs on SQLite or, with the same environment
+variable, PostgreSQL. It checks warm-state reuse, tail-only APPLY, repeated/nested
+isolation, rollback/savepoints, checkpoint replacement, release/eviction and
+conservative reconstruction when guard counts cannot be explained by the tail.
+A reserved-ID fixture checks recovery of a late lower-ID fact. The Pg cases also
+use an independent writer to invalidate a warm decision before append and verify
+that optimistic protection and rollback still hold.
+
+
+## Field-counter concurrency and serial-ID diagnostics
+
+`t/57-event-tags.rakutest` covers typed field/value keys, multiple aliases,
+`is tag-field`, boolean/range decision queries, rollback and maintenance rebuild.
+`t/58-field-counters-pg.rakutest` uses independent writers for simultaneous first
+inserts, crossed read/write dependencies, ordinary emits, unseen range values and
+a real database deadlock. Run PostgreSQL cases with
+`RED_SOURCING_TEST_PG_DATABASE` set to an existing dedicated test database.
+
+`t/47-transactional-projections-pg.rakutest` characterizes the serial cursor
+limitation: a paused lower-ID transaction lets a disjoint higher-ID writer commit,
+then checks persisted facts against the checkpoint. The forced cursor miss is
+reported separately from insertion errors; it is a known limitation, not an
+ordering guarantee.
+
+For an observational benchmark, configure PostgreSQL through the standard
+`PGHOST`, `PGPORT` and `PGUSER` environment variables and run:
+
+```sh
+raku -Ilib tools/benchmark-journal-concurrency.raku --database=postgres --writers=4 --events=25
+raku -Ilib tools/benchmark-journal-concurrency.raku --database=postgres --writers=4 --events=25 --trace
+```
+
+Each invocation creates and removes its own temporary schema. JSON output
+includes elapsed time (including worker startup), persisted and consumed event
+counts, cursor misses and database errors. Results are observations of that run,
+not proof that serial cursors are safe.
+
+## Storage performance
+
+`t/59-storage-performance.rakutest` checks typed row hydration and SQL projection
+fallbacks, rollback across multiple counter batches, bounded graph queries and
+saga restoration from the final complete state. It runs on SQLite and optionally
+PostgreSQL using the same database environment described above.
+
+```sh
+raku -Ilib tools/benchmark-performance.raku --events=100 --iterations=12
+raku -Ilib tools/benchmark-performance.raku --driver=Pg --database=postgres --events=100 --iterations=12
+raku -Ilib tools/benchmark-saga-state.raku --actions=12 --controls=8 --reads=12 --clones=12
+```
+
+These benchmarks emit JSON timings and functional results. Compare several runs
+on the same machine and runtime; do not run competing test processes during
+measurement. See [performance](performance.md) for measured scope and limits.
+
+`t/18-web-metrics.rakutest` also verifies raw-record metrics replay, cursor bounds,
+checkpoint restoration, window changes without SQL, outcome deduplication and
+mutable command-state refresh. Set `RED_SOURCING_TEST_PG_DATABASE` to run the same
+cases on PostgreSQL; otherwise they use SQLite.

@@ -3,8 +3,8 @@
 Aggregates, projections and sagas automatically checkpoint after **100 applied
 records** by default. Retention and checkpoint frequency are independent: an
 `OnDemand` entity can checkpoint automatically, and a retained entity can disable
-optional snapshots. Loading is read-only; it never schedules a snapshot or runs a
-saga effect.
+optional snapshots. A load can evict another `Cached` entity and checkpoint that
+entity's dirty state; it never runs a saga effect.
 
 ## Declare a policy
 
@@ -15,7 +15,7 @@ saga PurchaseWorkflow[:retained, :!auto-snapshot] { ... }
 ```
 
 `:retained` selects `Retained`; `:!retained` selects `OnDemand`. Omission keeps
-`OnDemand`. An omitted snapshot policy inherits the global policy.
+`Cached`. An omitted snapshot policy inherits the global policy.
 `:!auto-snapshot` (equivalently `:auto-snapshot(False)` or
 `:auto-snapshot(Nil)`) disables optional snapshots. Named options can be set
 before first use with `.^lifecycle(:retained, :auto-snapshot{ :100count })`.
@@ -61,6 +61,14 @@ is allowed. Configure before use; restart the application to change an active
 type's policy. Importing the library does not read configuration or open a store.
 
 ## What is counted and when it is saved
+
+When a `Cached` entity leaves the cache through capacity eviction or explicit
+release, enabled automatic snapshots also checkpoint any changes since its last
+snapshot, regardless of the count/time thresholds. Clean entities are skipped.
+This applies to aggregates, projections and sagas. Use `:!auto-snapshot` or a
+per-class/global disabled policy to opt out. Snapshots wait for active operations
+and caller commit; rollback discards deferred snapshots. Failures are recorded in
+store diagnostics and leave journal replay available.
 
 | Entity | Count | Automatic checkpoint boundary |
 | --- | --- | --- |

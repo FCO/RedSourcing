@@ -65,137 +65,136 @@ sub fresh {
     } else { $*RED-DB = database 'SQLite', :database(':memory:'); }
     schema(StoredEvent, StoredCommand).create;
 }
-subtest 'tracing is optional, isolated by connection and separate from event data' => {
+subtest 'causality is durable without enabling tracing or creating tracing tables' => {
     fresh;
-    nok flow-tracing-enabled, 'fresh store does not record telemetry by default';
-    is observed-flow-entities().elems, 0, 'uninitialized tracing does not affect inspection';
-    is flow-revision(), '0', 'absent telemetry has an empty revision';
-    enable-flow-tracing;
-    ok flow-tracing-enabled, 'explicit enablement creates telemetry tables';
-    BeginFlow.emit(:stream<source>, :version(1), :id<one>);
-    is flow-links().elems, 1, 'publisher relation is persisted';
-    is-deeply StoredEvent.^all.head.data.Hash, {:id<one>}, 'telemetry does not change event payloads';
-    my $first-db = $*RED-DB;
-    fresh;
-    nok flow-tracing-enabled, 'another connection does not inherit enablement';
-    $*RED-DB = $first-db;
-    ok flow-tracing-enabled, 'original connection retains its setting';
-    enable-flow-tracing(:!enabled);
-    nok flow-tracing-enabled, 'recording can be disabled';
-    is flow-links(:source-kind<entity>, :source<source>, :target-kind<event>, :target('1')).elems, 1,
-        'disabling recording preserves readable historical evidence';
+    nok flow-tracing-enabled, 'read-model flag defaults to disabled';
+    my $account = FlowAccount.^with-ids(:id<one>); $account.^create;
+    is $account.credit<balance>, 2, 'ordinary command succeeds';
+    my $command = StoredCommand.^all.head;
+    my $event = StoredEvent.^all.grep(*.class eq Credited.^name).head;
+    is $event.command-id, $command.id, 'event stores its command ID even with tracing disabled';
+    is-deeply $event.data.Hash, %(id => 'one', amount => 2), 'causality is outside the domain JSON';
+    is flow-links(:source-kind<command>, :source($command.id.Str), :target($event.id.Str)).elems,
+        1, 'projection reconstructs the exact causal link';
+    my $before = StoredEvent.^all.elems;
+    my $revision = flow-revision;
+    enable-flow-tracing; enable-flow-tracing(:!enabled);
+    is flow-links(:source-kind<command>, :source($command.id.Str)).elems, 1,
+        'toggling does not erase or stop durable causality';
+    is StoredEvent.^all.elems, $before, 'reading the flow does not emit snapshots or telemetry';
+    is flow-revision, $revision, 'read-only reconstruction does not change the revision';
+    is observed-flow-entities.elems, 0, 'no observation registry is maintained';
 };
-subtest 'a saga connects source facts, child commands, provider effects and three projections' => {
-    fresh; enable-flow-tracing;
+
+subtest 'saga commands and provider events retain their action and real sources' => {
+    fresh;
     register-service 'flow-mail', -> Str $operation, Capture $args, Str :$idempotency-key! {
         MailAccepted.emit(:stream<flow-provider>, :version(1), :id($args.hash<id>));
         %(accepted => True)
     };
-    my $account = FlowAccount.^with-ids(:id<one>); $account.^create;
+    FlowAccount.^with-ids(:id<one>).^create;
     my $proxy = FlowWorkflow.^with-ids(:id<one>); $proxy.^create;
     my $source = BeginFlow.emit(:stream<source>, :version(1), :id<one>);
     my $saga = $proxy.^advance;
     is $saga.^status, 'completed', 'workflow finishes';
-    is $saga.^state<actions>[0]<source-event-id>, $source.id, 'source fact is associated with the planned action';
-    is $saga.^state<actions>[1]<source-action-id>, $saga.^state<actions>[0]<id>, 'result-triggered follow-up keeps its causal action';
-    my $command-id = $saga.^state<actions>[0]<row-id>;
+    my $command = StoredCommand.^all.head;
     my $event = StoredEvent.^all.grep(*.class eq Credited.^name).head;
-    is flow-links(:source-kind<command>, :source($command-id.Str), :target($event.id.Str)).elems, 1,
-        'exact command/event relation is recorded';
+    my $provider = StoredEvent.^all.grep(*.class eq MailAccepted.^name).head;
+    is $event.command-id, $command.id, 'command emitted the domain event';
+    is $command.action-id, $saga.^state<actions>[0]<id>, 'queued command retains its saga action';
+    is $event.action-id, $command.action-id, 'command event also retains the action context';
+    is $provider.action-id, $saga.^state<actions>[1]<id>, 'provider event retains its action';
+    nok $provider.command-id.defined, 'provider event has no invented command';
+    is flow-links(:source-kind<event>, :source($source.id.Str), :target($proxy.^stream-name)).elems,
+        1, 'persisted saga control proves source consumption';
     FlowBalance.^with-ids(:id<one>).^load;
-    FlowCount.^with-ids(:id<one>).^load;
-    FlowAudit.^with-ids(:id<one>).^load;
-    my @consumers = flow-links(:source-kind<event>, :source($event.id.Str));
-    is @consumers.grep(*.<relation> eq 'applied-projection').elems, 3, 'three actual projection replays are recorded';
-    FlowBalance.^with-ids(:id<one>).^load;
-    is flow-links(:source-kind<event>, :source($event.id.Str)).elems, @consumers.elems, 'replay does not duplicate connections';
-    is flow-links(:source-kind<action>, :source($saga.^state<actions>[1]<id>)).grep(*.<relation> eq 'emitted').elems, 2,
-        'provider fact and native success control are correlated with the action';
+    is flow-links(:source-kind<event>, :source($event.id.Str), :target-kind<entity>).elems,
+        0, 'ordinary projection replay does not write consumption telemetry';
     my $inspector = RedSourcing::Inspector.new(:stored-only);
-    my %report = $inspector.report;
-    my $projection = %report<instances>.first(*.<type> eq FlowBalance.^name);
-    is $projection<kind>, 'projection', 'snapshot-free replay consumer is discoverable with its kind';
-    is-deeply $projection<identity>, {:id<one>}, 'observed identity is preserved without parsing the stream';
-    is $projection<state-source>, 'observed replay', 'trace metadata is not presented as a persisted domain checkpoint';
-    my $before = flow-revision();
-    my %flow = flow-report(%report, :stream($proxy.^stream-name));
-    ok %flow<available>, 'telemetry is available';
-    is %flow<nodes>.grep(*.<kind> eq 'projection').elems, 3, 'graph includes the consumer fan-out';
-    ok %flow<edges>.first(*.<relation> eq 'continued').defined, 'follow-up action relation is visible';
-    my $event-node = %flow<nodes>.first(*.<id> eq "event:{$event.id}");
-    is $event-node<at>, $event.created.utc.Str, 'event timestamp is its actual stored emission time';
-    is $event-node<details><payload><amount>, 2, 'hover retains the event payload';
-    is %flow<nodes>.first(*.<kind> eq 'command')<time-label>, 'Scheduled',
-        'next-run is not misrepresented as command emission time';
-    ok %flow<nodes>.grep(*.<kind> eq 'projection').map(*.<time-label>).all eq 'Observed',
-        'snapshot-free projections show observation times';
-    ok %flow<nodes>.map(*.<at>.chars).all > 0, 'every persisted card has an available timestamp';
-    my $html = flow-view(%flow, :instances(%report<instances>));
-    ok $html.contains('flow-node') && $html.contains('Recorded connections'), 'graph has interactive cards and an accessible table';
-    nok %flow<nodes>.first(*.<kind> eq 'snapshot').defined, 'compact flow omits snapshot bookkeeping';
-    my %internal = flow-report(%report, :stream($proxy.^stream-name), :internal);
-    ok %internal<nodes>.first(*.<kind> eq 'snapshot').defined, 'internal view retains initial saga creation';
-    ok $html.contains('<optgroup label="Actions">') && $html.contains('Command ·') && $html.contains('Service ·'),
-        'form groups actions and identifies their execution types';
+    my $before = flow-revision;
+    my %flow = flow-report($inspector.report, :stream($proxy.^stream-name));
+    ok %flow<available>, 'monitor uses the reconstructed graph';
+    ok %flow<nodes>.first(*.<id> eq "event:{$event.id}").defined, 'graph includes command event';
+    ok %flow<edges>.first(*.<relation> eq 'continued').defined, 'follow-up action is visible';
+    my $node = %flow<nodes>.first(*.<id> eq "event:{$event.id}");
+    is $node<at>, $event.created.utc.Str, 'event timestamp comes from the journal';
+    is $node<details><payload><amount>, 2, 'event payload is visible';
+    my $html = flow-view(%flow, :instances($inspector.report<instances>));
+    ok $html.contains('flow-node') && $html.contains('Recorded connections'), 'monitor renders interactive cards';
     my %stages = %flow<nodes>.map({ .<id> => .<stage> }).Hash;
-    ok %flow<edges>.map({ %stages{.<target>} > %stages{.<source>} }).all,
-        'all visible links advance through causal columns';
-    nok %flow<edges>.first({ .<source> eq "event:{$event.id}" && .<target> eq 'consumer:' ~ $account.^stream-name }).defined,
-        'own aggregate replay is hidden';
-    nok %flow<edges>.first({ .<source> eq "event:{$source.id}" && .<target> eq 'consumer:' ~ $proxy.^stream-name }).defined,
-        'event triggering a visible action does not also point at its saga';
-    ok %internal<edges>.elems > %flow<edges>.elems, 'internal links remain inspectable';
-    my $service-id = $saga.^state<actions>[1]<id>;
-    my %focused = flow-report(%report, :focus('action:' ~ $service-id));
-    ok %focused<nodes>.first(*.<id> eq 'action:' ~ $service-id).defined, 'action selector focuses persisted work';
-    nok %focused<nodes>.first(*.<kind> eq 'command').defined, 'action view excludes upstream commands';
-    ok %focused<nodes>.first(*.<label>.contains('MailAccepted')).defined, 'action view includes its actual emitted facts';
-    is flow-report(%report, :focus<action:missing>)<nodes>.elems, 0, 'unknown action never falls back to another entity';
-    ok $html.contains('<time datetime=') && $html.contains('flow-node-details'),
-        'cards render semantic dates and rich hover content';
-    is flow-revision(), $before, 'building the graph is strictly read-only';
+    ok %flow<edges>.map({ %stages{.<target>} > %stages{.<source>} }).all, 'causal columns point forward';
+    my %focused = flow-report($inspector.report, :focus('action:' ~ $provider.action-id));
+    ok %focused<nodes>.first(*.<id> eq "event:{$provider.id}").defined, 'action focus includes its provider event';
+    is flow-revision, $before, 'building the monitor graph is read-only';
     my $http-source = Supplier.new;
     my $routes = route { include monitor => inspector-routes($inspector,
         :updates(-> { Supply.empty }), :operations-url('/monitor/operations')); };
     my $responses = $routes.transformer($http-source.Supply).Channel;
     my $request = Cro::HTTP::Request.new(:method<GET>,
-        :target(detail-url('stream', FlowBalance.^with-ids(:id<one>).^stream-name)));
+        :target('/monitor/flow-fragment?focus=' ~ query-value('action:' ~ $provider.action-id)));
     $request.append-header('Host', 'localhost'); $http-source.emit($request);
     my $response = $responses.receive;
-    my $detail = $response.body-byte-stream.list.map(*.decode).join;
-    is $response.status, 200, 'snapshot-free consumer has an accessible detail page';
-    ok $detail.contains('Observed identity') && $detail.contains('not its domain state'),
-        'observation is presented as identity metadata rather than checkpoint state';
-    for ['action:' ~ $service-id, False], ['entity:' ~ $proxy.^stream-name, True] -> @selection {
-        my $query = '/monitor/flow-fragment?focus=' ~ query-value(@selection[0])
-            ~ '&internal=' ~ (@selection[1] ?? '1' !! '0');
-        my $flow-request = Cro::HTTP::Request.new(:method<GET>, :target($query));
-        $flow-request.append-header('Host', 'localhost'); $http-source.emit($flow-request);
-        my $flow-response = $responses.receive;
-        my $body = $flow-response.body-byte-stream.list.map(*.decode).join;
-        is $flow-response.status, 200, 'flow form selection renders through the HTTP route';
-        ok $body.contains('value="' ~ escape-html(@selection[0]) ~ '" selected'),
-            'selected focus survives fragment rendering';
-        ok $body.contains('&amp;internal=' ~ (@selection[1] ?? '1' !! '0')),
-            'live refresh preserves the internal view choice';
-    }
+    my $body = $response.body-byte-stream.list.map(*.decode).join;
+    is $response.status, 200, 'monitor HTTP route renders the reconstructed flow';
+    ok $body.contains('MailAccepted'), 'action fragment includes its provider event';
     $http-source.done;
-    my %small = flow-report(%report, :stream($proxy.^stream-name), :limit(3));
-    ok %small<truncated>, 'bounded views disclose truncation';
-    ok %small<nodes>.elems <= 3, 'node limit is enforced';
-    my %projection-flow = flow-report(%report, :stream($projection<stream>));
-    ok %projection-flow<nodes>.first(*.<id> eq "event:{$event.id}").defined,
-        'projection focus follows facts actually consumed from other streams';
-    my %aggregate = flow-report(%report, :stream($account.^stream-name));
-    ok %aggregate<nodes>.first(*.<kind> eq 'command').defined, 'aggregate flow includes its stored commands';
-    nok %aggregate<edges>.first({ .<source> eq 'root' && .<target> eq "event:{$event.id}" }).defined,
-        'command emission replaces redundant aggregate publication';
-    # Another aggregate consuming the fact is genuine fan-out, even with the same ID.
-    flow-link('event', $event.id.Str, 'entity', 'OtherAccount: id = one', 'applied-aggregate');
-    my %external = flow-report(%report, :stream($account.^stream-name));
-    ok %external<nodes>.first(*.<label> eq 'OtherAccount: id = one').defined,
-        'other aggregate consumption is retained';
-    is flow-report(%report, :stream<missing>)<nodes>.elems, 0, 'unknown entity has an empty graph';
+};
+
+subtest 'failed commands roll back events and their causal metadata' => {
+    fresh;
+    my $account = FlowAccount.^with-ids(:id<fail>); $account.^create;
+    my $before = flow-links.elems;
+    dies-ok { $account.fail }, 'handler rejects the command';
+    is flow-links.elems, $before, 'rolled-back events leave no causal links';
+    is StoredEvent.^all.grep(*.class eq Credited.^name).elems, 0, 'failed event is absent';
+    is StoredCommand.^all.head.state, StoredCommand::Failed, 'command failure remains inspectable';
+    my %flow = flow-report(RedSourcing::Inspector.new(:stored-only).report, :stream($account.^stream-name));
+    is %flow<nodes>.first(*.<kind> eq 'command')<status>, 'Failed', 'failed command appears in the monitor';
+};
+
+subtest 'nested commands retain parent identity without flow writes' => {
+    fresh;
+    my $account = FlowAccount.^with-ids(:id<nested>); $account.^create;
+    ok $account.delegate<queued-id>, 'parent enqueues a child command';
+    my @commands = StoredCommand.^all.sort(*.id).Array;
+    is @commands[1].parent-command-id, @commands[0].id, 'child stores its parent ID';
+    is @commands[1].run<balance>, 3, 'child runs after parent commits';
+    my $event = StoredEvent.^all.grep(*.class eq Credited.^name).head;
+    is $event.command-id, @commands[1].id, 'event belongs to child command';
+    is flow-links(:source-kind<command>, :source(@commands[0].id.Str), :target-kind<command>).elems,
+        1, 'parent-child edge is reconstructed';
+    is flow-links(:source-kind<command>, :source(@commands[0].id.Str), :target-kind<event>).elems,
+        0, 'parent is not the direct emitter';
+    my %flow = flow-report(RedSourcing::Inspector.new(:stored-only).report, :stream($account.^stream-name));
+    ok %flow<edges>.first({ .<source> eq 'command:' ~ @commands[0].id && .<target> eq 'command:' ~ @commands[1].id }).defined,
+        'monitor follows nested commands';
+};
+
+subtest 'a queued command restores its action context when run independently' => {
+    fresh;
+    my $account = FlowAccount.^with-ids(:id<queued>); $account.^create;
+    my $command;
+    {
+        my $*REDSOURCING-ACTION = 'workflow/action/1';
+        $command = $account.credit(:!sync);
+    }
+    is $command.action-id, 'workflow/action/1', 'submission persists the action ID';
+    $command.run;
+    my $event = StoredEvent.^all.grep(*.class eq Credited.^name).head;
+    is $event.action-id, 'workflow/action/1', 'independent execution recovers the stored action';
+};
+
+subtest 'rebuild reads unknown event classes and late lower serial IDs' => {
+    fresh;
+    StoredEvent.^create(:id(20), :class<Unavailable::Event>, :mro('|Event|'), :stream<later>, :version(1), :data{});
+    is flow-links.elems, 1, 'raw record projection does not load the event class';
+    my $revision = flow-revision;
+    StoredEvent.^create(:id(10), :class<Unavailable::Event>, :mro('|Event|'), :stream<earlier>, :version(1), :data{});
+    is flow-links.elems, 2, 'rebuild includes an earlier allocated ID committed later';
+    isnt flow-revision, $revision, 'revision changes even when the maximum ID does not';
+    my $before = StoredEvent.^all.elems;
+    is flow-projection().^name, 'RedSourcing::Flow::Projection::FlowProjection', 'read model is a normal projection';
+    is StoredEvent.^all.elems, $before, 'rebuild has no database writes';
 };
 subtest 'hover previews escape user data and bound large payloads' => {
     fresh;
@@ -210,53 +209,5 @@ subtest 'hover previews escape user data and bound large payloads' => {
     ok $html.contains('&lt;img'), 'payload is visible as escaped text';
     nok $html.contains('z' x 351) || $html.contains('too deep'), 'strings and nesting are bounded';
     ok $html.contains('…'), 'omitted preview data is indicated';
-};
-subtest 'failed commands roll back causal links along with emitted events' => {
-    fresh; enable-flow-tracing;
-    my $account = FlowAccount.^with-ids(:id<fail>); $account.^create;
-    my $before = flow-links().elems;
-    dies-ok { $account.fail }, 'handler rejects the command';
-    is flow-links().elems, $before, 'rolled-back event has no committed emission or consumption edge';
-    is StoredEvent.^all.grep(*.class eq Credited.^name).elems, 0, 'failed event is absent';
-    is StoredCommand.^all.head.state, StoredCommand::Failed, 'command failure remains inspectable';
-    my $inspector = RedSourcing::Inspector.new(:stored-only);
-    my %flow = flow-report($inspector.report, :stream($account.^stream-name));
-    is %flow<nodes>.first(*.<kind> eq 'command')<status>, 'Failed', 'failed command appears without invented emitted events';
-};
-subtest 'untraced historical workflows disclose incomplete connections' => {
-    fresh;
-    FlowAccount.^with-ids(:id<old>).^create;
-    my $inspector = RedSourcing::Inspector.new(:stored-only);
-    my %flow = flow-report($inspector.report);
-    nok %flow<available>, 'missing table does not imply zero real effects';
-    my $html = flow-view(%flow, :instances($inspector.report<instances>));
-    ok $html.contains('incomplete connections') && $html.contains('not initialized'), 'historical limitation is explicit';
-    is flow-report(%(instances => []))<nodes>.elems, 0, 'empty store is supported';
-};
-subtest 'nested commands preserve their parent and their actual emitted events' => {
-    fresh; enable-flow-tracing;
-    my $account = FlowAccount.^with-ids(:id<nested>); $account.^create;
-    ok $account.delegate<queued-id>, 'parent enqueues a child command';
-    my @commands = StoredCommand.^all.sort(*.id).Array;
-    is @commands.elems, 2, 'parent and child each have a stored record';
-    is flow-links(:source-kind<command>, :source(@commands[0].id.Str), :target-kind<command>, :target(@commands[1].id.Str)).elems,
-        1, 'exact parent-child command relation is recorded';
-    is @commands[1].run<balance>, 3, 'queued child executes after the parent transaction commits';
-    my $event = StoredEvent.^all.grep(*.class eq Credited.^name).head;
-    is flow-links(:source-kind<command>, :source(@commands[1].id.Str), :target-kind<event>, :target($event.id.Str)).elems,
-        1, 'emission belongs to the child command';
-    is flow-links(:source-kind<command>, :source(@commands[0].id.Str), :target-kind<event>).elems,
-        0, 'parent is not incorrectly marked as the direct emitter';
-    my $inspector = RedSourcing::Inspector.new(:stored-only);
-    my %flow = flow-report($inspector.report, :stream($account.^stream-name));
-    ok %flow<edges>.first({ .<source> eq 'command:' ~ @commands[0].id && .<target> eq 'command:' ~ @commands[1].id }).defined,
-        'graph follows the nested command';
-    flow-link('command', @commands[1].id.Str, 'command', @commands[0].id.Str, 'submitted');
-    my %cyclic = flow-report($inspector.report, :stream($account.^stream-name));
-    ok %cyclic<nodes>.first(*.<id>.starts-with('reference:')).defined,
-        'cyclic evidence ends at an explicit reference instead of a backward arrow';
-    my %stages = %cyclic<nodes>.map({ .<id> => .<stage> }).Hash;
-    ok %cyclic<edges>.map({ %stages{.<target>} > %stages{.<source>} }).all,
-        'references preserve forward direction even for cyclic evidence';
 };
 done-testing;

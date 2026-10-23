@@ -1,0 +1,179 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Predicate;
+use RedSourcing::QueryTemplate;
+use Red::AST::Select;
+use Red::AST::JsonItem;
+
+class TemplateFact does Event { has $.key; has Int $.amount }
+projection TemplateTotal {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { .key eqv $!key }) { $!total += $e.amount }
+}
+projection TemplateState {
+    has Str $.key is entity-id;
+    has Int $.minimum is rw = 0;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { .key eqv $!key && .amount >= $!minimum }) { $!total += $e.amount }
+}
+projection TemplateComputed {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { so (.key eqv $!key) }) { $!total += $e.amount }
+}
+projection TemplateMixed {
+    has $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { .key eqv $!key }) { $!total += $e.amount }
+}
+
+projection TemplateText {
+    has Str $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { .key eq $!key }) { $!total += $e.amount }
+}
+projection TemplateNumber {
+    has Int $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { .amount == $!key }) { $!total += $e.amount }
+}
+projection TemplateExcluded {
+    has $.key is entity-id;
+    has Int $.total = 0;
+    method APPLY(TemplateFact $e where { !(.key eqv $!key) }) { $!total += $e.amount }
+}
+
+my $translations = 0;
+my $preparations = 0;
+my role CountReads {
+    multi method translate(Red::AST::Select $ast, |c) {
+        $translations++ if $ast.filter.DEFINITE && $ast.filter.transpose-grep(* ~~ Red::AST::JsonItem).elems;
+        callsame
+    }
+    multi method prepare(Str $sql, |c) {
+        $preparations++ if $sql.contains('JSON_EXTRACT') && $sql.contains('ORDER BY');
+        callsame
+    }
+}
+my $pg = %*ENV<RED_SOURCING_QUERY_PG>;
+my $*RED-DB;
+if $pg {
+    require ::('DB::Pg');
+    my $schema = 'rs_query_' ~ $*PID;
+    my $admin = ::('DB::Pg').new(:conninfo("dbname=$pg"));
+    $admin.execute("CREATE SCHEMA $schema");
+    END { $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined }
+    $*RED-DB = store-driver('Pg', $pg, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$pg options='-csearch_path=$schema'"),
+            :converters(<DateTime UUID Geometric>))
+    });
+} else {
+    $*RED-DB = database 'SQLite', :database(':memory:');
+}
+$*RED-DB does CountReads;
+schema(StoredEvent, StoredCommand).create;
+TemplateFact.emit(:key<a>, :amount(3), :stream<a>, :version(1));
+TemplateFact.emit(:key<b>, :amount(7), :stream<b>, :version(1));
+
+ok TemplateTotal.^projection-descriptor<templates>[0]<ast>:exists, 'ordinary filter has a compiled AST';
+ok TemplateState.^projection-descriptor<templates>[0]<ast>:exists, 'receiver state becomes a parameter';
+ok TemplateComputed.^projection-descriptor<templates>[0]<reason>.defined, 'explicit boolean coercion selects runtime fallback';
+ok TemplateTotal.^projection-descriptor<instance-cacheable>, 'ID-only filters allow instance caching';
+ok !TemplateState.^projection-descriptor<instance-cacheable>, 'mutable state filters reconstruct on load';
+ok !TemplateComputed.^projection-descriptor<instance-cacheable>, 'unsupported filters reconstruct on load';
+my $analysis = 0;
+my $wrapper = &predicate-ast.wrap(-> |c { $analysis++; callsame });
+LEAVE &predicate-ast.unwrap($wrapper);
+
+is TemplateTotal.^with-ids(:key<a>).^load.total, 3, 'first ID loads matching facts';
+my ($compiled, $prepared) = $translations, $preparations;
+is TemplateTotal.^with-ids(:key<b>).^load.total, 7, 'second ID uses fresh binds';
+is TemplateTotal.^with-ids(:key<a>).^load.total, 3, 'return to first ID does not retain other binds';
+is $translations, $compiled, 'SQL is translated once for a stable query shape';
+is $preparations, $prepared, 'SQLite statement is prepared once for sequential reads' unless $pg;
+is $analysis, 0, 'compiled replay does not run predicate analysis';
+
+is TemplateText.^with-ids(:key<a>).^load.total, 3, 'string equality binds a receiver';
+is TemplateText.^with-ids(:key<b>).^load.total, 7, 'string equality rebinds a receiver';
+is TemplateNumber.^with-ids(:key(3)).^load.total, 3, 'numeric equality binds a receiver';
+
+my $view = TemplateState.^restore-state(Nil, :stream<state>, :key<a>, :minimum(4));
+$view.^apply-new-applyable-events;
+is $view.total, 0, 'minimum excludes the fact';
+$view.minimum = 2;
+$view.^apply-new-applyable-events;
+is $view.total, 3, 'updated receiver state is rebound';
+
+is TemplateComputed.^with-ids(:key<a>).^load.total, 3, 'fallback reads current receiver value';
+is TemplateComputed.^with-ids(:key<b>).^load.total, 7, 'fallback binds the next receiver';
+ok $analysis > 0, 'fallback uses runtime predicate analysis';
+
+for 1 => 11, '1' => 13, (True) => 17, (False) => 19, (Any) => 23, [1, 2] => 29, { a => 1, b => True } => 31 -> $pair {
+    TemplateFact.emit(:key($pair.key), :amount($pair.value), :stream('typed-' ~ $pair.value), :version(1));
+    my $mixed = TemplateMixed.^restore-state(Nil, :stream<mixed>, :key($pair.key));
+    $mixed.^apply-new-applyable-events;
+    is $mixed.total, $pair.value, 'parameter preserves JSON type: ' ~ $pair.key.WHAT.^name;
+}
+
+is TemplateExcluded.^with-ids(:key(True)).^load.total, 136,
+    'negation preserves exact JSON equality';
+my $before = $analysis;
+decision-model (TemplateTotal) => %(:key<a>), (TemplateTotal) => %(:key<b>), -> $a, $b {
+    is $a.total, 3, 'decision first position binds its own ID';
+    is $b.total, 7, 'decision repeated type binds the second ID';
+};
+is $analysis, $before, 'compiled decisions do not analyze predicates at runtime';
+dies-ok {
+    red-do :transaction, {
+        TemplateFact.emit(:key<rollback>, :amount(41), :stream<rollback>, :version(1));
+        is TemplateTotal.^with-ids(:key<rollback>).^load.total, 41, 'cached read sees transaction writes';
+        die 'rollback';
+    }
+}, 'transaction rolls back after a cached read';
+is TemplateTotal.^with-ids(:key<rollback>).^load.total, 0, 'cache retains no rolled-back rows';
+
+unless $pg {
+    my $native = $*RED-DB.^attributes.first(*.name eq '$!dbh').get_value($*RED-DB);
+    my $sql = 'SELECT ? AS lease';
+    my $one = $native.acquire-read($sql, { $native.prepare($sql) });
+    my $two = $native.acquire-read($sql, { $native.prepare($sql) });
+    nok $one === $two, 'overlapping reads lease different native handles';
+    $one.execute(1);
+    is $one.row(:hash)<lease>, 1, 'first leased handle has its own bind';
+    $two.execute(2);
+    is $two.row(:hash)<lease>, 2, 'second leased handle has its own bind';
+    $native.release-read($sql, $one, True);
+    $native.release-read($sql, $two, True);
+    my $reused = $native.acquire-read($sql, { die 'expected idle handle' });
+    ok $reused === $one, 'idle native handle is reused';
+    $reused.execute(3);
+    is $reused.row(:hash)<lease>, 3, 'reused handle clears old cursor and binds';
+    $native.release-read($sql, $reused, False);
+    my $fresh = $native.acquire-read($sql, { $native.prepare($sql) });
+    nok $fresh === $reused, 'failed execution discards its handle';
+    $fresh.execute(4);
+    $fresh.row(:hash);
+    $native.release-read($sql, $fresh, True);
+    for ^129 -> $i {
+        my $other = "SELECT ? AS item_$i";
+        my $handle = $native.acquire-read($other, { $native.prepare($other) });
+        $handle.execute($i);
+        $handle.row(:hash);
+        $native.release-read($other, $handle, True);
+    }
+    my $evicted = $native.acquire-read($sql, { $native.prepare($sql) });
+    nok $evicted === $fresh, 'idle handles have a bounded LRU cache';
+    $evicted.execute(5);
+    $evicted.row(:hash);
+    $native.release-read($sql, $evicted, True);
+    lives-ok { $native.teardown-connection-state }, 'connection teardown disposes idle statements';
+    dies-ok { $evicted.row(:hash) }, 'teardown invalidates the cached native handle';
+    my $replacement = $native.acquire-read($sql, { $native.prepare($sql) });
+    nok $replacement === $evicted, 'reused connection prepares a fresh handle';
+    $replacement.execute(6);
+    is $replacement.row(:hash)<lease>, 6, 'reads work after connection state is reset';
+    $native.release-read($sql, $replacement, True);
+}
+done-testing;

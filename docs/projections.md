@@ -41,6 +41,50 @@ replays matching events. `.^advance` also catches up an existing instance or a
 proxy. It does not save a checkpoint unless you pass `:checkpoint`; use
 `.^emit-snapshot` to explicitly save one even when no newer event was consumed.
 
+## Prepared replay metadata
+
+Each projection prepares its `APPLY` signatures, attributes and ID names when
+its type is composed. This immutable descriptor is stored on the projection's
+metamodel and, for precompiled modules, serialized with the type in `.precomp`.
+Loading the module in another process reuses the descriptor. Dynamically
+composed types prepare it when they are composed at runtime.
+
+Ordinary replay and `decision-model` share parameterized `Red::AST` templates
+stored in these descriptors. Event-type membership uses a driver-independent
+AST node: PostgreSQL translates it to indexed native-array containment, while
+other drivers keep string membership. The compiler accepts event field access, receiver
+attributes, scalar literals, comparisons, `!`, `&&`, `||` and parentheses. It
+never executes the original `where` to discover constants. Calls, interpolation
+and sub-signatures use the existing runtime analysis path when supported.
+
+An `APPLY` or `REACT` parameter's `where` must not capture external variables.
+Type composition rejects these captures, normally at compilation time, with the
+entity, handler and variable in the error. Use event parameters, entity
+attributes or variables declared inside the filter instead. This restriction
+also applies to aggregates and sagas; handler bodies are unaffected.
+Validated inherited handlers retain that validation in `.precomp`. A constraint
+imported from an uninspected precompiled role is rejected when its source is
+unavailable; declare that filter on the entity instead. This check detects direct
+variable references, including interpolation, rather than proving that functions
+called by a predicate are pure.
+
+The descriptor also stores prepared clone paths for binding; execution does not
+reflect over AST attributes and shares constant-only subtrees. Each execution
+binds current receiver attributes to fresh parameter slots.
+Ordinary replay can therefore use mutable receiver state; decisions still allow
+only IDs and constants. SQL and bind layouts use a driver-scoped LRU cache of
+128 shapes, separated by parameter type and nullness. Unsupported filters keep
+runtime analysis and translation, so captured values are never frozen.
+
+SQLite retains up to 128 idle prepared read statements per physical connection.
+Each execution leases an exclusive handle and resets its cursor and bindings
+before returning it; failures dispose the handle. Connection teardown disposes
+idle handles. PostgreSQL uses DB::Pg's connection-local prepared statement cache.
+The caches retain no projection instances, execution IDs, events or counter
+versions. Types and methods must remain stable after composition. Non-queryable
+`APPLY` signatures keep their existing error at query/replay time; merely
+declaring the projection is valid.
+
 ## Advance inside an aggregate command's transaction
 
 Annotate an `APPLY` candidate with `is transactional`:
@@ -100,7 +144,7 @@ does not contain executable `APPLY` definitions.
 
 ## Infer IDs from the signature
 
-The default `OnDemand` lifecycle infers target IDs from positive equalities in the
+The default `Cached` lifecycle and explicit `OnDemand` infer target IDs from positive equalities in the
 annotated signature. No separate mapping is required:
 
 ```raku
@@ -183,15 +227,37 @@ transaction's starting state.
 
 ## Ordering across streams
 
-Transactional replay is supported on SQLite and PostgreSQL. SQLite serializes
-journal writes through its database write lock. PostgreSQL framework writers
-acquire a transaction-scoped advisory gate for the event table before allocating
-journal IDs and keep it until commit. Domain events, snapshots and saga controls
-participate. The append phase is serialized within the store; command computation
-can still run concurrently before its first append.
+SQLite and PostgreSQL appends use optimistic stream versions and field/tag
+counters. Framework writers no longer acquire a global journal advisory lock.
+Database updates can wait on shared counters, and SQLite retains its native
+single-writer behavior.
 
-This prevents a later writer from checkpointing past an earlier uncommitted event
-from another stream. The unique `(stream, version)` optimistic lock remains in
-place and handles aggregate version contention. Raw SQL or direct ORM inserts
-that bypass framework journal writers do not participate in this ordering
-protocol. Other database drivers require a corresponding gate implementation.
+PostgreSQL serial IDs follow allocation order, not commit order. Independent
+transactions may commit out of order. The current `id > cursor` checkpoint can
+miss a lower ID that becomes visible after a higher ID was consumed. This is a
+known limitation, measured by the PostgreSQL ordering diagnostic and concurrency
+benchmark; it does not cause an insert exception. Full replay still sees the
+persisted facts. See [decision models](decision-models.md#serial-ids-and-projection-cursors).
+
+## Projections over journal records
+
+A projection may handle `StoredEvent` directly instead of reconstructed domain
+objects. It then receives all journal rows, including entity checkpoints and saga
+controls, without loading the recorded event classes:
+
+```raku
+projection JournalCount {
+    has UInt $.count = 0;
+    method APPLY(StoredEvent $record) { $!count++ }
+}
+```
+
+This opt-in mode scans the journal and dispatches the raw row to APPLY. Ordinary
+projections continue filtering domain events from their signatures. The
+[flow projection](flows.md#flow-projection) uses raw records to reconstruct
+causality without running application handlers.
+
+A raw-record projection can supply `journal-records(:from-id, :through-id)` to
+select a smaller set of columns. This source must honor both bounds and return
+records in journal ID order. The flow projection uses this hook to avoid loading
+application payloads.

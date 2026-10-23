@@ -1,0 +1,103 @@
+{
+  "workload": "full school demo, SQLite :memory:, tracing enabled",
+  "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+  "runs": [
+    {
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "seconds": 38.61153333398397,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "seconds": 8.344041666015983,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "seconds": 8.221253833995434,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "seconds": 16.89022874998045,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "seconds": 16.851590708014555,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "seconds": 8.07892291698954,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "seconds": 8.132375332992524,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "seconds": 16.849632500001462,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "seconds": 16.88431379100075,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "seconds": 8.079990083992016,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "seconds": 8.07952062500408,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "seconds": 16.873680874996353,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "equal_results": true,
+  "medians": {
+    "before": 16.873680874996353,
+    "after": 8.079990083992016
+  },
+  "source_hashes": {
+    "before": "972eba2017eb3b6da65596d892b1f71f44ae4a5b2264c1ea5eb9c5f5f94b4380",
+    "after": "0d12ea7ccc38a4fa8d8fd79c110462c43586d53eb064637454ed8cfd2f12bd4c"
+  },
+  "measured_at": "2026-10-20",
+  "methodology": "Five alternating samples after one warmup per version; full process including startup and schema, SQLite in memory, flow tracing enabled. Red 0.2.7, same machine, no concurrent test workloads. Before is a preserved source copy immediately before the combined decision-plan change.",
+  "speedup": 2.0883294038226974,
+  "elapsed_reduction_percent": 52.114834078881664
+}

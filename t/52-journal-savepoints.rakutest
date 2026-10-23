@@ -106,22 +106,22 @@ subtest 'released descendants remain provisional and an ancestor rollback discar
     is-deeply @published.Array, ['outer'], 'ancestor callback and key replacement are restored';
 };
 
-subtest 'retention and the journal gate created by a child are discarded on rollback' => {
+subtest 'retention and counter increments created by a child are discarded on rollback' => {
     fresh;
     my $p = Account.^with-ids(:id(2)); $p.^create; $p.^release;
     my $discarded;
     red-do :transaction, {
-        nok journal-connection().journal-state<gated>, 'outer scope has not acquired the gate';
+        is journal-connection().journal-state<counter-increments>.elems, 0, 'outer scope has no counter increments';
         try {
             red-do :transaction, {
                 $discarded = $p.^load;
                 $p.add(:amount(7));
-                ok journal-connection().journal-state<gated>, 'child acquires gate';
+                ok journal-connection().journal-state<counter-increments>.elems, 'child tracks counter increments';
                 die 'abort retention';
             };
             CATCH { default { .rethrow unless .message eq 'abort retention' } }
         }
-        nok journal-connection().journal-state<gated>, 'rolled-back acquisition is forgotten';
+        is journal-connection().journal-state<counter-increments>.elems, 0, 'rolled-back counter increments are forgotten';
         nok $discarded === $p.^load, 'aborted provisional retention is not reused';
         is $p.^load.amount, 0, 'new load reads committed state';
         $p.add(:amount(4));

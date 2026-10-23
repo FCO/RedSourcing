@@ -1,12 +1,14 @@
 unit module RedSourcing::Journal;
 use Red;
 use Red::DB;
+use RedSourcing::Storage;
 use RedSourcing::X::OptimisticLockFailed;
+use RedSourcing::Counters;
 
 sub empty-state() {
-    { gated => False, working => {}, publish => {}, retained => {},
+    { working => {}, publish => {}, retained => {},
         snapshot-candidates => {}, savepoints => [], decisions => [],
-        decision-locked => False, decision-conflict => Nil }
+        counter-increments => {}, decision-conflict => Nil }
 }
 
 # Lifecycle depends on Journal. Resolve its copy helpers only when a savepoint
@@ -28,9 +30,9 @@ sub checkpoint(Hash $state --> Hash) {
                 lifecycle-helper('&entity-copy')($entity)];
         }
     }
-    { gated => $state<gated>, :%maps, :%objects,
+    { :%maps, :%objects,
         decisions => $state<decisions>.map(*.clone).Array,
-        decision-locked => $state<decision-locked>,
+        counter-increments => $state<counter-increments>.clone,
         decision-conflict => $state<decision-conflict> }
 }
 
@@ -38,10 +40,9 @@ sub restore-checkpoint(Hash $state, Hash $checkpoint) {
     for $checkpoint<objects>.values -> $pair {
         lifecycle-helper('&entity-adopt')($pair[0], $pair[1]);
     }
-    $state<gated> = $checkpoint<gated>;
     $state{$_} = $checkpoint<maps>{$_}.clone for <working publish retained snapshot-candidates>;
     $state<decisions> = $checkpoint<decisions>.map(*.clone).Array;
-    $state<decision-locked> = $checkpoint<decision-locked>;
+    $state<counter-increments> = $checkpoint<counter-increments>.clone;
     $state<decision-conflict> = $checkpoint<decision-conflict>;
 }
 
@@ -50,14 +51,23 @@ sub restore-checkpoint(Hash $state, Hash $checkpoint) {
 my role JournalConnection {
     has Str $!journal-store;
     has Hash $!journal-state;
+    has Hash $!journal-storage;
 
-    method journal-initialize(Str $store, Hash :$state = empty-state()) {
+    method journal-initialize(Str $store, Hash :$state = empty-state(), Hash :$storage) {
+        $!journal-storage = $storage // $!journal-storage // {};
         $!journal-store = $store;
         $!journal-state = $state;
         self
     }
     method journal-store { $!journal-store }
     method journal-state { $!journal-state }
+    method journal-storage { $!journal-storage }
+    method journal-ensure-counters {
+        unless $!journal-storage<counters-ready> {
+            initialize-counters();
+            $!journal-storage<counters-ready> = True;
+        }
+    }
     method journal-savepoint(Str $name) {
         $!journal-state<savepoints>.push({ :$name, state => checkpoint($!journal-state) });
     }
@@ -77,6 +87,7 @@ my role JournalConnection {
         die "Unknown journal savepoint: $name" unless $index.defined;
         my $result = callsame;
         restore-checkpoint($!journal-state, $!journal-state<savepoints>[$index]<state>);
+        $!journal-storage<counters-ready> = False;
         $!journal-state<savepoints>.splice($index + 1);
         $result
     }
@@ -99,18 +110,22 @@ my role JournalConnection {
         my @publish = $!journal-state<publish>.values;
         my $result = callsame;
         $!journal-state = empty-state();
+        my $*REDSOURCING-COMMITTED-DRIVER = self;
         .() for @publish;
         $result
     }
     method rollback {
         return callsame if self.?transaction-guard.defined;
-        LEAVE $!journal-state = empty-state();
+        # Native rollback hooks may re-enter the journal before this method
+        # returns. DDL from the rejected transaction may already be gone then.
+        $!journal-storage<counters-ready> = False;
+        LEAVE { $!journal-state = empty-state() }
         callsame
     }
 }
 
 sub journal-connection() is export {
-    my $connection = get-RED-DB;
+    my $connection = optimize-storage-driver(get-RED-DB);
     unless $connection ~~ JournalConnection {
         # Red 0.2.7 scopes use cloned drivers. Hooks must also be attached to
         # the native transaction driver, where Guard commits and rolls back.
@@ -136,7 +151,7 @@ sub journal-connection() is export {
                 $native.journal-savepoint($_) for @names;
             }
             $connection does JournalConnection;
-            return $connection.journal-initialize($native.journal-store, :state($native.journal-state));
+            return $connection.journal-initialize($native.journal-store, :state($native.journal-state), :storage($native.journal-storage));
         }
         my $attribute = $connection.^attributes.first(*.name eq '$!dbh');
         my $handle = $attribute.defined ?? $attribute.get_value($connection) !! $connection;
@@ -149,57 +164,62 @@ sub journal-connection() is export {
 
 sub journal-store() is export { journal-connection().journal-store }
 
-sub journal-gate() is export {
-    die 'Journal append requires a transaction' unless (try $*RED-TRANSACTION-RUNNING) // False;
-    my $connection = journal-connection();
-    my $state = $connection.journal-state;
-    $state<decision-conflict>.throw if $state<decision-conflict>.defined;
-    my @drivers = $connection.^mro.map(*.^name);
-    my $pg = @drivers.first(* eq 'Red::Driver::Pg').defined;
-    if !$state<gated> && $pg {
-        # The table OID scopes the gate to a store/schema in this database. All
-        # journal writers acquire it before a sequence allocates their row ID.
-        $connection.execute("SELECT pg_advisory_xact_lock(1381188434, 'red_sourcing_event'::regclass::oid::integer)").row;
-    } elsif !$pg && !@drivers.first(* eq 'Red::Driver::SQLite').defined {
-        die 'Transactional journal appends require SQLite or PostgreSQL';
-    }
-    # SQLite's first INSERT already holds the database write lock through commit.
-    $state<gated> = True;
-    if $state<decisions>.elems && !$state<decision-locked> {
-        unless $pg {
-            my $reservation = $connection.prepare(
-                'UPDATE red_sourcing_event SET version = version WHERE 1 = 0');
-            CATCH {
-                default {
-                    my $failure = $_;
-                    # Failed execution is not marked executed by Red::Statement.
-                    # Reset its native cursor too, or SQLite can retain the stale
-                    # WAL snapshot even after the transaction has rolled back.
-                    try $reservation.statement.?finish;
-                    my $native = $failure;
-                    $native = $native.?orig-exception // $native;
-                    if $native.^name eq 'X::DBDish::DBError' && ($native.code +& 255) == any(5, 6) {
-                        my $conflict = RedSourcing::X::OptimisticLockFailed.new(
-                            :after($state<decisions>.head<after>), :boundary<SQLite-write-snapshot>);
-                        $state<decision-conflict> = $conflict;
-                        $conflict.throw;
-                    }
-                    $failure.rethrow;
-                }
+# The dynamic condition is supplied by Decision, not inferred by emit.
+sub journal-decision-condition() is export {
+    my $state = journal-connection().journal-state;
+    my %guards;
+    for $state<decisions>.grep({ !.<validated> }) -> %decision {
+        for %decision<keys>.kv -> $key, $definition {
+            my $expected = %decision<versions>{$key}
+                + ($state<counter-increments>{$key} // 0)
+                - (%decision<own>{$key} // 0);
+            if %guards{$key}:exists {
+                RedSourcing::X::OptimisticLockFailed.new(:boundary<event-tags>).throw
+                    unless %guards{$key}<expected> == $expected;
             }
-            # A zero-row UPDATE acquires SQLite's write reservation before SELECT.
-            $reservation.execute;
-            $reservation.finish-transaction;
+            %guards{$key} = { :$definition, :$expected };
         }
-        $state<decision-locked> = True;
     }
-    for $state<decisions>.grep({ !.<validated> }) -> $decision {
-        my $conflict = $decision<check>();
-        if $conflict.defined {
-            $state<decision-conflict> = $conflict;
-            $conflict.throw;
+    %guards
+}
+
+sub journal-append(%keys, &work) is export {
+    # Bootstrap the counter schema even for the first snapshot. Deferring DDL
+    # until a domain fact inside a command can make independent Pg writers wait
+    # on transactional CREATE TABLE, and leaves no table after rollback.
+    journal-connection().journal-ensure-counters;
+    transaction-do {
+        my $connection = journal-connection();
+        my $state = $connection.journal-state;
+        $state<decision-conflict>.throw if $state<decision-conflict>.defined;
+        CATCH {
+            default {
+                my $failure = $_;
+                if $failure ~~ RedSourcing::X::OptimisticLockFailed || retryable-journal-error($failure) {
+                    my $conflict = $failure ~~ RedSourcing::X::OptimisticLockFailed
+                        ?? $failure !! RedSourcing::X::OptimisticLockFailed.new(:boundary<transaction-conflict>);
+                    $state<decision-conflict> = $conflict;
+                    $conflict.throw;
+                }
+                $failure.rethrow;
+            }
         }
-        $decision<validated> = True;
+        my $condition = try &*REDSOURCING-APPEND-CONDITION;
+        my %guards = $condition.defined ?? $condition() !! %();
+        my %changes;
+        for (|%keys.keys, |%guards.keys).unique -> $key {
+            %changes{$key} = {
+                increment => ((%keys{$key}:exists) ?? 1 !! 0),
+                definition => (%keys{$key} // %guards{$key}<definition>),
+                expected => (%guards{$key}<expected> // Any)
+            };
+        }
+        update-counters($connection, %changes);
+        for %changes.kv -> $key, %change {
+            $state<counter-increments>{$key} = ($state<counter-increments>{$key} // 0) + %change<increment>;
+        }
+        $_<validated> = True for $state<decisions>.List;
+        work()
     }
 }
 
@@ -211,7 +231,7 @@ sub transaction-do(&work) is export {
     red-do :transaction, { work() }
 }
 
-sub journal-do(&work) is export { transaction-do { journal-gate(); work() } }
+sub journal-do(&work) is export { transaction-do { work() } }
 
 sub journal-working(Str $key, &restore) is export {
     journal-connection().journal-state<working>{$key} //= restore()

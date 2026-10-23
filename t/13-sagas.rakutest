@@ -585,7 +585,9 @@ subtest 'completion, limits and optimistic conflicts preserve pending work' => {
     dies-ok { $s.^complete }, 'completion rejects pending operations';
     $s = advance($p, DateTime.now.later(:seconds(1)), :limit(0));
     is $s.^state<actions>.head<status>, 'pending', 'a zero limit does not execute effects';
-    my $stale = $p.^load;
+    # Restore independently to exercise a genuinely stale planner under Cached.
+    my $stale = $s.WHAT.^restore(:stream($s.^stream));
+    $stale.^replay;
     $s.scalar;
     throws-like { $stale.scalar }, RedSourcing::X::OptimisticLockFailed,
         'two stale planners cannot commit the same control version';

@@ -1,0 +1,321 @@
+{
+  "runtime": "Welcome to Rakudo™ v2026.09-198-g50379ea28a.\nImplementing the Raku® Programming Language v6.d.\nBuilt on MoarVM version 2026.09-38-g597c5351b.\n",
+  "runs": 3,
+  "selected_run": 0,
+  "baseline_median_ms": 18110.208833008073,
+  "profile_median_ms": 18333.14825000707,
+  "selected_wall_ms": 18333.14825000707,
+  "phases": [
+    {
+      "name": "Configuração e schema",
+      "start_ms": 0,
+      "duration_ms": 903.980043,
+      "calls": 1,
+      "record_ids": []
+    },
+    {
+      "name": "Cadastrar Alice",
+      "start_ms": 903.980043,
+      "duration_ms": 260.393679,
+      "calls": 1,
+      "record_ids": [
+        27
+      ]
+    },
+    {
+      "name": "Criar 11 aulas",
+      "start_ms": 1164.466764,
+      "duration_ms": 635.7001949999999,
+      "calls": 11,
+      "record_ids": [
+        62,
+        96,
+        130,
+        164,
+        198,
+        232,
+        266,
+        300,
+        334,
+        368,
+        402
+      ]
+    },
+    {
+      "name": "Matricular Alice em 10 aulas",
+      "start_ms": 1800.254085,
+      "duration_ms": 3092.5270889999997,
+      "calls": 10,
+      "record_ids": [
+        436,
+        478,
+        520,
+        562,
+        604,
+        646,
+        688,
+        730,
+        772,
+        814
+      ]
+    },
+    {
+      "name": "Consultar as aulas de Alice",
+      "start_ms": 4892.832591,
+      "duration_ms": 65.4719839999998,
+      "calls": 1,
+      "record_ids": [
+        856
+      ]
+    },
+    {
+      "name": "Rejeitar a 11ª matrícula de Alice",
+      "start_ms": 4958.599577,
+      "duration_ms": 316.701153,
+      "calls": 1,
+      "record_ids": [
+        862
+      ]
+    },
+    {
+      "name": "Cancelar class-1 e matricular em class-11",
+      "start_ms": 5275.441898,
+      "duration_ms": 361.512608,
+      "calls": 2,
+      "record_ids": [
+        901,
+        927
+      ]
+    },
+    {
+      "name": "Consultar Alice novamente",
+      "start_ms": 5637.014964,
+      "duration_ms": 63.03055399999994,
+      "calls": 1,
+      "record_ids": [
+        960
+      ]
+    },
+    {
+      "name": "Criar a aula de matemática",
+      "start_ms": 5700.1763519999995,
+      "duration_ms": 57.745734000000084,
+      "calls": 1,
+      "record_ids": [
+        966
+      ]
+    },
+    {
+      "name": "Cadastrar 31 alunos e matricular os primeiros 30",
+      "start_ms": 5758.035628,
+      "duration_ms": 11158.460556,
+      "calls": 61,
+      "record_ids": [
+        1000,
+        1034,
+        1076,
+        1110,
+        1152,
+        1186,
+        1228,
+        1262,
+        1304,
+        1338,
+        1380,
+        1414,
+        1456,
+        1490,
+        1532,
+        1566,
+        1608,
+        1642,
+        1684,
+        1718,
+        1760,
+        1794,
+        1836,
+        1870,
+        1912,
+        1946,
+        1988,
+        2022,
+        2064,
+        2098,
+        2140,
+        2174,
+        2216,
+        2250,
+        2292,
+        2326,
+        2368,
+        2402,
+        2444,
+        2478,
+        2520,
+        2554,
+        2596,
+        2630,
+        2672,
+        2706,
+        2748,
+        2782,
+        2824,
+        2858,
+        2900,
+        2934,
+        2976,
+        3010,
+        3052,
+        3086,
+        3128,
+        3162,
+        3204,
+        3238,
+        3280
+      ]
+    },
+    {
+      "name": "Consultar a turma de matemática",
+      "start_ms": 16916.542601,
+      "duration_ms": 76.1628759999985,
+      "calls": 1,
+      "record_ids": [
+        3314
+      ]
+    },
+    {
+      "name": "Rejeitar o 31º aluno",
+      "start_ms": 16992.862186,
+      "duration_ms": 329.02776200000153,
+      "calls": 1,
+      "record_ids": [
+        3320
+      ]
+    },
+    {
+      "name": "Cancelar student-1 e matricular student-31",
+      "start_ms": 17322.002074,
+      "duration_ms": 386.06986600000164,
+      "calls": 2,
+      "record_ids": [
+        3359,
+        3385
+      ]
+    },
+    {
+      "name": "Consultar matemática novamente",
+      "start_ms": 17708.122857,
+      "duration_ms": 82.04153300000326,
+      "calls": 1,
+      "record_ids": [
+        3418
+      ]
+    },
+    {
+      "name": "Reconstituir SchoolOverview: 40 matrículas ativas",
+      "start_ms": 17790.508725,
+      "duration_ms": 116.64118100000269,
+      "calls": 1,
+      "record_ids": [
+        3424
+      ]
+    }
+  ],
+  "startup_ms": 314.7146701812744,
+  "teardown_ms": 103.63030433654785,
+  "other_demo_ms": 2.058553999995638,
+  "sql_count": 1816,
+  "sql_active_ms": 411.71919,
+  "baselines": [
+    {
+      "wall_ms": 18110.208833008073,
+      "start_posix": 1792499639.69627,
+      "end_posix": 1792499657.8065789,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    },
+    {
+      "wall_ms": 17965.750333009055,
+      "start_posix": 1792499676.140063,
+      "end_posix": 1792499694.1059132,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    },
+    {
+      "wall_ms": 18261.40420799493,
+      "start_posix": 1792499712.392715,
+      "end_posix": 1792499730.65422,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "wall_ms": 18333.14825000707,
+      "start_posix": 1792499657.80671,
+      "end_posix": 1792499676.13996,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "-Itools/lib",
+        "-MSchoolDemoTiming",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    },
+    {
+      "wall_ms": 18286.467416997766,
+      "start_posix": 1792499694.1060202,
+      "end_posix": 1792499712.392589,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "-Itools/lib",
+        "-MSchoolDemoTiming",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    },
+    {
+      "wall_ms": 18755.285499995807,
+      "start_posix": 1792499730.654319,
+      "end_posix": 1792499749.409708,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+      "command": [
+        "raku",
+        "-Ilib",
+        "-Iexamples/school/lib",
+        "-Itools/lib",
+        "-MSchoolDemoTiming",
+        "examples/school/main.raku",
+        "demo"
+      ]
+    }
+  ],
+  "measured_at": "2026-10-20",
+  "frontend": "RAKUDO_RAKUAST=0",
+  "driver": "SQLite",
+  "database": ":memory:"
+}

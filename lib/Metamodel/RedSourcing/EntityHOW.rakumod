@@ -8,7 +8,9 @@ use RedSourcing::Context;
 use RedSourcing::Flow;
 use RedSourcing::IsTransactional;
 use RedSourcing::Journal;
+use RedSourcing::Tags;
 use RedSourcing::Lifecycle;
+use RedSourcing::QueryTemplate;
 use RedSourcing::X::OptimisticLockFailed;
 use X::Red::Exceptions;
 
@@ -19,12 +21,14 @@ also does Metamodel::RedSourcing::CommandContainer;
 use RedSourcing::Entity;
 
 has $!proxy;
+has @!validated-handlers;
 has $!version-attr;
 has $!curr-id-attr;
 has $!stream-attr;
 has $!checkpoint-attr;
 has EntityLifecycle $!lifecycle;
 has Bool $!used;
+has Int $!cache-size;
 has $!auto-snapshot;
 has Bool $!auto-snapshot-explicit;
 has $!snapshot-events-attr;
@@ -35,7 +39,7 @@ multi method lifecycle(Mu \type, Bool :$declared = False, *%options) {
         die 'Cannot combine :declared with lifecycle configuration' if $declared;
         return self!configure-lifecycle(type, |%options);
     }
-    my $default = $!lifecycle // OnDemand;
+    my $default = $!lifecycle // Cached;
     $declared ?? $default !! effective-lifecycle(type.WHAT, $default)
 }
 
@@ -45,14 +49,11 @@ multi method lifecycle(Mu:U \type, EntityLifecycle $lifecycle) {
 
 method !configure-lifecycle(Mu:U \type, *%options) {
     assert-effect-allowed('entity lifecycle configuration');
-    die 'Entity lifecycle options accept only retained, lifecycle and auto-snapshot'
-        if %options.keys.grep({ $_ ne any(<retained lifecycle auto-snapshot>) });
-    die 'Choose retained or lifecycle, not both' if (%options<retained>:exists) && (%options<lifecycle>:exists);
-    die 'retained must be a Bool' if (%options<retained>:exists) && %options<retained> !~~ Bool;
-    my $lifecycle = (%options<retained>:exists)
-        ?? (%options<retained> ?? Retained !! OnDemand)
-        !! %options<lifecycle> // self.lifecycle(type, :declared);
-    die 'lifecycle must be OnDemand or Retained' unless $lifecycle ~~ EntityLifecycle;
+    my %normalized = lifecycle-options(%options);
+    my $lifecycle = %normalized<lifecycle> // self.lifecycle(type, :declared);
+    my $size = %normalized<cache-size> // $!cache-size // 100;
+    die 'Entity cache size must be configured before first use'
+        if $!used && $size != ($!cache-size // 100);
     my $policy = (%options<auto-snapshot>:exists) ?? snapshot-policy(%options<auto-snapshot>) !! $!auto-snapshot;
     die 'Entity lifecycle must be configured before first use'
         if $!used && $lifecycle != self.lifecycle(type, :declared);
@@ -60,11 +61,16 @@ method !configure-lifecycle(Mu:U \type, *%options) {
         if $!used && (%options<auto-snapshot>:exists)
             && (!$!auto-snapshot-explicit || !($policy eqv $!auto-snapshot));
     $!lifecycle = $lifecycle;
+    $!cache-size = $size;
     if %options<auto-snapshot>:exists {
         $!auto-snapshot = $policy;
         $!auto-snapshot-explicit = True;
     }
     type
+}
+
+method cache-size(Mu \type, Bool :$declared = False) {
+    $declared ?? ($!cache-size // 100) !! effective-cache-size(type.WHAT, $!cache-size // 100)
 }
 
 method auto-snapshot(Mu \type, Bool :$declared = False, Bool :$explicit = False) {
@@ -118,11 +124,18 @@ method release(Mu:U \type, Str :$stream!) {
 }
 
 method proxy(|) { $!proxy }
+method validated-handlers(|) { @!validated-handlers.List }
 
 method compose(Mu \entity, |) {
 	entity.^add_role: Entity;
 
 	callsame;
+	my @trusted;
+	for entity.^mro.skip(1) -> $parent {
+		@trusted.append($parent.^validated-handlers)
+			if $parent.HOW.^can('validated-handlers');
+	}
+	@!validated-handlers = validate-handler-constraints(entity, @trusted);
 	my $apply = entity.^find_method('APPLY');
 	die 'is transactional is only supported on projection APPLY methods'
 		if $apply.candidates.grep(* ~~ IsTransactional)
@@ -245,23 +258,32 @@ method from(\entity, $source) {
 
 method load(Mu:U \type, Str :$stream!, *%initial) {
     type.^use-lifecycle;
+    my $fresh-combined;
     my &restore = {
-        my $entity = type.^restore(:$stream, |%initial);
-        $entity.^replay;
-        $entity
+        my $read = type.^restore-and-replay(:$stream, |%initial);
+        $fresh-combined = $read<entity> if $read<combined>;
+        $read<entity>
     };
     return restore() if type.^lifecycle == OnDemand;
+    return cached-load(type, $stream, &restore) if type.^lifecycle == Cached;
     my $entity = retained-load(type, $stream, &restore);
-    $entity.^replay if (try $*RED-TRANSACTION-RUNNING) // False;
+    $entity.^replay if ((try $*RED-TRANSACTION-RUNNING) // False)
+        && !($fresh-combined.defined && $entity === $fresh-combined);
     $entity
+}
+
+# Internal result distinguishes a completed combined read from the generic path.
+method restore-and-replay(Mu:U \type, Str :$stream!, *%initial) {
+    my $entity = type.^restore(:$stream, |%initial);
+    $entity.^replay;
+    %( :$entity, combined => False )
 }
 
 method restore(Mu:U \type, Str :$stream!, *%initial) {
 	require ::("RedSourcing::StoredEvent");
 	my $*RED-FALLBACK = False;
-	my $snapshot = ::("RedSourcing::StoredEvent").^all.grep({
-		.class eq type.^name && .stream eq $stream
-	}).sort(-*.id).head;
+	my Mu $stored = ::("RedSourcing::StoredEvent");
+    my $snapshot = $stored.^all.where($stored.journal-filter(:class(type.^name), :$stream)).sort(-*.id).head;
 	type.^restore-state($snapshot, :$stream, |%initial)
 }
 
@@ -280,17 +302,19 @@ method write-snapshot(\entity, UInt :$version!, UInt :$replay-cursor) {
 			$_ !~~ /"<anon|" \d+ ">"/
 		}).join("|")
 		~ "|";
-	my $row = journal-do {
+    my %data = normalize-event-data(entity.^data);
+    my %keys; # Checkpoints are not facts selected by decision-model.
+    my $row = journal-append %keys, {
 		my $row = $stored-event.^create:
 			:$event-schema-version,
 			:$version,
 			:stream(entity.^stream),
 			:class(entity.^name),
 			:$mro,
-			:data(entity.^data),
+			:data(%data),
 			:$replay-cursor,
+            |emission-causality(),
 		;
-		trace-emission($row);
 		$row
 	};
 	entity.^snapshot-events = 0;

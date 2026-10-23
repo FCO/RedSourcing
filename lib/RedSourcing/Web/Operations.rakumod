@@ -38,6 +38,7 @@ submethod TWEAK {
         ~ '.includes = ' ~ $!settings.includes.Array.raku ~ ';'
         ~ '.modules = ' ~ $!settings.modules.Array.raku ~ ';'
         ~ '.connection = ' ~ $!settings.connection.raku ~ ';'
+        ~ '.entity-cache-size = ' ~ $!settings.entity-cache-size.raku ~ ';'
         ~ '.entities = ' ~ $!settings.entities.raku ~ ';'
         ~ '.auto-snapshot = ' ~ ($!settings.auto-snapshot.defined ?? $!settings.auto-snapshot.raku !! 'Nil') ~ ';'
         ~ '.worker: { .limit = ' ~ ($!settings.worker.limit // 100)

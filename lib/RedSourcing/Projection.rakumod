@@ -231,7 +231,11 @@ sub advance-transactional-projections(Mu:U $event-type, $row) is export {
                 my $proxy = $type.^with-ids(|%ids);
                 my $key = entity-key($type, $proxy.^stream-name);
                 %targets{$key} //= journal-working($key, {
-                    $type.^restore(:stream($proxy.^stream-name), |%ids)
+                    $type.^lifecycle == Cached
+                        ?? cached-load($type, $proxy.^stream-name, {
+                            $type.^restore(:stream($proxy.^stream-name), |%ids)
+                        }, :!replay)
+                        !! $type.^restore(:stream($proxy.^stream-name), |%ids)
                 });
             }
         }

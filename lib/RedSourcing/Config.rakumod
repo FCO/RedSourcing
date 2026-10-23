@@ -1,9 +1,11 @@
 use Configuration;
 use Red;
 use Red::Database;
+use RedSourcing::Storage;
 use RedSourcing::Flow;
 use RedSourcing::StoredEvent;
 use RedSourcing::StoredCommand;
+use RedSourcing::StoredCounter;
 use RedSourcing::Lifecycle;
 unit module RedSourcing::Config;
 
@@ -30,6 +32,7 @@ class Settings does Configuration::Node is export {
     has %.connection;
     has %.entities;
     has $.auto-snapshot;
+    has $.entity-cache-size = 100;
     has MonitorSettings $.monitor .= new;
     has WorkerSettings $.worker .= new;
     submethod TWEAK(|args) {
@@ -88,12 +91,13 @@ sub load-config(IO() :$file, IO::Path :$directory = $*CWD --> Hash) is export {
     validate-connection($settings.connection);
     lifecycle-settings($settings.entities);
     snapshot-policy($settings.auto-snapshot);
+    cache-capacity($settings.entity-cache-size);
     my @paths = $settings.includes.map({ absolute-path($selected.parent, $_).Str });
     %(settings => $settings.clone(:includes(@paths)), directory => $selected.parent)
 }
 
 sub validate-connection(%connection) {
-    for <driver database debug includes modules entities auto-snapshot> -> $reserved {
+    for <driver database debug includes modules entities auto-snapshot entity-cache-size> -> $reserved {
         die "Set '$reserved' at the top level, not in connection"
             if %connection{$reserved}:exists;
     }
@@ -114,11 +118,11 @@ sub red-sourcing-defaults(IO() :$file, IO::Path :$directory = $*CWD,
     my $effective = $settings.clone(:driver($selected-driver), :database($selected-database),
         :debug($debug // $settings.debug), :flow-tracing($flow-tracing // $settings.flow-tracing), :connection(%options));
     red-defaults :default(store-driver($selected-driver, $selected-database, :connection(%options)));
-    configure-lifecycles($effective.entities, :auto-snapshot($effective.auto-snapshot));
+    configure-lifecycles($effective.entities, :auto-snapshot($effective.auto-snapshot), :entity-cache-size($effective.entity-cache-size));
     $PROCESS::RED-DEBUG = $effective.debug;
     if $initialize {
-        .^create-table(:unless-exists) for RedSourcing::StoredEvent, RedSourcing::StoredCommand;
-        .^create-indexes for RedSourcing::StoredEvent, RedSourcing::StoredCommand;
+        .^create-table(:unless-exists) for RedSourcing::StoredEvent, RedSourcing::StoredCommand, RedSourcing::StoredCounter;
+        .^create-indexes for RedSourcing::StoredEvent, RedSourcing::StoredCommand, RedSourcing::StoredCounter;
     }
     enable-flow-tracing(:$initialize) if $effective.flow-tracing;
     $effective
@@ -163,7 +167,7 @@ sub store-driver(Str $driver, Str $database, :%connection = {}) is export {
             }).join(' ');
             %options<dbh> = ::('DB::Pg').new(:conninfo($info), :converters(<DateTime UUID Geometric>));
         }
-        return database($driver, |%options) but ::('RedSourcing::PgJSON');
+        return optimize-storage-driver(database($driver, |%options) but ::('RedSourcing::PgJSON'));
     }
-    database($driver, |%options)
+    optimize-storage-driver(database($driver, |%options))
 }

@@ -1,0 +1,274 @@
+{
+  "measured_at": "2026-10-21",
+  "runtime": "Welcome to Rakudo\u2122 v2026.09.\nImplementing the Raku\u00ae Programming Language v6.d.\nBuilt on MoarVM version 2026.09.\n",
+  "methodology": "Five alternating samples after one warmup per version; Red 0.2.7, SQLite in memory, no concurrent tests. School includes startup, schema and tracing. Command workload times execution of 100 persisted commands, excluding setup and submission, with tracing disabled. Both versions use equivalent isolated source snapshots (lib, examples and identical META6.json), each with its own warmed precompilation cache.",
+  "runs": [
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 2.861833167000441,
+      "claims": 100,
+      "sum": 4950,
+      "seconds": 1.773883768,
+      "command_selects": 200,
+      "iterations": 100
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 7.43668774998514,
+      "seconds": 1.517924545,
+      "iterations": 100,
+      "claims": 100,
+      "command_selects": 100,
+      "sum": 4950
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.5767149169987533,
+      "sum": 4950,
+      "iterations": 100,
+      "seconds": 1.528558406,
+      "claims": 100,
+      "command_selects": 100
+    },
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 2.823756166995736,
+      "iterations": 100,
+      "command_selects": 200,
+      "claims": 100,
+      "seconds": 1.770477412,
+      "sum": 4950
+    },
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.8152013340150006,
+      "claims": 100,
+      "iterations": 100,
+      "sum": 4950,
+      "seconds": 1.772476966,
+      "command_selects": 200
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 2.585428624995984,
+      "seconds": 1.533775773,
+      "command_selects": 100,
+      "iterations": 100,
+      "sum": 4950,
+      "claims": 100
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.5673954999947455,
+      "iterations": 100,
+      "sum": 4950,
+      "seconds": 1.51700954,
+      "command_selects": 100,
+      "claims": 100
+    },
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 2.870734583004378,
+      "command_selects": 200,
+      "iterations": 100,
+      "seconds": 1.810689002,
+      "sum": 4950,
+      "claims": 100
+    },
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.785346832999494,
+      "sum": 4950,
+      "seconds": 1.726858341,
+      "claims": 100,
+      "iterations": 100,
+      "command_selects": 200
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 2.554928875004407,
+      "seconds": 1.506540849,
+      "command_selects": 100,
+      "claims": 100,
+      "iterations": 100,
+      "sum": 4950
+    },
+    {
+      "workload": "commands",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 2.539093375002267,
+      "sum": 4950,
+      "seconds": 1.492279881,
+      "iterations": 100,
+      "command_selects": 100,
+      "claims": 100
+    },
+    {
+      "workload": "commands",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 2.8198924169992097,
+      "seconds": 1.762558195,
+      "sum": 4950,
+      "command_selects": 200,
+      "iterations": 100,
+      "claims": 100
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 6.9283438329875935,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": -1,
+      "warmup": true,
+      "wall_seconds": 7.8512234580121,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 6.623953458009055,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 0,
+      "warmup": false,
+      "wall_seconds": 6.849741291982355,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 6.890158666006755,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 1,
+      "warmup": false,
+      "wall_seconds": 6.546053166995989,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 6.609915333014214,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 2,
+      "warmup": false,
+      "wall_seconds": 6.897048540995456,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 6.880452749988763,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 3,
+      "warmup": false,
+      "wall_seconds": 6.613610291009536,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "after",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 6.564450665988261,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    },
+    {
+      "workload": "school",
+      "version": "before",
+      "sample": 4,
+      "warmup": false,
+      "wall_seconds": 6.87536525001633,
+      "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n"
+    }
+  ],
+  "equal_results": true,
+  "medians": {
+    "commands": {
+      "before": 1.770477412,
+      "after": 1.51700954
+    },
+    "school": {
+      "before": 6.880452749988763,
+      "after": 6.609915333014214
+    }
+  },
+  "source_hashes": {
+    "before": {
+      "lib/RedSourcing/Storage.rakumod": "da04dd696b3f7ee72d993e005ddde3b6a1d556eaeda18780db75d2bb860e58a7",
+      "lib/RedSourcing/StoredCommand.rakumod": "87bd94f008b31b309fdcbf6af34b0f1bc453f33954168a14da5ae9b1806ecc2e"
+    },
+    "after": {
+      "lib/RedSourcing/Storage.rakumod": "54d12b36efe657a3b700cbec859dc41b72a877d10e3828ee697d3b87d0531306",
+      "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229"
+    }
+  },
+  "meta6_sha256": "da987fecfe073dd50cc05e8481d47917907ddb813808b9f05104607a20b77110",
+  "benchmark_source_sha256": "dfd5dfa85578aa0784ee5c55fd031e9478b065c9be8d9094d77b69b17a6b8302",
+  "elapsed_reduction_percent": {
+    "commands": 14.316357287703141,
+    "school": 3.931971147901425
+  }
+}

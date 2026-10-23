@@ -1,4 +1,5 @@
 use RedSourcing::Event;
+use RedSourcing::EventType;
 use Red;
 use Red::DB;
 use RedSourcing::StoredEvent;
@@ -47,10 +48,11 @@ sub advance-sagas(DateTime :$now = DateTime.now, UInt :$limit = 100 --> Hash) is
     my $table = RedSourcing::StoredEvent.^table.subst('"', '""', :g);
     # Transfer only the latest snapshot/control ID per stream instead of every
     # historical full-state payload. The query works on SQLite and PostgreSQL.
+    my $runtime-type = event-type-sql(get-RED-DB, 'RedSourcing::Saga::Runtime');
+    my $control-type = event-type-sql(get-RED-DB, 'RedSourcing::Saga::Control');
     my $query = get-RED-DB.execute(qq:to/SQL/);
         SELECT MAX(id) AS id FROM "$table"
-        WHERE mro LIKE '%|RedSourcing::Saga::Runtime|%'
-           OR mro LIKE '%|RedSourcing::Saga::Control|%'
+        WHERE $runtime-type OR $control-type
         GROUP BY stream ORDER BY MAX(id)
         SQL
     my @ids;

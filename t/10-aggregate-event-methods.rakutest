@@ -165,8 +165,9 @@ subtest 'commands see applied state and can emit multiple consecutive versions' 
 
 subtest 'persistence and APPLY failures do not acknowledge unsuccessful emissions' => {
     fresh-store;
-    my $first = account().^load;
-    my $stale = account().^load;
+    # Detached restores deliberately represent independent stale emitters.
+    my $first = EmittingAccount.^restore(:stream(account().^stream-name));
+    my $stale = EmittingAccount.^restore(:stream(account().^stream-name));
     $first.funds-added(:amount(3));
     throws-like { $stale.funds-added(:amount(4)) },
         RedSourcing::X::OptimisticLockFailed, 'a stale emitter propagates an optimistic conflict';

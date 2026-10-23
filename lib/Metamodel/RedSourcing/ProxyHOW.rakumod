@@ -26,8 +26,8 @@ method advance(\proxy, |c) {
         return journal-do { proxy.^load.^advance(|c) };
     }
     my $entity = proxy.^load;
-    $entity.^advance(|c);
-    $entity
+    my $advanced = $entity.^advance(|c);
+    $entity.^lifecycle.Str eq 'Cached' ?? $advanced !! $entity
 }
 
 method check-timeouts(\proxy, |c) {
