@@ -171,6 +171,7 @@ model RedSourcing::StoredEvent is table<red_sourcing_event> {
         my $*RED-INTERNAL = True;
         $filter AND event-type-ast(self.mro, 'Entity').not
             AND event-type-ast(self.mro, 'RedSourcing::Saga::Control').not
+            AND event-type-ast(self.mro, 'RedSourcing::Service::Protocol::Control').not
     }
 
 	method streams {

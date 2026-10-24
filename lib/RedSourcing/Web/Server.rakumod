@@ -45,10 +45,37 @@ my class LiveConnection is Cro::TCP::ServerConnection {
         }
     }
 }
+# Preserve the native listener tap so managed services can await the actual
+# bind result instead of treating Cro.start (which returns immediately) as ready.
+my class ListenerReadiness does Tappable {
+    has $.source;
+    has Promise $.readiness;
+    method live { False }
+    method sane { True }
+    method serial { True }
+    method tap(&emit, &done, &quit, &tap) {
+        $!source.tap(&emit, :&done,
+            quit => -> $error {
+                if $!readiness.status == Planned { $!readiness.break($error); done() }
+                else { quit($error) }
+            },
+            tap => -> $listener {
+                tap($listener);
+                $listener.socket-port.then(-> $bound {
+                    if $!readiness.status == Planned {
+                        $bound.status == Broken ?? $!readiness.break($bound.cause) !! $!readiness.keep(True);
+                    }
+                });
+            });
+    }
+}
 my class LiveListener is Cro::TCP::Listener {
+    has Promise $.readiness;
     method incoming {
         supply {
-            whenever IO::Socket::Async.listen($.host, $.port) -> $socket {
+            my $source = IO::Socket::Async.listen($.host, $.port);
+            $source = Supply.new(ListenerReadiness.new(:$source, :$!readiness)) if $!readiness.defined;
+            whenever $source -> $socket {
                 nodelay($socket) if $.nodelay;
                 emit LiveConnection.new(:$socket);
             }
@@ -58,9 +85,9 @@ my class LiveListener is Cro::TCP::Listener {
 
 # Local HTTP server with disconnect-aware streaming; the Cro HTTP routing and
 # serialization pipeline is unchanged. TLS servers need their own listener.
-sub web-server(:$host = '127.0.0.1', :$port = 3000, :$application!) is export {
+sub web-server(:$host = '127.0.0.1', :$port = 3000, :$application!, Promise :$readiness) is export {
     my $server = Cro::HTTP::Server.new(:$host, :$port, :$application);
-    $server.components[0] = LiveListener.new(:$host, :$port, :nodelay);
+    $server.components[0] = LiveListener.new(:$host, :$port, :nodelay, :$readiness);
     $server
 }
 

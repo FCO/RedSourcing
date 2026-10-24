@@ -4,6 +4,7 @@ use RedSourcing::Entity;
 use RedSourcing::IsEntityId;
 use RedSourcing::IsEntityIdMap;
 use RedSourcing::IsCommand;
+use RedSourcing::IsService;
 use RedSourcing::IsTransactional;
 use RedSourcing::Tags;
 
@@ -32,7 +33,24 @@ multi trait_mod:<is>(Attribute $r, Bool :$entity-id where *.so) is export {
 }
 
 multi trait_mod:<is>(Method $method, :$command) is export {
+	die 'A service cannot also be a command' if $method ~~ RedSourcing::IsService;
 	$method does IsCommand
+}
+
+multi trait_mod:<is>(Method $method, Bool :$service where *.so) is export {
+    die 'A service cannot also be a command' if $method ~~ IsCommand;
+    my $receiver = $method.signature.params.first(*.invocant);
+    my $entity = $receiver.defined && $receiver.type.HOW.^mro
+        .map(*.^name).first(* eq 'Metamodel::RedSourcing::EntityHOW').defined;
+    my $saga = $receiver.defined && $receiver.type.HOW.^mro
+        .map(*.^name).first(* eq 'Metamodel::RedSourcing::SagaHOW').defined;
+    die 'is service requires a single aggregate or projection method' if $method.is_dispatcher || !$entity || $saga;
+    my @parameters = $method.signature.params.grep({ !.invocant && !.slurpy });
+    die 'Service methods require one positional ServiceContext followed by named arguments'
+        unless @parameters && @parameters.head.positional && !@parameters.head.optional
+            && @parameters.head.type.^name eq 'RedSourcing::Service::Context::ServiceContext'
+            && @parameters.skip(1).map(*.named).all;
+    $method does RedSourcing::IsService;
 }
 
 multi trait_mod:<is>(Method $method, Bool :$transactional where *.so) is export {

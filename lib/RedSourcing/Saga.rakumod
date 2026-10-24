@@ -73,6 +73,7 @@ sub advance-sagas(DateTime :$now = DateTime.now, UInt :$limit = 100 --> Hash) is
         my $state = $control ?? $row.data<state> !! $row.data<saga-state>;
         next unless $state<status> eq any(<running compensating>);
         my $name = $control ?? $row.stream.split(': ', 2).head !! $row.class;
+        next if $name eq 'RedSourcing::Service::LifecycleSaga';
         my %result = stream => $row.stream, type => $name, status => $state<status>;
         my $entity;
         my $selected = False;

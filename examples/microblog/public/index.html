@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pio — sua roda de conversas</title><link rel="stylesheet" href="/assets/app.css"><script src="/assets/app.js" defer></script></head>
+<body>
+<div class="shell">
+<aside class="rail">
+<a class="brand" href="/" aria-label="Pio, início"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M6 24c10 1 13-15 25-14-1 7-5 12-10 15l-2 8-4-6-9-3Z"/><path d="m28 15 7 2-7 3"/></svg>pio<span>CONVERSAS EM VOO</span></a>
+<nav aria-label="Navegação"><button class="nav active" id="home">⌂ <span>Sua timeline</span></button><button class="nav" id="my-profile">◎ <span>Seu perfil</span></button></nav>
+<div class="account"><label for="active-user">Você está conversando como</label><select id="active-user" aria-label="Usuário ativo"></select><p>Demonstração local · sem senha</p></div>
+<p class="rail-note">Ideias pequenas.<br>Conversas que vão longe.</p>
+</aside>
+<main>
+<header class="feed-heading"><div><p class="eyebrow">SUA RODA DE CONVERSAS</p><h1 id="view-title">Sua timeline</h1></div><span class="connection" id="connection" role="status">Conectando</span></header>
+<section class="compose" aria-label="Publicar um tweet"><div class="avatar" id="composer-avatar">A</div><form id="compose"><label class="sr-only" for="text">Sua mensagem</label><textarea id="text" name="text" maxlength="280" placeholder="O que está acontecendo por aí?" required></textarea><div class="compose-bottom"><span id="counter">0 / 280</span><button type="submit" class="primary" id="publish">Publicar ↗</button></div></form></section>
+<div id="notice" role="status" aria-live="polite"></div>
+<section id="profile-heading" hidden></section>
+<section id="feed" aria-label="Publicações"></section>
+<button id="more" class="more" hidden>Carregar mais</button>
+<p id="empty" class="empty" hidden>A conversa começa com você.<br>Publique uma mensagem ou siga alguém ao lado.</p>
+</main>
+<aside class="people-panel"><div class="panel-heading"><p class="eyebrow">ENCONTRE SUA TURMA</p><h2>Pessoas por aqui</h2></div><div id="people"></div><details class="new-user"><summary>+ Criar usuário de demonstração</summary><form id="register"><label for="user-id">Identificador</label><input id="user-id" maxlength="40" pattern="[a-zA-Z0-9_-]{1,40}" required placeholder="seu_nome"><label for="user-name">Nome</label><input id="user-name" maxlength="80" required placeholder="Como quer ser chamado?"><button class="primary" type="submit">Criar usuário</button></form></details><p class="footnote">Um espaço pequeno para compartilhar<br>o que importa no seu dia.</p></aside>
+</div>
+<template id="tweet-template"><article class="tweet"><div class="avatar"></div><div class="tweet-main"><div class="tweet-meta"><button class="author"></button><span class="handle"></span><time></time></div><p class="tweet-text"></p></div></article></template>
+</body></html>

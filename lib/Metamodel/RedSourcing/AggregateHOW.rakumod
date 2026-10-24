@@ -6,15 +6,28 @@ use RedSourcing::Event;
 use RedSourcing::Lifecycle;
 use RedSourcing::Journal;
 use RedSourcing::Storage;
+use RedSourcing::IsService;
+use RedSourcing::Service::Protocol;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
 my role AggregateEventMethod[Mu $event] {
 	method emitted-event { $event }
 }
-
+my role ServiceControlMethod { }
 method compose(Mu \entity, |) {
 	callsame;
+    if entity.^services.elems {
+        my $existing = entity.^find_method('_rs-service-control');
+        die '_rs-service-control is reserved for managed services'
+            if $existing && $existing !~~ ServiceControlMethod;
+        my &control = my method (Mu:D \SELF: Str :$operation!, Str :$service!,
+                Hash :$arguments = {}, Numeric :$idle-timeout = 300, Hash :$report = {}) {
+            service-call('control-service', SELF, :$operation, :$service, :$arguments, :$idle-timeout, :$report)
+        };
+        &control does ServiceControlMethod;
+        entity.^add_method('_rs-service-control', &control);
+    }
 	my Mu $event-role = Event;
 	my %events;
 	my %names;
@@ -57,6 +70,7 @@ method compose(Mu \entity, |) {
 		my Mu $event = %definition<event>;
 		my %map = %definition<map>;
 		my &emitter = my method (Mu:D \SELF: |c) {
+            assert-effect-allowed('event emission');
 			my %args = c.hash;
 			my %ids = SELF.^entity-id-map;
 			for %map.kv -> $field, $id {
@@ -144,7 +158,7 @@ method apply-model(\entity, $_) {
 	if .class eq entity.^name {
 		entity.^snapshot-events = 0;
 		entity.^snapshot-at = .created.Instant.Num;
-	} else {
+	} elsif !.mro.contains('|RedSourcing::Service::Protocol::Control|') {
 		apply-event(entity, .COERCE);
 		entity.^record-applied(:at(.created));
 	}

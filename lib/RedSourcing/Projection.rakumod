@@ -197,7 +197,7 @@ sub inferred-targets(%descriptor, $row --> Array) {
 }
 
 sub advance-transactional-projections(Mu:U $event-type, $row) is export {
-    return if $row.mro.contains('|RedSourcing::Saga::Control|');
+    return if ($row.mro.contains('|RedSourcing::Saga::Control|') || $row.mro.contains('|RedSourcing::Service::Protocol::Control|'));
     discover-projections();
     my @subscriptions = $registry-lock.protect({
         [gather for %subscriptions.values -> $descriptors {

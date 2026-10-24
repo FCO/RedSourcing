@@ -2,6 +2,19 @@ unit class Metamodel::RedSourcing::ProxyHOW;
 
 also is Metamodel::ClassHOW;
 use RedSourcing::Journal;
+use RedSourcing::Service::Protocol;
+
+method start-service(\proxy, Str $service, :%args = {}, Numeric :$idle-timeout = 300, Bool :$sync = True) {
+    service-call('submit-service-control', proxy, :operation<start>, :$service,
+        :arguments(%args.Hash), :$idle-timeout, :$sync)
+}
+method touch-service(\proxy, Str $service, Bool :$sync = True) {
+    service-call('submit-service-control', proxy, :operation<touch>, :$service, :$sync)
+}
+method stop-service(\proxy, Str $service, Bool :$sync = True) {
+    service-call('submit-service-control', proxy, :operation<stop>, :$service, :$sync)
+}
+method service-status(\proxy, Str $service) { service-call('service-status', proxy, $service) }
 
 has %!command-classes;
 has %!command-preparers;

@@ -1,0 +1,78 @@
+use Test;
+use lib 't/lib';
+use MicroblogTestStore;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Service;
+use RedSourcing::Service::Lease;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+
+class ProjectionServiceFact does Event { has Str $.id; has Int $.amount }
+aggregate ProjectionServiceCounter {
+    has Str $.id is entity-id;
+    has Int $.total = 0;
+    method APPLY(ProjectionServiceFact $e) { $!total += $e.amount }
+    method add(Int :$amount = 1) is command { self.projection-service-fact(:$amount); $!total }
+    method plain { 42 }
+}
+my $context;
+projection ProjectionServiceView {
+    has Str $.id is entity-id;
+    has Int $.total = 0;
+    method APPLY(ProjectionServiceFact $e where { .id eq $!id }) { $!total += $e.amount }
+    method summary { %(total => $!total) }
+    method illegal-write { ProjectionServiceCounter.^with-ids(:$!id).add }
+    method serve(ServiceContext $runtime) is service {
+        $context = $runtime;
+        start { $runtime.ready; await $runtime.stopping }
+    }
+}
+projection ProjectionServiceChild is ProjectionServiceView { }
+my $*RED-DB = test-store('79');
+schema(StoredEvent, StoredCommand).create;
+my $runtime = ServiceRuntime.new(:stop-grace(.2)).initialize;
+LEAVE $runtime.shutdown;
+sub pump(&check) {
+    my $deadline = now + 5;
+    repeat { $runtime.tick; return True if check(); await Promise.in(.01) } while now < $deadline;
+    False
+}
+my $view = ProjectionServiceView.^with-ids(:id<one>);
+my $counter = ProjectionServiceCounter.^with-ids(:id<one>); $counter.^create;
+my $other = ProjectionServiceCounter.^with-ids(:id<two>); $other.^create;
+$counter.add(:amount(3));
+is $view.^load.total, 3, 'projection reconstructs domain state';
+is $view.^service-status('serve')<phase>, 'absent', 'replay does not activate service';
+my $rows = StoredEvent.^all.grep(*.stream eq $view.^stream-name).elems;
+throws-like { red-do { $view.^start-service('serve'); die 'rollback' } }, Exception;
+is $view.^service-status('serve')<phase>, 'absent', 'rolled-back projection activation disappears';
+$view.^start-service('serve');
+ok pump({ $view.^service-status('serve')<phase> eq 'active' }), 'projection service becomes ready';
+is $context.state.total, 3, 'state is the owning projection';
+is $context.command($other, 'add', :amount(7)), 7, 'context commands another aggregate';
+is $context.read($other).total, 7, 'context reads detached state from another entity';
+is-deeply $context.read($view, :method<summary>), %(total => 3), 'context materializes a read method';
+throws-like { $context.aggregate }, Exception, :message(/ 'command' /), 'aggregate shortcut explains projection use';
+throws-like { $context.command($other, 'plain') }, Exception, :message(/ 'Not an aggregate command' /);
+throws-like { $context.read($other, :method<add>) }, Exception, :message(/ 'Cannot invoke' /);
+throws-like { $context.read($view, :method<illegal-write>) }, Exception, :message(/ 'ServiceContext' /);
+my $queued = $context.command($other, 'add', :amount(2), :!sync);
+ok $queued.service-context.defined, 'queued cross-aggregate command carries generation';
+$view.^stop-service('serve');
+ok pump({ $view.^service-status('serve')<phase> eq 'stopped' }), 'projection service stops';
+throws-like { $queued.run }, Exception, :message(/ 'ownership' /), 'old queued command cannot write';
+throws-like { $context.read($view) }, Exception, :message(/ 'ownership' /), 'old context cannot read';
+is StoredEvent.^all.grep(*.stream eq $view.^stream-name).elems, $rows, 'controls never enter projection stream';
+is $view.^load.total, 3, 'controls leave projection state unchanged';
+my $child = ProjectionServiceChild.^with-ids(:id<one>);
+$child.^start-service('serve');
+ok pump({ $child.^service-status('serve')<phase> eq 'active' }), 'projection inherits services';
+$child.^stop-service('serve');
+ok pump({ $child.^service-status('serve')<phase> eq 'stopped' }), 'inherited service stops';
+$child.^start-service('serve');
+ok pump({ $child.^service-status('serve')<phase> eq 'active' }), 'service starts again';
+$child.^stop-service('serve');
+$runtime.shutdown;
+isnt $child.^service-status('serve')<phase>, 'stopping', 'shutdown resolves an explicit stop before releasing ownership';
+done-testing;

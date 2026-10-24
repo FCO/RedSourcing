@@ -1,0 +1,108 @@
+use Test;
+use JSON::Fast;
+use lib 't/lib';
+use MicroblogTestStore;
+use lib 'examples/microblog/lib';
+use Microblog::Domain;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+use RedSourcing::Service::Lease;
+my @page-sql;
+my role CaptureTweetQueries {
+    multi method prepare(Str $sql, |args) {
+        @page-sql.push($sql) if $sql.uc.starts-with('SELECT') && $sql.contains('microblog_tweet');
+        callsame
+    }
+}
+my $*RED-DB = test-store('80');
+$*RED-DB does CaptureTweetQueries;
+schema(StoredEvent, StoredCommand).create;
+initialize-tweets;
+initialize-application($_) for <test other>;
+seed('test');
+sub user($id, $app = 'test') { User.^with-ids(:application-id($app), :user-id($id)) }
+sub timeline($id, $app = 'test') { UserTimeline.^with-ids(:application-id($app), :user-id($id)).^load }
+sub tweets($id, $app = 'test') { UserTweets.^with-ids(:application-id($app), :user-id($id)).^load }
+sub count-tweets { storage-query(journal-connection(), 'SELECT COUNT(*) AS n FROM microblog_tweet').head<n>.Int }
+is count-tweets, 3, 'one materialized row per publication';
+my $accounts = Accounts.^with-ids(:application-id<test>);
+throws-like { $accounts.register-user(:user-id<ana>, :name<Duplicate>) }, Exception;
+throws-like { $accounts.register-user(:user-id('invalid id'), :name<Invalid>) }, Exception;
+throws-like { $accounts.register-user(:user-id<empty>, :name(' ')) }, Exception;
+ok !(Directory.^with-ids(:application-id<test>).^load.users<empty>:exists),
+    'failed registration rolls back the new user snapshot';
+is tweets('ana').page<tweets>.elems, 1, 'author projection queries the table';
+is timeline('ana').page<tweets>.elems, 2, 'timeline includes self and followed author';
+is tweets('clara').page<tweets>.elems, 1, 'other author isolated';
+user('ana').follow(:author-id<clara>);
+is timeline('ana').page<tweets>.elems, 3, 'following includes historical tweets';
+my $before = StoredEvent.^all.elems;
+user('ana').follow(:author-id<clara>);
+is StoredEvent.^all.elems, $before, 'follow is idempotent';
+user('ana').unfollow(:author-id<bruno>);
+is timeline('ana').page<tweets>.elems, 2, 'unfollow removes author from future reads';
+seed('test');
+is timeline('ana').page<tweets>.elems, 2, 'seed does not reset user choices';
+seed('other');
+is tweets('ana', 'other').page<tweets>.elems, 1, 'table separates applications';
+is count-tweets, 6, 'application index instances do not duplicate each other';
+throws-like { user('ana').tweet(:text(' ')) }, Exception;
+throws-like { user('ana').tweet(:text('x' x 281)) }, Exception;
+throws-like { user('ana').follow(:author-id<ana>) }, Exception;
+throws-like { user('ana').follow(:author-id<missing>) }, Exception;
+my $count = count-tweets;
+throws-like { journal-do { user('ana').tweet(:text<rolled-back>); die 'rollback' } }, Exception;
+is count-tweets, $count, 'rollback removes materialized row with event and command';
+# An index failure must roll back its source publication as well.
+my $db = journal-connection();
+if %*ENV<RED_SOURCING_TEST_PG_DATABASE>.defined {
+    storage-query($db, q[CREATE FUNCTION reject_microblog() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.body = 'reject-index' THEN RAISE EXCEPTION 'index rejected'; END IF; RETURN NEW; END $$]);
+    storage-query($db, 'CREATE TRIGGER reject_microblog BEFORE INSERT ON microblog_tweet FOR EACH ROW EXECUTE FUNCTION reject_microblog()');
+} else {
+    storage-query($db, q[CREATE TRIGGER reject_microblog BEFORE INSERT ON microblog_tweet WHEN NEW.body = 'reject-index' BEGIN SELECT RAISE(ABORT,'index rejected'); END]);
+}
+throws-like { user('ana').tweet(:text<reject-index>) }, Exception;
+is count-tweets, $count, 'transactional index failure leaves no partial row';
+ok !StoredEvent.^all.grep({ .class eq TweetPublished.^name && .data<text> eq 'reject-index' }).elems,
+    'index failure rolls back emitted event';
+storage-query($db, %*ENV<RED_SOURCING_TEST_PG_DATABASE>.defined
+    ?? 'DROP TRIGGER reject_microblog ON microblog_tweet' !! 'DROP TRIGGER reject_microblog');
+for ^105 -> $i { user('ana').tweet(:text("message $i")) }
+@page-sql = ();
+my %first = tweets('ana').page(:limit(50));
+is @page-sql.elems, 1, 'Red fetches the author page in one SQL query';
+ok @page-sql[0].uc.contains('WHERE') && @page-sql[0].uc.contains('ORDER BY')
+    && @page-sql[0].uc.contains('LIMIT'), 'Red pushes filtering, ordering and pagination to SQL';
+is %first<tweets>.elems, 50, 'SQL page is bounded';
+ok %first<next>.defined, 'page has continuation cursor';
+@page-sql = ();
+my %second = tweets('ana').page(:before(%first<next>), :limit(50));
+is @page-sql.elems, 1, 'Red fetches the cursor page in one SQL query';
+ok @page-sql[0].contains(' < '), 'Red pushes the cursor predicate to SQL';
+is %second<tweets>.elems, 50, 'second page bounded';
+ok %second<tweets>[0]<cursor> < %first<tweets>[*-1]<cursor>, 'cursor pages do not overlap';
+throws-like { tweets('ana').page(:limit(101)) }, Exception;
+my $index = TweetIndex.^with-ids(:application-id<test>).^load;
+my $snapshot = storage-query($db, 'SELECT data FROM red_sourcing_event WHERE class = '
+    ~ parameters($db, 1)[0] ~ ' ORDER BY id DESC LIMIT 1', TweetIndex.^name).head;
+my $snapshot-data = $snapshot<data> ~~ Str ?? from-json($snapshot<data>) !! $snapshot<data>;
+ok to-json($snapshot-data).chars < 1024, 'index snapshot remains small after more than 100 tweets';
+ok !$index.^attributes.first(*.name eq '@!tweets').defined, 'shared projection stores no tweet history';
+is tweets('ana').^attributes.grep(*.name.starts-with('@!')).elems, 0, 'author projection stores no tweet array';
+my $old-count = count-tweets;
+my $record = StoredEvent.^all.grep(*.class eq TweetPublished.^name).head;
+TweetIndex.bless(:application-id($record.data<application-id>)).APPLY($record.COERCE(TweetPublished));
+is count-tweets, $old-count, 'reapplying an event does not duplicate rows';
+my $conflicting = $record.COERCE(TweetPublished).clone(:text('conflicting payload'));
+throws-like {
+    journal-do { TweetIndex.bless(:application-id($record.data<application-id>)).APPLY($conflicting) }
+}, Exception, :message('Conflicting tweet identity'), 'replay rejects a changed payload for an existing identity';
+is count-tweets, $old-count, 'conflicting replay does not add a row';
+my $hash = storage-query($db, 'SELECT * FROM microblog_tweet ORDER BY position').raku;
+storage-query($db, q[UPDATE microblog_tweet SET body = 'corrupted index' WHERE application = ]
+    ~ parameters($db, 1)[0], 'test');
+rebuild-tweets('test');
+is storage-query($db, 'SELECT * FROM microblog_tweet ORDER BY position').raku, $hash, 'rebuild preserves all rows and other applications';
+done-testing;

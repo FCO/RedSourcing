@@ -172,7 +172,7 @@ method apply-new-applyable-events(\entity, UInt :$through-id) {
             apply-event(entity, $row) if entity.^find_method('APPLY').cando(\(entity, $row)).elems;
         } else {
             # Domain projections do not consume checkpoints or saga controls.
-            next if $row.mro.contains('|Entity|') || $row.mro.contains('|RedSourcing::Saga::Control|');
+            next if $row.mro.contains('|Entity|') || ($row.mro.contains('|RedSourcing::Saga::Control|') || $row.mro.contains('|RedSourcing::Service::Protocol::Control|'));
             apply-event(entity, $row.COERCE);
         }
         entity.^record-applied(:at($row.created));

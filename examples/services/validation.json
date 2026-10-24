@@ -1,0 +1,495 @@
+{
+  "verified_at": "2026-10-24T00:26:51.194604+00:00",
+  "environment": {
+    "red": "0.2.7",
+    "rakudo": "2026.09"
+  },
+  "main": {
+    "passed_files": 75,
+    "total_files": 77,
+    "results": [
+      {
+        "test": "t/01-basic.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/02-cli.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/03-edge-cases.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/04-commands.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/05-installation.rakutest",
+        "exitcode": 1
+      },
+      {
+        "test": "t/06-signature-rules.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/07-projection-replay.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/08-bank-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/09-shopping-cart-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/10-aggregate-event-methods.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/11-exports.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/12-food-delivery-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/13-sagas.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/14-real-estate-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/15-stored-inspector.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/16-web-real-estate-http.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/17-web-disconnect.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/18-web-metrics.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/19-web-installation.rakutest",
+        "exitcode": 1
+      },
+      {
+        "test": "t/20-web-details.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/21-cli-operations.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/22-web-monitor-cli.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/23-cli-config.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/24-cli-entities.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/25-cli-output.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/26-cli-help-identity.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/27-cli-saga-status.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/28-event-emitted-at.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/29-cli-describe-constraints.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/30-cli-custom-help.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/31-web-operations.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/32-web-console.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/33-web-console-lifecycle.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/34-postgres-json.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/35-module-config.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/36-shopping-cart-reminder.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/37-commerce-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/38-documentation.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/39-commerce-notifications.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/40-web-context-actions.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/41-flow-tracing.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/42-repl-tutorial.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/43-saga-controller.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/44-projection-boundaries.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/45-command-conflicts-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/46-transactional-projections.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/47-transactional-projections-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/48-entity-lifecycle.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/49-lifecycle-config.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/50-auto-snapshot.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/51-auto-snapshot-config.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/52-journal-savepoints.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/53-storage-indexes.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/54-decision-model.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/55-decision-model-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/56-school-example.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/57-event-tags.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/58-field-counters-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/59-storage-performance.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/60-projection-plans.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/61-query-templates.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/62-example-query-templates.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/63-pg-mro-array.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/64-event-conversion-plans.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/65-aggregate-combined-load.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/66-cached-entities.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/67-eviction-snapshots.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/68-handler-filter-captures.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/69-decision-snapshots.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/70-counter-statements.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/71-stream-existence.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/72-decision-state-cache.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/73-managed-services.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/74-service-recovery.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/75-service-ownership-pg.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/76-service-migration.rakutest",
+        "exitcode": 0
+      },
+      {
+        "test": "t/77-service-declarations.rakutest",
+        "exitcode": 0
+      }
+    ]
+  },
+  "known_baseline_failures": {
+    "tests": [
+      "t/05-installation.rakutest",
+      "t/19-web-installation.rakutest"
+    ],
+    "reason": "Installation subprocesses emit Use of Nil in string context compiler warnings; reproduced on untouched pre-feature HEAD."
+  },
+  "postgresql": [
+    {
+      "test": "47-transactional-projections-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "55-decision-model-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "58-field-counters-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "61-query-templates",
+      "exitcode": 0
+    },
+    {
+      "test": "66-cached-entities",
+      "exitcode": 0
+    },
+    {
+      "test": "67-eviction-snapshots",
+      "exitcode": 0
+    },
+    {
+      "test": "69-decision-snapshots",
+      "exitcode": 0
+    },
+    {
+      "test": "72-decision-state-cache",
+      "exitcode": 0
+    },
+    {
+      "test": "75-service-ownership-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "76-service-migration",
+      "exitcode": 0
+    }
+  ],
+  "rakuast": [
+    {
+      "test": "61-query-templates",
+      "exitcode": 0
+    },
+    {
+      "test": "69-decision-snapshots",
+      "exitcode": 0
+    },
+    {
+      "test": "73-managed-services",
+      "exitcode": 0
+    },
+    {
+      "test": "74-service-recovery",
+      "exitcode": 0
+    },
+    {
+      "test": "77-service-declarations",
+      "exitcode": 0
+    }
+  ],
+  "final_rechecks": [
+    {
+      "frontend": "main",
+      "test": "73-managed-services",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "74-service-recovery",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "76-service-migration",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "77-service-declarations",
+      "exitcode": 0
+    },
+    {
+      "frontend": "ast",
+      "test": "73-managed-services",
+      "exitcode": 0
+    },
+    {
+      "frontend": "ast",
+      "test": "74-service-recovery",
+      "exitcode": 0
+    },
+    {
+      "frontend": "ast",
+      "test": "77-service-declarations",
+      "exitcode": 0
+    },
+    {
+      "test": "example",
+      "exitcode": 0
+    }
+  ],
+  "source_sha256": {
+    "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "4222a6138f4f640652c0b804bfaff0d6b927b49ae24673228ea95015d1c416d6",
+    "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+    "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+    "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+    "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "faba2205b7f3b3eeef0e6eec5d39e26a9aaf6b62efc11436db2b8040516e4bdd",
+    "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "efab2f05fe4bf70fe8f242e6682658faf3353ae120753e910e4c9b7a10e0e6b5",
+    "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "95f57d4c8532c1c8f9ac8dcd0b01794c696ba5e731e1d1bd569fdbbddd5c1737",
+    "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+    "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+    "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+    "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+    "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+    "lib/RedSourcing/Command.rakumod": "d51db202d4dc237074853f41a942e3ea2b082ad9d418e21d4bcb5cf453bce90e",
+    "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+    "lib/RedSourcing/Context.rakumod": "8083300a51929e522eff6ac8fff165e489147073c10fde9dc7b6f97fedcabc78",
+    "lib/RedSourcing/Counters.rakumod": "220504100cd79025aeee05c2e8d1710afa5c507578e89009b2e2d89897e7d000",
+    "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+    "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+    "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+    "lib/RedSourcing/Event.rakumod": "54838396a93d65b46e3c8520b3fabcd3b763028e91d9e20b9156040d13ae2613",
+    "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+    "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e",
+    "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+    "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+    "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+    "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+    "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+    "lib/RedSourcing/IsService.rakumod": "45bdc94e4fce07a6c1bd99b331adbcc510848adb3223bdb7fb5452bfd7ee7a9e",
+    "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+    "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+    "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+    "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+    "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+    "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+    "lib/RedSourcing/Projection.rakumod": "74a97771b3d461b329aa8d825f6f8ed53aa6af009cdf84690415ca89893e4b25",
+    "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+    "lib/RedSourcing/Saga.rakumod": "e297cca52272ff7dee21f2990ffbcb298fbd6632283e0d34adcdca801a4b7ba0",
+    "lib/RedSourcing/Service/Context.rakumod": "3d18ba088646d43f1ea6445a954056d365a3be4997e220864da768f0d6dd226b",
+    "lib/RedSourcing/Service/Lease.rakumod": "c49012a3b74b76d8d5a5cadb31917bebd052020e62ccac97a782ae2d58f0634d",
+    "lib/RedSourcing/Service/Protocol.rakumod": "0cffc56fa73117720d09f37df2e787f8de1964a018d88780ffa21cf79b56c82b",
+    "lib/RedSourcing/Service.rakumod": "a09ab2af555842912379876d7346aeafcad87b0cf9416fe9bf365535411bebcd",
+    "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+    "lib/RedSourcing/StoredCommand.rakumod": "72650281509b63431cd538e226cf397f9c6b8939bb8f8ee8b601c52103db7f99",
+    "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+    "lib/RedSourcing/StoredEvent.rakumod": "22d01db1be3e7f92d8953cec30308bb514fc6d339ee7acd625c073d772893575",
+    "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+    "lib/RedSourcing/Traits.rakumod": "0558be52dc190607c2076f745f4f753e9c52cdbea5d6ca6597f35bf3314555d1",
+    "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+    "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+    "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+    "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+    "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+    "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+    "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+    "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+    "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+    "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+    "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+    "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+    "lib/RedSourcing.rakumod": "0d7bf619bfa9a40794fe383ed423046974d3a613f872105b87e08897f5afeb80"
+  }
+}

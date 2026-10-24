@@ -1,0 +1,63 @@
+use Test;
+use RedSourcing::Service::Context;
+use Cro::HTTP::Router;
+use Cro::HTTP::Client;
+
+class Executor {
+    has Bool $.reject = False;
+    has @.reports;
+    method context-report($context, $operation) {
+        die 'Readiness rejected' if $!reject;
+        @!reports.push($operation);
+    }
+}
+sub context($executor) {
+    ServiceContext.new(:$executor, :proxy(Any), :service-id<http-test>, :owner<test>, :generation(1))
+}
+my $port = 40000 + (^20000).pick;
+my $executor = Executor.new;
+my $context = context($executor);
+my &endpoints = {
+    get -> 'hello' { content 'text/plain', 'Hello from service' }
+    post -> 'echo' {
+        request-body -> %body { content 'application/json', %(text => %body<text>) }
+    }
+};
+my $lifetime = $context.http(&endpoints, :$port);
+LEAVE { $context.request-stop; try await $lifetime }
+await Promise.anyof($context.readiness, Promise.in(10));
+is $context.readiness.status, Kept, 'helper acknowledges readiness';
+is $lifetime.status, Planned, 'HTTP service stays running';
+is-deeply $executor.reports.Array, ['ready'], 'readiness is reported once';
+my $response = await Cro::HTTP::Client.get("http://127.0.0.1:$port/hello");
+is await($response.body-text), 'Hello from service', 'endpoint block is wrapped in route and serves real HTTP';
+$response = await Cro::HTTP::Client.post("http://127.0.0.1:$port/echo",
+    :content-type<application/json>, :body(%(text => 'Hello')));
+is await($response.body-text), '{"text":"Hello"}', 'request bodies reach the supplied routes';
+my $occupied-executor = Executor.new;
+my $occupied = context($occupied-executor);
+my $collision = $occupied.http(&endpoints, :$port);
+await Promise.anyof($collision, Promise.in(5));
+is $collision.status, Broken, 'occupied port breaks the service lifetime';
+throws-like { await $collision }, Exception, :message(/ 'address' /), 'bind error is observable';
+is $occupied-executor.reports.elems, 0, 'occupied port never reports ready';
+$context.request-stop;
+await Promise.anyof(Promise.allof($lifetime, $context.cleanup), Promise.in(10));
+is $lifetime.status, Kept, 'stop completes the returned Promise';
+is $context.cleanup.status, Kept, 'HTTP cleanup succeeds';
+throws-like { await IO::Socket::Async.connect('127.0.0.1', $port) }, Exception,
+    'cleanup closes the listener';
+
+my $failed = context(Executor.new(:reject));
+my $failure = $failed.http(route({ endpoints() }), :port($port + 1));
+throws-like { await $failure }, Exception, :message('Readiness rejected'),
+    'readiness failure breaks the service Promise';
+throws-like { await IO::Socket::Async.connect('127.0.0.1', $port + 1) }, Exception,
+    'readiness failure closes the listener before retry';
+throws-like { $context.http(&endpoints, :port(0)) }, Exception,
+    :message('HTTP port must be between 1 and 65535'), 'invalid ports are rejected';
+my $broken = context(Executor.new).http({ die 'Invalid endpoint declaration' }, :port($port + 2));
+throws-like { await $broken }, Exception, :message('Invalid endpoint declaration'),
+    'endpoint declaration errors break the service Promise';
+await Promise.in(.2);
+done-testing;

@@ -1,0 +1,113 @@
+use Test;
+use File::Temp;
+use JSON::Fast;
+use RedSourcing;
+use RedSourcing::Service;
+use RedSourcing::Service::Lease;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+use RedSourcing::Config;
+use lib 't/lib';
+use ServiceDomain;
+use ProjectionServiceDomain;
+
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+unless $database.defined { skip 'Set RED_SOURCING_TEST_PG_DATABASE for service ownership tests'; done-testing; exit }
+require ::('DB::Pg');
+my $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+my $schema = 'rs_projection_services_' ~ $*PID;
+$admin.execute("CREATE SCHEMA $schema");
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE");
+sub driver {
+    store-driver('Pg', $database, :connection{
+        dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+            :converters(<DateTime UUID Geometric>)) })
+}
+my $*RED-DB = driver;
+schema(StoredEvent, StoredCommand).create;
+my $runtime = ServiceRuntime.new(:owner-id<replacement>, :stop-grace(1)).initialize;
+LEAVE $runtime.shutdown;
+my $target = ServiceRoom.^with-ids(:room-id<shared>); $target.^create;
+my $room = SharedProjection.^with-ids(:room-id<shared>);
+$room.^start-service('serve');
+my $directory = tempdir.IO;
+my $worker = $directory.add('worker.raku');
+$worker.spurt(q:to/WORKER/);
+use RedSourcing;
+use RedSourcing::Service;
+use RedSourcing::Config;
+use JSON::Fast;
+use DB::Pg;
+use ServiceDomain;
+use ProjectionServiceDomain;
+my ($database, $schema, $directory) = @*ARGS;
+my $*RED-DB = store-driver('Pg', $database, :connection{
+    dbh => DB::Pg.new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>)) });
+my $runtime = ServiceRuntime.new(:owner-id<original>, :stop-grace(1)).initialize;
+LEAVE $runtime.shutdown;
+my $target = ServiceRoom.^with-ids(:room-id<shared>);
+my $room = SharedProjection.^with-ids(:room-id<shared>);
+my $deadline = now + 20;
+until $room.^service-status('serve')<phase> eq 'active' {
+    $runtime.tick; die 'Worker readiness timed out' if now > $deadline; await Promise.in(.02);
+}
+my $status = $room.^service-status('serve');
+my $context = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$status<service-id>} });
+my $queued = $context.command($target, 'record-message', :text<old-queued>, :!sync);
+$directory.IO.add('ready').spurt(to-json(%(generation => $context.generation, command => $queued.id)));
+# Simulate a paused executor: no ticks and no heartbeats until the parent resumes it.
+$deadline = now + 60;
+until $directory.IO.add('resume').e { die 'Resume timed out' if now > $deadline; await Promise.in(.02) }
+my %result;
+try { $queued.run; %result<queued> = 'accepted'; CATCH { default { %result<queued> = .message } } }
+try { $context.command($target, 'record-message', :text<old-direct>); %result<direct> = 'accepted'; CATCH { default { %result<direct> = .message } } }
+$runtime.tick;
+%result<stopping> = $context.stopping.status.Str;
+$directory.IO.add('result').spurt(to-json(%result));
+WORKER
+my $process = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-It/lib', $worker.Str, $database, $schema, $directory.Str);
+my ($out,$err) = '', '';
+$process.stdout.tap(-> $s { $out ~= $s }); $process.stderr.tap(-> $s { $err ~= $s });
+my $finished = $process.start;
+LEAVE $process.kill if $finished.status == Planned;
+sub wait-file($name) {
+    my $deadline = now + 30;
+    until $directory.add($name).e {
+        die "Worker ended: $err $out" if $finished.status != Planned;
+        die "Timed out waiting for $name" if now > $deadline;
+        await Promise.in(.02);
+    }
+    from-json($directory.add($name).slurp)
+}
+my %original = wait-file('ready');
+my $before = $room.^service-status('serve');
+is $before<lease><owner>, 'original', 'independent process owns the lease';
+$runtime.tick;
+is $room.^service-status('serve')<lease><owner>, 'original', 'second executor cannot claim an unexpired lease';
+is $ServiceDomain::STARTS, 0, 'losing executor does not execute a service body';
+# Controlled expiry models a pause longer than the lease without a long test sleep.
+storage-query(journal-connection(), 'UPDATE red_sourcing_service_lease SET expires = 0');
+my $deadline = now + 15;
+until $room.^service-status('serve')<lease><owner> eq 'replacement'
+        && $room.^service-status('serve')<phase> eq 'active' {
+    $runtime.tick; die 'Replacement readiness timed out' if now > $deadline; await Promise.in(.02);
+}
+my $current = $room.^service-status('serve');
+ok $current<generation> > %original<generation>, 'takeover grants a higher durable generation';
+is $current<lease><owner>, 'replacement', 'new process owns active service';
+$directory.add('resume').spurt('resume');
+my %result = wait-file('result');
+like %result<queued>, / 'ownership' /, 'persisted old command is rejected after takeover';
+like %result<direct>, / 'ownership' /, 'old live context cannot submit an authorized command';
+is %result<stopping>, 'Kept', 'resumed executor observes loss and receives stop signal';
+await Promise.anyof($finished, Promise.in(15));
+is $finished.status, Kept, 'worker exits';
+is $finished.result.exitcode, 0, 'worker recovery path succeeds';
+is $err, '', 'worker emitted no diagnostics';
+is $room.^load.messages.elems, 0, 'stale execution persisted no domain messages';
+is $room.^service-status('serve')<lease><owner>, 'replacement', 'old shutdown cannot release the newer lease';
+my $id = $current<service-id>;
+my $ctx = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$id} });
+is $ctx.command($target, 'record-message', :text<current>), 1, 'current generation can still write';
+done-testing;

@@ -48,6 +48,8 @@ multi method emit (::?CLASS:U: Str :$entity!, :%entity-ids!, Str :$method!, Str 
 	.not
 }) {
 	assert-effect-allowed('command submission');
-	my $row = RedSourcing::StoredCommand.^create(:$entity, :%entity-ids, :$method, :$stream, :class(self.^name), :%data, |command-causality());
+    my $fence = try $*REDSOURCING-SERVICE-FENCE;
+	my $row = RedSourcing::StoredCommand.^create(:$entity, :%entity-ids, :$method, :$stream, :class(self.^name), :%data,
+        |($fence.defined && $fence.elems ?? %(service-context => $fence) !! %()), |command-causality());
 	$row
 }

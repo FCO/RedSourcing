@@ -7,6 +7,7 @@ use Metamodel::RedSourcing::ProxyHOW;
 use RedSourcing::Context;
 use RedSourcing::Flow;
 use RedSourcing::IsTransactional;
+use RedSourcing::IsService;
 use RedSourcing::Journal;
 use RedSourcing::Tags;
 use RedSourcing::Lifecycle;
@@ -19,6 +20,9 @@ also does Metamodel::RedSourcing::EntityIdContainer;
 also does Metamodel::RedSourcing::CommandContainer;
 
 use RedSourcing::Entity;
+
+has %!services;
+method services(|) { %!services.Map }
 
 has $!proxy;
 has @!validated-handlers;
@@ -130,6 +134,11 @@ method compose(Mu \entity, |) {
 	entity.^add_role: Entity;
 
 	callsame;
+    for entity.^methods -> $method {
+        die 'Multi service methods are not supported'
+            if $method.is_dispatcher && $method.candidates.grep(* ~~ RedSourcing::IsService);
+        %!services{$method.name} = $method if $method ~~ RedSourcing::IsService;
+    }
 	my @trusted;
 	for entity.^mro.skip(1) -> $parent {
 		@trusted.append($parent.^validated-handlers)

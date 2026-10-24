@@ -30,6 +30,7 @@ has Any      $.result     is column{ :nullable, :type<jsonb>, :inflate(&from-jso
 has Str      $.error      is column{ :nullable } is rw;
 has UInt $.parent-command-id is column{ :nullable };
 has Str $.action-id is column{ :nullable };
+has Json $.service-context is column{ :nullable };
 has $.stream-history is index{ .stream, .id };
 has $.due-work is index{ .state, .next-run, .id };
 
@@ -108,12 +109,19 @@ method run(::?CLASS:D: Bool :$wait) {
 					False
 				} else {
 					$claimed = True;
+                    if $!service-context.defined {
+                        require ::('RedSourcing::Service::Lease');
+                        ::('RedSourcing::Service::Lease::EXPORT::DEFAULT').WHO{'&assert-service-fence'}(
+                            journal-connection(), $!service-context.Hash);
+                    }
+                    my $*REDSOURCING-SERVICE-FENCE = $!service-context.defined ?? $!service-context.Hash !! Hash;
 					require ::("RedSourcing::StoredEvent");
 					my Mu $type = resolve-class($!entity);
 					die 'Commands cannot target projections'
 						if $type.HOW.^mro.grep(*.^name eq 'Metamodel::RedSourcing::ProjectionHOW').elems;
 					my $entity = $type.^load(|$!entity-ids.Map, :$!stream);
 					my $*COMMAND = self;
+                    my $*REDSOURCING-PHASE = 'EXECUTE';
 					$!tries += ++$invocations;
 					$!result = $entity."$!method"(|$!data.Map);
 					journal-connection().journal-state<snapshot-candidates>{entity-key($type, $!stream)} = $entity;

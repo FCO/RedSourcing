@@ -148,7 +148,7 @@ sub rebuild-event-counters(--> UInt) is export {
         }
         for ::('RedSourcing::StoredEvent').^all.sort(*.id).Seq -> $row {
             $events++;
-            next if $row.mro.contains('|Entity|') || $row.mro.contains('|RedSourcing::Saga::Control|');
+            next if $row.mro.contains('|Entity|') || ($row.mro.contains('|RedSourcing::Saga::Control|') || $row.mro.contains('|RedSourcing::Service::Protocol::Control|'));
             my $type = resolve-class($row.class);
             my %keys = event-counter-keys($type, $row.data.Hash, :normalized);
             for %keys.kv -> $key, $definition {

@@ -1,0 +1,120 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Service;
+use RedSourcing::Service::Lease;
+use RedSourcing::Config;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+use lib 't/lib';
+use ServiceDomain;
+
+my $*RED-DB = store-driver('SQLite', ':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $runtime = ServiceRuntime.new(:ready-timeout(1), :stop-grace(.2), :max-restarts(1)).initialize;
+LEAVE $runtime.shutdown;
+sub room($id) { my $p = ServiceRoom.^with-ids(:room-id($id)); $p.^create; $p }
+sub pump(&predicate, Numeric $seconds = 10) {
+    my $deadline = now + $seconds;
+    loop { $runtime.tick; return True if predicate(); last if now > $deadline; await Promise.in(.01) }
+    False
+}
+my $rolled = room('rollback');
+dies-ok { red-do :transaction, { $rolled.^start-service('serve'); die 'abort' } }, 'activation transaction can abort';
+$runtime.tick;
+is $rolled.^service-status('serve')<phase>, 'absent', 'rolled-back saga and intent disappear';
+is $ServiceDomain::STARTS, 0, 'rollback never invokes the service body';
+my $idle = room('idle');
+$idle.^start-service('serve', :idle-timeout(2));
+ok pump({ $idle.^service-status('serve')<phase> eq 'active' }), 'short-idle service becomes ready';
+my $due = $idle.^service-status('serve')<idle-deadline>;
+$runtime.tick;
+is $idle.^service-status('serve')<idle-deadline>, $due, 'controller/heartbeat do not renew activity';
+ok pump({ $idle.^service-status('serve')<phase> eq 'stopped' }), 'idle timer stops the service';
+is $idle.^service-status('serve')<reason>, 'idle', 'idle shutdown has an observable cause';
+my $unready = room('unready');
+$unready.^start-service('serve', :args(%(:mode<unready>)));
+ok pump({ $unready.^service-status('serve')<phase> eq 'failed' }), 'readiness timeout has bounded restart attempts';
+is $unready.^service-status('serve')<failures>, 2, 'one initial attempt and one configured restart';
+nok $unready.^service-status('serve')<desired>, 'exhaustion waits for explicit activation';
+my $broken = room('broken');
+$broken.^start-service('serve', :args(%(:mode<broken>)));
+ok pump({ $broken.^service-status('serve')<phase> eq 'failed' }), 'broken Promise is retried then marked failed';
+like $broken.^service-status('serve')<error>, / 'fixture service failed' /, 'failure diagnostics are durable';
+my $direct = room('direct');
+$direct.^start-service('serve', :args(%(:mode<direct-write>)));
+ok pump({ $direct.^service-status('serve')<phase> eq 'failed' }), 'direct aggregate mutation cannot emit from a service body';
+like $direct.^service-status('serve')<error>, / 'Use ServiceContext' /, 'error explains the required command path';
+is $direct.^load.messages.elems, 0, 'direct service writes persist no facts';
+my $complete = room('complete');
+$complete.^start-service('serve', :args(%(:mode<complete>)));
+ok pump({ $complete.^service-status('serve')<phase> eq 'stopped' }), 'normal completion is not restarted';
+is $complete.^service-status('serve')<failures>, 0, 'normal completion consumes no retry budget';
+my $cleanup = room('cleanup');
+$cleanup.^start-service('serve', :args(%(:mode<cleanup-failure>)));
+ok pump({ $cleanup.^service-status('serve')<phase> eq 'active' }), 'cleanup fixture starts';
+$cleanup.^stop-service('serve');
+ok pump({ $cleanup.^service-status('serve')<phase> eq 'failed' }), 'cleanup error is recorded rather than hidden';
+like $cleanup.^service-status('serve')<error>, / 'cleanup failed' /, 'cleanup failure diagnostics survive';
+my $restart = room('executor-restart');
+$restart.^start-service('serve');
+ok pump({ $restart.^service-status('serve')<phase> eq 'active' }), 'recovery fixture becomes active';
+my $old = $restart.^service-status('serve')<generation>;
+$runtime.shutdown;
+my $next = ServiceRuntime.new(:stop-grace(.2)).initialize;
+LEAVE $next.shutdown if $next.defined;
+my $deadline = now + 5;
+until $restart.^service-status('serve')<generation> > $old && $restart.^service-status('serve')<phase> eq 'active' {
+    $next.tick; last if now > $deadline; await Promise.in(.01);
+}
+ok $restart.^service-status('serve')<generation> > $old, 'new executor reacquires requested service with a fresh generation';
+is $restart.^service-status('serve')<phase>, 'active', 'shutdown preserves durable desire for recovery';
+is $restart.^service-status('serve')<failures>, 0, 'executor recovery consumes no service-failure retry budget';
+dies-ok { red-do :transaction, { $next.tick } }, 'controller cannot execute effects inside an application transaction';
+my $stubborn = room('stubborn');
+$stubborn.^start-service('serve', :args(%(:mode<stubborn>)));
+my $end = now + 5;
+until $stubborn.^service-status('serve')<phase> eq 'active' { $next.tick; last if now > $end; await Promise.in(.01) }
+is $stubborn.^service-status('serve')<phase>, 'active', 'uncooperative fixture becomes ready';
+$stubborn.^stop-service('serve');
+$end = now + 5;
+until $stubborn.^service-status('serve')<phase> eq 'unconfirmed-stop' { $next.tick; last if now > $end; await Promise.in(.01) }
+is $stubborn.^service-status('serve')<phase>, 'unconfirmed-stop', 'stop grace expiry is durable and observable';
+$ServiceDomain::RELEASE.keep(True);
+await Promise.in(.02); $next.tick;
+# Test the background controller separately from manual ticking.
+$next.shutdown;
+my $memory = ServiceRuntime.new.initialize;
+dies-ok { $memory.run }, 'background execution cannot reuse an in-memory SQLite connection across transactions';
+$memory.shutdown;
+my $file = tempdir.IO.add('services.db');
+$*RED-DB = store-driver('SQLite', $file.Str);
+schema(StoredEvent, StoredCommand).create;
+my $background = ServiceRuntime.new(:poll-interval(.05), :stop-grace(.5)).initialize;
+my $run-room = room('background'); $run-room.^start-service('serve');
+my $controller = $background.run;
+$end = now + 5;
+until $run-room.^service-status('serve')<phase> eq 'active' { last if now > $end; await Promise.in(.02) }
+is $run-room.^service-status('serve')<phase>, 'active', 'background loop processes queued readiness';
+my $rid = $run-room.^service-status('serve')<service-id>;
+my $ctx = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$rid} });
+is $ctx.aggregate.record-message(:text<background>), 1, 'background loop wakes to execute queued commands';
+my $cancelled = room('background-rollback');
+my $starts = $ServiceDomain::STARTS;
+dies-ok {
+    red-do :transaction, {
+        $cancelled.^start-service('serve');
+        await Promise.in(.2);
+        is $ServiceDomain::STARTS, $starts, 'background controller cannot observe an uncommitted activation';
+        die 'abort background request';
+    }
+}, 'background activation can roll back';
+is $cancelled.^service-status('serve')<phase>, 'absent', 'rollback leaves no runnable background intent';
+$run-room.^stop-service('serve');
+$end = now + 5;
+until $run-room.^service-status('serve')<phase> eq 'stopped' { last if now > $end; await Promise.in(.02) }
+is $run-room.^service-status('serve')<phase>, 'stopped', 'public stop cooperates with the background loop';
+$background.shutdown;
+await Promise.anyof($controller, Promise.in(2));
+is $controller.status, Kept, 'shutdown wakes and completes the controller Promise';
+done-testing;

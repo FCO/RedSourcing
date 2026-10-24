@@ -1,0 +1,72 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Service;
+use RedSourcing::Service::Lease;
+use RedSourcing::Config;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+use lib 't/lib';
+use ServiceDomain;
+
+my $*RED-DB = store-driver('SQLite', ':memory:');
+schema(StoredEvent, StoredCommand).create;
+my $runtime = ServiceRuntime.new(:stop-grace(.2)).initialize;
+LEAVE $runtime.shutdown;
+my $room = ServiceRoom.^with-ids(:room-id<a>); $room.^create;
+sub pump(&predicate, Numeric $seconds = 5) {
+    my $deadline = now + $seconds;
+    loop {
+        $runtime.tick;
+        return True if predicate();
+        last if now > $deadline;
+        await Promise.in(.01);
+    }
+    False
+}
+is $room.^service-status('serve')<phase>, 'absent', 'read-only status does not activate a service';
+is $room.^start-service('serve')<phase>, 'requested', 'start persists requested intent';
+is $ServiceDomain::STARTS, 0, 'command does not execute a service body';
+ok pump({ $room.^service-status('serve')<phase> eq 'active' }), 'runtime reaches readiness';
+is $ServiceDomain::STARTS, 1, 'one local execution starts';
+my $id = $room.^service-status('serve')<service-id>;
+my $context = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$id} });
+is $room.^start-service('serve')<phase>, 'active', 'same request is idempotent';
+$runtime.tick;
+is $ServiceDomain::STARTS, 1, 'repeated advance does not start a second Promise';
+is $context.aggregate.record-message(:text<hello>), 1, 'service proxy executes a fenced aggregate command';
+is-deeply $context.state.messages.Array, ['hello'], 'context reads fresh detached state';
+is $context.aggregate.record-and-touch(:text<compound>), 2, 'nested context work shares the command transaction without reacquiring its lock';
+my $queued = $context.aggregate.record-message(:text<queued>, :!sync);
+ok $queued.service-context.defined, 'queued command persists its fence';
+my $before = $room.^service-status('serve')<idle-deadline>;
+await Promise.in(.01); $context.touch;
+ok $room.^service-status('serve')<idle-deadline> > $before, 'explicit activity renews durable inactivity deadline';
+$room.^stop-service('serve');
+ok pump({ $room.^service-status('serve')<phase> eq 'stopped' }), 'stop drains and records termination';
+throws-like { $queued.run }, Exception, message => / 'ownership' /;
+is-deeply $room.^load.messages.Array, ['hello', 'compound'], 'expired queued command makes no domain change';
+is %ServiceDomain::STOPS{$id}, 1, 'cleanup callback executes once';
+is $context.stopping.status, Kept, 'stop signal is observable';
+$room.^stop-service('serve'); $runtime.tick;
+is %ServiceDomain::STOPS{$id}, 1, 'repeated stop is idempotent';
+$room.^start-service('serve');
+ok pump({ $room.^service-status('serve')<phase> eq 'active' }), 'explicit restart activates another generation';
+ok $room.^service-status('serve')<generation> > $context.generation, 'generation is never reused';
+throws-like { $context.aggregate.record-message(:text<stale>) }, Exception, message => / 'ownership' /;
+dies-ok { red-do :transaction, { $room.^stop-service('serve'); die 'rollback' } }, 'stop request can roll back';
+ok $room.^service-status('serve')<desired>, 'rolled-back stop leaves durable intent active';
+my $child = ServiceChild.^with-ids(:room-id<child>); $child.^create;
+$child.^start-service('serve');
+ok pump({ $child.^service-status('serve')<phase> eq 'active' }), 'inherited service method works with subclass identity';
+my $before-load = $ServiceDomain::STARTS;
+$room.^load;
+advance-sagas;
+is $ServiceDomain::STARTS, $before-load, 'replay and generic saga advance do not run managed services';
+throws-like { $room.^start-service('serve', :args(%(:mode<broken>))) }, Exception,
+    message => / 'Stop the service' /;
+my $events = StoredEvent.list-events(:types[ServiceMessage]);
+is $events.elems, 2, 'service lifecycle controls are not domain facts';
+my $raw = StoredEvent.^all.Seq.map(*.data.raku).join;
+unlike $raw, / 'Promise.new' | 'ServiceContext.new' /, 'persistent data contains no live Promise or context';
+throws-like { $runtime.shutdown; $context.aggregate.record-message(:text<closed>) }, Exception, message => / 'closed' /;
+done-testing;

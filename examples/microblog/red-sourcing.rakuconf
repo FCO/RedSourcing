@@ -1,0 +1,6 @@
+use RedSourcing::Config;
+config {
+    .driver = 'SQLite';
+    .database = 'microblog.db';
+    .flow-tracing = False;
+}

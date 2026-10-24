@@ -1,0 +1,29 @@
+use Test;
+use MONKEY-SEE-NO-EVAL;
+use RedSourcing;
+use RedSourcing::Service;
+use RedSourcing::Config;
+
+throws-like { EVAL q[use RedSourcing; aggregate NoContext { method serve() is service { } }] },
+    Exception, message => / 'ServiceContext' /;
+throws-like { EVAL q[use RedSourcing; class NotAggregate { method serve(ServiceContext $ctx) is service { } }] },
+    Exception, message => / 'aggregate' /;
+throws-like { EVAL q[use RedSourcing; aggregate BothTraits { method serve(ServiceContext $ctx) is command is service { } }] },
+    Exception, message => / 'also be a command' /;
+throws-like { EVAL q[use RedSourcing; aggregate ReverseTraits { method serve(ServiceContext $ctx) is service is command { } }] },
+    Exception, message => / 'also be a command' /;
+throws-like { EVAL q[use RedSourcing; aggregate PositionalService { method serve(ServiceContext $ctx, Str $extra) is service { } }] },
+    Exception, message => / 'named arguments' /;
+throws-like { EVAL q[use RedSourcing; aggregate MultiService { method APPLY() { }; multi method serve(ServiceContext $ctx) is service { } }] },
+    Exception, message => / 'Multi service' /;
+my $*RED-DB = store-driver('SQLite', ':memory:');
+schema(StoredEvent, StoredCommand).create;
+for %(lease-seconds => 0), %(poll-interval => 0), %(heartbeat-seconds => 30), %(stop-grace => -1), %(lease-seconds => Inf) -> %options {
+    dies-ok { ServiceRuntime.new(|%options).initialize }, 'invalid service timing settings are rejected';
+}
+my $one = ServiceRuntime.new.initialize;
+LEAVE $one.shutdown;
+dies-ok { ServiceRuntime.new.initialize }, 'one local runtime per driver avoids conflicting in-process executors';
+$one.shutdown;
+lives-ok { $one.shutdown }, 'shutdown is idempotent';
+done-testing;

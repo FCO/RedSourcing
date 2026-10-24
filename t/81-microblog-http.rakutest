@@ -1,0 +1,107 @@
+use Test;
+use lib 'examples/microblog/lib';
+use RedSourcing;
+use RedSourcing::Service;
+use Microblog::Domain;
+use Microblog::Server;
+use Cro::HTTP::Client;
+use JSON::Fast;
+
+my $database = $*TMPDIR.add('microblog-http-test-' ~ $*PID ~ '.db');
+LEAVE $database.unlink if $database.e;
+red-sourcing-defaults(:driver<SQLite>, :database($database.Str), :!flow-tracing);
+initialize-tweets;
+initialize-application('http');
+seed('http');
+my $runtime = ServiceRuntime.new(:poll-interval(.05), :stop-grace(1)).initialize;
+LEAVE $runtime.shutdown;
+my $port = 40000 + (^20000).pick;
+my $server = MicroblogServer.^with-ids(:application-id<http>, :server-id<public>);
+$server.^start-service('serve', :args(%(:$port, assets => 'examples/microblog/public'.IO.absolute.Str)));
+my $controller = $runtime.run;
+sub wait-for(&check, Numeric $seconds = 10) {
+    my $deadline = now + $seconds;
+    until check() { die 'Timed out' if now > $deadline; await Promise.in(.02) }
+}
+wait-for({ $server.^service-status('serve')<phase> eq 'active' });
+my $base = "http://127.0.0.1:$port";
+sub fetch(Str $path, Str :$method = 'get', :$body) {
+    my $response;
+    try {
+        CATCH { when X::Cro::HTTP::Error { $response = .response } }
+        $response = $body.defined
+            ?? await Cro::HTTP::Client."$method"($base ~ $path, :content-type<application/json>, :$body)
+            !! await Cro::HTTP::Client."$method"($base ~ $path);
+    }
+    die 'Missing response' unless $response.defined;
+    ($response.status, await($response.body-text))
+}
+my ($status, $body) = fetch('/');
+is $status, 200, 'web page served';
+ok $body.contains('Sua timeline'), 'page contains timeline';
+($status, $body) = fetch('/api/users');
+is from-json($body).elems, 3, 'users API lists seeded users';
+($status, $body) = fetch('/api/users/ana/timeline');
+is from-json($body)<tweets>.elems, 2, 'feed includes followed history';
+($status, $body) = fetch('/api/users/ana/tweets', :method<post>, :body(%(text => '<script>alert(1)</script>')));
+is $status, 201, 'HTTP publication succeeds';
+($status, $body) = fetch('/api/users/ana/tweets');
+is from-json($body)<tweets>[0]<text>, '<script>alert(1)</script>', 'API preserves text for safe client rendering';
+($status, $body) = fetch('/api/users/ana/following/clara', :method<post>);
+is $status, 200, 'follow endpoint succeeds';
+($status, $body) = fetch('/api/users/ana/timeline?limit=1');
+is from-json($body)<tweets>.elems, 1, 'query parameter limits SQL page';
+ok from-json($body)<next>.defined, 'HTTP page has a cursor';
+($status, $body) = fetch('/api/users/ana/following/bruno', :method<delete>);
+is $status, 200, 'unfollow endpoint succeeds';
+($status, $body) = fetch('/api/users/missing/timeline');
+is $status, 404, 'missing user returns 404';
+($status, $body) = fetch('/api/users/ana/tweets', :method<post>, :body(%(text => ' ')));
+is $status, 400, 'invalid publication returns 400';
+($status, $body) = fetch('/api/users', :method<post>, :body(%(id => 'dani', name => 'Dani')));
+is $status, 201, 'registration creates aggregate through fenced command';
+($status, $body) = fetch('/api/users/dani');
+is from-json($body)<name>, 'Dani', 'registered user can be read';
+
+# Real TCP disconnect must cancel the SSE supply and its polling interval.
+for ^3 -> $attempt {
+    my $socket = await IO::Socket::Async.connect('127.0.0.1', $port);
+    my $received = '';
+    my $initial = Promise.new;
+    my $changed = Promise.new;
+    my $tap = $socket.Supply.tap(-> $chunk {
+        $received ~= $chunk;
+        $initial.keep(True) if $initial.status == Planned && $received.contains('event: timeline');
+        $changed.keep(True) if $changed.status == Planned && $received.contains("SSE publication $attempt");
+    }, :quit(-> $ { }));
+    await $socket.print("GET /api/users/ana/events HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    await Promise.anyof($initial, Promise.in(10));
+    is $initial.status, Kept, 'SSE sends initial timeline';
+    if $attempt == 0 {
+        await Promise.in(2.2);
+        is $received.match(/ 'event: timeline' /, :g).elems, 1, 'unchanged state does not resend and redraw the feed';
+    }
+    is $Microblog::Server::SUBSCRIBER-LOCK.protect({ $Microblog::Server::SUBSCRIBERS }), 1, 'one active subscriber';
+    fetch('/api/users/ana/tweets', :method<post>, :body(%(text => "SSE publication $attempt")));
+    await Promise.anyof($changed, Promise.in(10));
+    is $changed.status, Kept, 'SSE receives a new tweet';
+    $socket.close; $tap.close;
+    wait-for({ $Microblog::Server::SUBSCRIBER-LOCK.protect({ $Microblog::Server::SUBSCRIBERS }) == 0 });
+    pass 'disconnect cancels subscriber and timer';
+}
+$server.^stop-service('serve');
+wait-for({ $server.^service-status('serve')<phase> eq 'stopped' });
+$runtime.shutdown;
+await $controller;
+pass 'server and controller stop cooperatively';
+# Reopen through a new executor, preserving projection controls and tweet table.
+$runtime = ServiceRuntime.new(:poll-interval(.05), :stop-grace(1)).initialize;
+$server.^start-service('serve', :args(%(:$port, assets => 'examples/microblog/public'.IO.absolute.Str)));
+$controller = $runtime.run;
+wait-for({ $server.^service-status('serve')<phase> eq 'active' });
+($status, $body) = fetch('/api/users/ana/tweets');
+ok from-json($body)<tweets>.first(*.<text> eq 'SSE publication 2').defined, 'tweets survive executor restart';
+$server.^stop-service('serve');
+wait-for({ $server.^service-status('serve')<phase> eq 'stopped' });
+$runtime.shutdown; await $controller;
+done-testing;

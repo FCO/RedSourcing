@@ -69,7 +69,12 @@
     "RedSourcing::Web::Presentation": "lib/RedSourcing/Web/Presentation.rakumod",
     "RedSourcing::Web::Server": "lib/RedSourcing/Web/Server.rakumod",
     "RedSourcing::X::OptimisticLockFailed": "lib/RedSourcing/X/OptimisticLockFailed.rakumod",
-    "RedSourcing::EventType": "lib/RedSourcing/EventType.rakumod"
+    "RedSourcing::EventType": "lib/RedSourcing/EventType.rakumod",
+    "RedSourcing::IsService": "lib/RedSourcing/IsService.rakumod",
+    "RedSourcing::Service": "lib/RedSourcing/Service.rakumod",
+    "RedSourcing::Service::Protocol": "lib/RedSourcing/Service/Protocol.rakumod",
+    "RedSourcing::Service::Context": "lib/RedSourcing/Service/Context.rakumod",
+    "RedSourcing::Service::Lease": "lib/RedSourcing/Service/Lease.rakumod"
   },
   "resources": [
     "app.css",

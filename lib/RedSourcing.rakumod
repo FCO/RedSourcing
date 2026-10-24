@@ -9,6 +9,7 @@ use RedSourcing::Projection;
 use RedSourcing::Lifecycle;
 use RedSourcing::Declaration;
 use RedSourcing::Traits;
+use RedSourcing::Service::Context;
 use RedSourcing::StoredCommand;
 use RedSourcing::X::OptimisticLockFailed;
 
@@ -53,6 +54,7 @@ sub EXPORT {
 		'&decision-model' => &decision-model,
         '&rebuild-event-counters' => &rebuild-event-counters,
 		'Command' => Command,
+        'ServiceContext' => ServiceContext,
 		'RedSourcing::X::OptimisticLockFailed' => RedSourcing::X::OptimisticLockFailed,
 		# Preserve the merged dispatchers for Red and the event-store candidates.
 		'&trait_mod:<is>' => &trait_mod:<is>,

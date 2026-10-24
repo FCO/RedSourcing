@@ -1,0 +1,194 @@
+{
+  "measured_at": "2026-10-24T00:27:17.394410+00:00",
+  "driver": "SQLite",
+  "database": ":memory:",
+  "red": "0.2.7",
+  "rakudo": "2026.09",
+  "services_enabled": false,
+  "samples": {
+    "before": [
+      {
+        "seconds": 5.4400365829933435,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.48623504198622,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.544559917005245,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.5454937079921365,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.459356374980416,
+        "stderr": ""
+      }
+    ],
+    "after": [
+      {
+        "seconds": 5.437098582973704,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.406147875008173,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.650990208028816,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.453449124994222,
+        "stderr": ""
+      },
+      {
+        "seconds": 5.617059291980695,
+        "stderr": ""
+      }
+    ]
+  },
+  "warmup": {
+    "before": {
+      "seconds": 5.735998041986022,
+      "stderr": ""
+    },
+    "after": {
+      "seconds": 6.493206249957439,
+      "stderr": ""
+    }
+  },
+  "medians_seconds": {
+    "before": 5.48623504198622,
+    "after": 5.453449124994222
+  },
+  "change_percent": -0.597603214975051,
+  "regression_limit_percent": 2,
+  "accepted": true,
+  "stdout": "Alice classes: 10\nEleventh class rejected: Student already participates in 10 classes\nAlice classes after cancellation and enrollment: 10\nMath students: 30\nThirty-first student rejected: Class already has 30 students\nMath students after cancellation and enrollment: 30\nReplayed active enrollments: 40\n",
+  "methodology": "Five alternating isolated full-process pairs following one warmup per variant; precomp warmed, no concurrent tests. Before is git HEAD at task start, after is final lib tree. Includes startup/schema/flow tracing.",
+  "source_sha256": {
+    "before": {
+      "lib/RedSourcing.rakumod": "37f17ec66f69e6d8f159a40fcbf96f538e6418733e1b16c04ebb5d4f4d98389b",
+      "lib/RedSourcing/StoredEvent.rakumod": "65e4aa1115b6fb69e636c3b8778525bde9e4d60a4fec9c3347a3b6b286b2c289",
+      "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+      "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+      "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+      "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+      "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+      "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+      "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+      "lib/RedSourcing/Counters.rakumod": "139163bdd70427acb78104dfd9262995f61726e64e8df11d074abcf46f45fc4e",
+      "lib/RedSourcing/Command.rakumod": "830d30eabe5ef5bef471b977505bcc6507cff4730e9193513c22bc1002308265",
+      "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+      "lib/RedSourcing/Event.rakumod": "372954c9910d04c76ca0653cff64ac607d901213859e52bff9589970a0264334",
+      "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+      "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+      "lib/RedSourcing/StoredCommand.rakumod": "eb78f9554891f7263c59559b27d18e9abff3855265ad6087b6fd2af67d0eb229",
+      "lib/RedSourcing/Context.rakumod": "c170d29e5e91180befeb594c9e9664ae6828445f6f43796e2280a4e44134cef8",
+      "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+      "lib/RedSourcing/Saga.rakumod": "0320bf94f2436b87752dd21eaf0283003c7768c4374baadea31f3d60ad9b03ca",
+      "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+      "lib/RedSourcing/Projection.rakumod": "51f115e80dbdf73067cc745565901dd34457ca7949de1036f24e8f7e0912f47c",
+      "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+      "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+      "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+      "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+      "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+      "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+      "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+      "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+      "lib/RedSourcing/Traits.rakumod": "33a4d3d30d0eb485c4d7de408d7dd4b8b7ef55860cdff0ec3de7a16350ca7fcb",
+      "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+      "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "5cff6c5d2a4cf2b2bcbbabe063fe740914e992e6126b4e05f93a8e8c5e8e27eb",
+      "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+      "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "d908a70f8336553ff40b86078edc676ca98e4fa4308b2d77ee102a53ffff0d26",
+      "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+      "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "dd9f06133da1380a9df6ec3df4b70414382d1dac3ce137c348582a285b3c100c",
+      "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "789b02eb59b9254409d9c2ada98caeb5183836fecb3c619e8bd97fee18bbc4a3",
+      "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+      "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+      "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+      "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+      "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+      "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+      "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+      "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+      "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+      "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+      "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+      "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+      "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+      "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+      "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+      "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+    },
+    "after": {
+      "lib/RedSourcing.rakumod": "0d7bf619bfa9a40794fe383ed423046974d3a613f872105b87e08897f5afeb80",
+      "lib/RedSourcing/StoredEvent.rakumod": "22d01db1be3e7f92d8953cec30308bb514fc6d339ee7acd625c073d772893575",
+      "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+      "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+      "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+      "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+      "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+      "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+      "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+      "lib/RedSourcing/Counters.rakumod": "220504100cd79025aeee05c2e8d1710afa5c507578e89009b2e2d89897e7d000",
+      "lib/RedSourcing/Command.rakumod": "d51db202d4dc237074853f41a942e3ea2b082ad9d418e21d4bcb5cf453bce90e",
+      "lib/RedSourcing/Service.rakumod": "a09ab2af555842912379876d7346aeafcad87b0cf9416fe9bf365535411bebcd",
+      "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+      "lib/RedSourcing/Event.rakumod": "54838396a93d65b46e3c8520b3fabcd3b763028e91d9e20b9156040d13ae2613",
+      "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+      "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+      "lib/RedSourcing/StoredCommand.rakumod": "72650281509b63431cd538e226cf397f9c6b8939bb8f8ee8b601c52103db7f99",
+      "lib/RedSourcing/Context.rakumod": "8083300a51929e522eff6ac8fff165e489147073c10fde9dc7b6f97fedcabc78",
+      "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+      "lib/RedSourcing/Saga.rakumod": "e297cca52272ff7dee21f2990ffbcb298fbd6632283e0d34adcdca801a4b7ba0",
+      "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+      "lib/RedSourcing/Projection.rakumod": "74a97771b3d461b329aa8d825f6f8ed53aa6af009cdf84690415ca89893e4b25",
+      "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+      "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+      "lib/RedSourcing/IsService.rakumod": "45bdc94e4fce07a6c1bd99b331adbcc510848adb3223bdb7fb5452bfd7ee7a9e",
+      "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+      "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+      "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+      "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+      "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+      "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+      "lib/RedSourcing/Traits.rakumod": "0558be52dc190607c2076f745f4f753e9c52cdbea5d6ca6597f35bf3314555d1",
+      "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+      "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+      "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "4222a6138f4f640652c0b804bfaff0d6b927b49ae24673228ea95015d1c416d6",
+      "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+      "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "2437a93837278ef7f67a4df7279f8045a5a35bdefa94c817ed4d3d7e003e7779",
+      "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "efab2f05fe4bf70fe8f242e6682658faf3353ae120753e910e4c9b7a10e0e6b5",
+      "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+      "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "95f57d4c8532c1c8f9ac8dcd0b01794c696ba5e731e1d1bd569fdbbddd5c1737",
+      "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "faba2205b7f3b3eeef0e6eec5d39e26a9aaf6b62efc11436db2b8040516e4bdd",
+      "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+      "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+      "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+      "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+      "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+      "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+      "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+      "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+      "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+      "lib/RedSourcing/Web/Server.rakumod": "1de8e0f3c45ad83daa308061795296a811c138f6a7ae48c87e243ef0d6a9bc2c",
+      "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+      "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+      "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+      "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+      "lib/RedSourcing/Service/Protocol.rakumod": "0cffc56fa73117720d09f37df2e787f8de1964a018d88780ffa21cf79b56c82b",
+      "lib/RedSourcing/Service/Context.rakumod": "3d18ba088646d43f1ea6445a954056d365a3be4997e220864da768f0d6dd226b",
+      "lib/RedSourcing/Service/Lease.rakumod": "c49012a3b74b76d8d5a5cadb31917bebd052020e62ccac97a782ae2d58f0634d",
+      "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+      "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e"
+    }
+  }
+}

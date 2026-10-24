@@ -435,6 +435,8 @@ webhooks to a configured HTTP endpoint; its default webhook provider is simulate
   filtering, schema versions and failure behavior.
 - [Decision models](docs/decision-models.md): consistent decisions across projections and command retries.
 - [Sagas](docs/sagas.md): reactions, compensation, retries, services and timeouts.
+- [Managed aggregate services](docs/services.md): optional Promise-based services,
+  durable lifecycle sagas, cooperative shutdown and Pg ownership leases.
 - [CLI](docs/cli.md): all commands, options, examples and readable/JSON output.
 - [Web monitor](docs/web-monitor.md): live inspection, metrics and Operations.
 - [Workflow visualization](docs/flows.md): causal links reconstructed from journal metadata.
@@ -471,3 +473,6 @@ specific constraints and the [testing guide](docs/testing.md) for validation sco
 Fernando Correa de Oliveira. Copyright 2026.
 Distributed under the **Artistic License 2.0**. Bundled web assets retain their
 [third-party licenses](docs/web-third-party.md).
+
+The [Pio microblog example](examples/microblog/README.md) combines a transactional
+SQL tweet index, per-user projections, a projection-owned HTTP service and SSE.

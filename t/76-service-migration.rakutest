@@ -1,0 +1,46 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Service;
+use RedSourcing::Storage;
+use RedSourcing::Journal;
+
+my $file = tempdir.IO.add('legacy.db');
+my %environment = %*ENV;
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+my ($admin, $schema);
+my $*RED-DB;
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE") if $admin.defined;
+if $database {
+    require ::('DB::Pg');
+    $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+    $schema = 'rs_service_migration_' ~ $*PID;
+    $admin.execute("CREATE SCHEMA $schema");
+    %environment<PGOPTIONS> = "-csearch_path=$schema -cclient_min_messages=warning";
+    $*RED-DB = store-driver('Pg', $database, :connection{ dbh => ::('DB::Pg').new(
+        :conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>)) });
+} else { $*RED-DB = store-driver('SQLite', $file.Str) }
+
+schema(StoredEvent, StoredCommand).create;
+StoredCommand.^create(:stream<old>, :entity<Legacy>, :entity-ids({}), :method<test>, :data({}));
+storage-query(journal-connection(), 'ALTER TABLE red_sourcing_command DROP COLUMN service_context');
+throws-like { ServiceRuntime.new.initialize }, Exception, message => / 'migration' /;
+sub migrate {
+    my $process = run $*EXECUTABLE.Str, '-Ilib', 'tools/migrate-services.raku', '--driver=' ~ ($database ?? 'Pg' !! 'SQLite'),
+        '--database=' ~ ($database // $file.Str), :env(%environment), :out, :err;
+    my $out = $process.out.slurp(:close); my $err = $process.err.slurp(:close);
+    is $process.exitcode, 0, 'migration command succeeds';
+    is $err, '', 'migration has no diagnostics';
+    like $out, / 'schema is ready' /, 'migration reports readiness';
+}
+migrate; migrate;
+lives-ok { ServiceRuntime.new.initialize.shutdown }, 'migrated store supports optional runtime';
+is StoredCommand.^all.elems, 1, 'migration preserves legacy command rows';
+nok StoredCommand.^all.head.service-context.defined, 'legacy command has no fence';
+my @columns = $database
+    ?? storage-query(journal-connection(), q[SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'red_sourcing_command'])
+    !! storage-query(journal-connection(), 'PRAGMA table_info(red_sourcing_command)');
+is @columns.grep(*.<name> eq 'service_context').elems, 1, 'migration adds exactly one nullable column';
+done-testing;

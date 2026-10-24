@@ -15,6 +15,7 @@ use RedSourcing::Lifecycle;
 use RedSourcing::Storage;
 use RedSourcing::EventType;
 use Red::DB;
+use RedSourcing::Service::Protocol;
 
 also is Metamodel::RedSourcing::EntityHOW;
 
@@ -135,6 +136,12 @@ method clone-state(\entity) {
 method commit(\entity, $copy, Mu:U $type = RedSourcing::Saga::StateChanged, *%fields) {
     my $*REDSOURCING-PHASE = 'CONTROL';
     journal-do {
+      if entity.^name eq 'RedSourcing::Service::LifecycleSaga'
+            && !((try $*REDSOURCING-SERVICE-CONTROL) // False) {
+          require ::('RedSourcing::Service::Lease');
+          ::('RedSourcing::Service::Lease::EXPORT::DEFAULT').WHO{'&assert-service-fence'}(
+              journal-connection(), ((try $*REDSOURCING-SERVICE-FENCE) // {}).Hash);
+      }
       my $row = $type.new(
         :state(copy-data($copy.^state)), :values(copy-data($copy.^values)),
         :cursor($copy.^current-id), |%fields,
@@ -396,6 +403,11 @@ method run-action(\entity, Str $id, DateTime $now) {
             my &adapter = RedSourcing::Saga::service-adapter(%action<target>);
             $result = adapter(%action<method>,
                 \(|%action<args><positional>.List, |%action<args><named>), :idempotency-key($id));
+            if $result ~~ RedSourcing::Service::Protocol::PendingStart {
+                return if $result.ready.status == Planned;
+                $result.ready.result; # Broken readiness follows normal error handling.
+                $result = $result.result;
+            }
         }
     }
     if $failure {
@@ -440,7 +452,8 @@ method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 
     @rules = @rules.grep({ !.key.^isa(RedSourcing::Saga::Control) });
     if @rules && entity.^status eq 'running' {
         for RedSourcing::StoredEvent.list-events(:row, :from-id(entity.^current-id), |@rules) -> $row {
-            next if $row.mro.contains('|Entity|') || $row.mro.contains('|RedSourcing::Saga::Control|');
+            next if $row.mro.contains('|Entity|') || $row.mro.contains('|RedSourcing::Saga::Control|')
+                || ($row.mro.contains('|RedSourcing::Service::Protocol::Control|') && entity.^name ne 'RedSourcing::Service::LifecycleSaga');
             my $copy = entity.^clone-state;
             my $event = $row.COERCE;
             my $*REDSOURCING-SOURCE-EVENT = $row.id;
