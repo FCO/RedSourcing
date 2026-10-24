@@ -8,8 +8,8 @@ has Rat() $.balance = 0.0;
 has Rat() %.balance-by-month{UInt()};
 has       %.transactions-by-month{UInt()};
 
-method amount                          { $!balance                   }
-method amount-on-month(UInt :$period!) { %!balance-by-month{$period} }
+method amount is query { $!balance }
+method amount-on-month(UInt :$period!) is query { %!balance-by-month{$period} }
 
 # Events arrive in timestamp order. Each month's last entry sets its closing balance.
 multi method APPLY(Deposited $_ where { .client-id == $!client-id }) {

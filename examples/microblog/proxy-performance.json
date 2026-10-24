@@ -1,0 +1,197 @@
+{
+  "recorded_at": "2026-10-24T18:08:45.247178+00:00",
+  "results": {
+    "SQLite": {
+      "medians_ms": {
+        "legacy-json": {
+          "page": 243.95230025,
+          "list": 104.09597145000001
+        },
+        "proxy": {
+          "page": 259.10951885000003,
+          "list": 102.7143048
+        },
+        "typed-direct": {
+          "page": 251.69680295000003,
+          "list": 102.3293091
+        }
+      },
+      "rakudo": "2026.09",
+      "history": 150,
+      "rounds": 5,
+      "reads": 20,
+      "statement_counts_for_three_calls": {
+        "legacy-json/list": {
+          "all": 12
+        },
+        "legacy-json/page": {
+          "all": 15,
+          "tweets": 3
+        },
+        "typed-direct/page": {
+          "tweets": 3,
+          "all": 15
+        },
+        "proxy/page": {
+          "tweets": 3,
+          "all": 15
+        },
+        "typed-direct/list": {
+          "all": 12
+        },
+        "proxy/list": {
+          "all": 12
+        }
+      },
+      "red": "0.2.7",
+      "driver": "SQLite",
+      "samples_seconds": {
+        "proxy": {
+          "list": [
+            2.054286096,
+            1.928820311,
+            1.804415995,
+            2.40501543,
+            2.277360622
+          ],
+          "page": [
+            5.182190377,
+            5.434266083,
+            4.692045569,
+            5.123115586,
+            6.395681458
+          ]
+        },
+        "legacy-json": {
+          "list": [
+            2.081919429,
+            2.042678556,
+            1.822596937,
+            2.260917405,
+            2.612600499
+          ],
+          "page": [
+            5.227334979,
+            4.728611789,
+            4.23220825,
+            6.407455455,
+            4.879046005
+          ]
+        },
+        "typed-direct": {
+          "list": [
+            1.986465129,
+            2.021369707,
+            2.046586182,
+            2.376881049,
+            2.31096506
+          ],
+          "page": [
+            4.771022028,
+            4.821790399,
+            5.033936059,
+            6.129693186,
+            5.997616499
+          ]
+        }
+      },
+      "methodology": "Same live executor and fixed store; warmed, rotating mode order; measured from caller including queue and generation check. typed-direct and proxy share typed copy and query implementation; legacy-json keeps the existing helper contract. SQL counted only afterwards inside a tagged executor operation, excluding controller polling."
+    },
+    "Pg": {
+      "driver": "Pg",
+      "samples_seconds": {
+        "proxy": {
+          "page": [
+            5.072556173,
+            5.617015055,
+            5.880220754,
+            6.923026571,
+            6.720228385
+          ],
+          "list": [
+            1.911562002,
+            2.087441695,
+            2.464664517,
+            2.753644281,
+            2.67675405
+          ]
+        },
+        "legacy-json": {
+          "page": [
+            5.41725736,
+            5.208853989,
+            5.720738276,
+            6.394560233,
+            6.193543733
+          ],
+          "list": [
+            3.119539107,
+            2.684780427,
+            2.364927878,
+            3.254188782,
+            2.723112417
+          ]
+        },
+        "typed-direct": {
+          "list": [
+            2.346195264,
+            3.295429384,
+            2.117732016,
+            2.679829291,
+            3.555505467
+          ],
+          "page": [
+            5.23152677,
+            6.459519129,
+            5.37647297,
+            6.269659121,
+            6.136284545
+          ]
+        }
+      },
+      "rakudo": "2026.09",
+      "methodology": "Same live executor and fixed store; warmed, rotating mode order; measured from caller including queue and generation check. typed-direct and proxy share typed copy and query implementation; legacy-json keeps the existing helper contract. SQL counted only afterwards inside a tagged executor operation, excluding controller polling.",
+      "rounds": 5,
+      "history": 150,
+      "medians_ms": {
+        "typed-direct": {
+          "page": 306.81422725,
+          "list": 133.99146455
+        },
+        "legacy-json": {
+          "page": 286.0369138,
+          "list": 136.15562085
+        },
+        "proxy": {
+          "list": 123.23322585000001,
+          "page": 294.0110377
+        }
+      },
+      "red": "0.2.7",
+      "statement_counts_for_three_calls": {
+        "legacy-json/page": {
+          "tweets": 3,
+          "all": 12
+        },
+        "legacy-json/list": {
+          "all": 9
+        },
+        "typed-direct/list": {
+          "all": 9
+        },
+        "proxy/page": {
+          "all": 12,
+          "tweets": 3
+        },
+        "proxy/list": {
+          "all": 9
+        },
+        "typed-direct/page": {
+          "tweets": 3,
+          "all": 12
+        }
+      },
+      "reads": 20
+    }
+  }
+}

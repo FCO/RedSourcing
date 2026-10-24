@@ -8,7 +8,7 @@ class CounterIncremented is export does Event {
 #| A counter with validated commands and an event-sourced value.
 aggregate Counter is export {
     has Int $.id is entity-id;
-    has Int $.value = 0;
+    has Int $.value is query = 0;
     method APPLY(CounterIncremented $event) { $!value += $event.amount }
     #| Increase the value by a positive integer.
     method increment(Int :$amount where * > 0 = 1) is command {
@@ -19,6 +19,6 @@ aggregate Counter is export {
 #| A read model following one counter across the shared event journal.
 projection CounterTotal is export {
     has Int $.id is entity-id;
-    has Int $.value = 0;
+    has Int $.value is query = 0;
     method APPLY(CounterIncremented $event where { .id eqv $!id }) { $!value += $event.amount }
 }

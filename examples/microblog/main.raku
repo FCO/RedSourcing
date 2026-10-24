@@ -3,7 +3,6 @@ use lib $?FILE.IO.parent.add('lib').Str;
 use RedSourcing;
 use RedSourcing::Service;
 use Microblog::Domain;
-use Microblog::Server;
 
 sub MAIN(Str :$file = $?FILE.IO.parent.add('red-sourcing.rakuconf').Str,
         Str :$driver, Str :$database, Str :$application = 'microblog',
@@ -16,7 +15,7 @@ sub MAIN(Str :$file = $?FILE.IO.parent.add('red-sourcing.rakuconf').Str,
     seed($application) if $seed;
     my $runtime = ServiceRuntime.new(:poll-interval(.1)).initialize;
     LEAVE $runtime.shutdown;
-    my $server = MicroblogServer.^with-ids(:application-id($application), :server-id<public>);
+    my $server = TweetIndex.^with-ids(:application-id($application));
     my $recover-until = now + 35;
     while $server.^service-status('serve')<phase> eq 'stopping' {
         $runtime.tick;

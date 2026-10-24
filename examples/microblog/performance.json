@@ -1,0 +1,465 @@
+{
+  "recorded_at": "2026-10-24T04:16:12.665866+00:00",
+  "interpretation": "Median batch means, not per-request percentiles. SQL baseline reconstructs the previous manual reader/writer; this is not a comparison against a historical release. Excludes HTTP and service context mailbox.",
+  "statement_profile_note": "Counters are collected after timing. Each kind executes three operations; cursor counts also include one additional lookup to obtain the before cursor. Counts include projection reconstruction.",
+  "results": {
+    "SQLite": {
+      "measured_at": "2026-10-24T04:12:02.516457+00:00",
+      "driver": "SQLite",
+      "configuration": {
+        "history": 300,
+        "initial_seed_tweets": 3,
+        "publish_per_round": 20,
+        "reads_per_kind_per_round": 20,
+        "pairs": 5,
+        "page_size": 50,
+        "warmup_publish": 5,
+        "warmup_reads_per_kind": 20
+      },
+      "methodology": "Two independent persistent workers/stores; fixture and warmup excluded; five alternating pairs by default; domain commands and projection reads, without HTTP; statement counters installed only after timings. Each round grows both stores equally. SQL baseline reconstructed from pre-Red reader/writer paths, with identical current framework and schema.",
+      "versions": {
+        "sql": {
+          "ready": true,
+          "driver": "SQLite",
+          "rakudo": "2026.09",
+          "history": 303,
+          "red": "0.2.7"
+        },
+        "red": {
+          "ready": true,
+          "rakudo": "2026.09",
+          "red": "0.2.7",
+          "history": 303,
+          "driver": "SQLite"
+        }
+      },
+      "metrics": {
+        "author": {
+          "sql_ms": 6.531274149999999,
+          "red_ms": 127.42461069999999,
+          "change_percent": 1850.9916101133192,
+          "ratio": 19.509916101133193
+        },
+        "cursor": {
+          "sql_ms": 52.052667299999996,
+          "red_ms": 182.07088255,
+          "change_percent": 249.78204190892632,
+          "ratio": 3.497820419089263
+        },
+        "publish": {
+          "sql_ms": 74.43635535000001,
+          "red_ms": 105.84743855000002,
+          "change_percent": 42.19857763361059,
+          "ratio": 1.421985776336106
+        },
+        "timeline": {
+          "sql_ms": 51.9555919,
+          "red_ms": 171.5828655,
+          "change_percent": 230.2490823899169,
+          "ratio": 3.302490823899169
+        }
+      },
+      "samples_seconds": {
+        "sql": [
+          {
+            "author": 0.099883962,
+            "cursor": 0.828371472,
+            "publish": 1.186917585,
+            "timeline": 0.838664647
+          },
+          {
+            "publish": 2.497969865,
+            "author": 0.138265757,
+            "timeline": 1.068207651,
+            "cursor": 1.184887033
+          },
+          {
+            "publish": 1.474170869,
+            "timeline": 1.039111838,
+            "cursor": 1.041053346,
+            "author": 0.130625483
+          },
+          {
+            "timeline": 1.459928678,
+            "cursor": 1.080506292,
+            "author": 0.135747444,
+            "publish": 1.488727107
+          },
+          {
+            "publish": 1.539356543,
+            "timeline": 0.94390966,
+            "cursor": 0.96692032,
+            "author": 0.127950791
+          }
+        ],
+        "red": [
+          {
+            "timeline": 3.291711553,
+            "publish": 1.687667928,
+            "author": 2.548492214,
+            "cursor": 3.288572182
+          },
+          {
+            "cursor": 3.381357465,
+            "publish": 1.681074971,
+            "author": 2.505838021,
+            "timeline": 3.134157561
+          },
+          {
+            "cursor": 3.969510958,
+            "publish": 2.203047638,
+            "timeline": 3.43165731,
+            "author": 2.424198432
+          },
+          {
+            "cursor": 3.641417651,
+            "publish": 2.173048429,
+            "author": 2.644955174,
+            "timeline": 3.797617941
+          },
+          {
+            "cursor": 3.850381638,
+            "timeline": 3.555254366,
+            "publish": 2.116948771,
+            "author": 2.955002195
+          }
+        ]
+      },
+      "untimed_statement_counts_for_three_operations": {
+        "sql": {
+          "cursor": {
+            "tweet-select": 4,
+            "all": 12
+          },
+          "timeline": {
+            "tweet-select": 3,
+            "all": 9
+          },
+          "publish": {
+            "tweet-insert": 3,
+            "all": 39,
+            "tweet-select": 3
+          },
+          "author": {
+            "all": 9,
+            "tweet-select": 3
+          }
+        },
+        "red": {
+          "timeline": {
+            "all": 9,
+            "tweet-select": 3
+          },
+          "publish": {
+            "tweet-insert": 3,
+            "all": 45,
+            "tweet-select": 9
+          },
+          "author": {
+            "all": 9,
+            "tweet-select": 3
+          },
+          "cursor": {
+            "tweet-select": 4,
+            "all": 12
+          }
+        }
+      },
+      "domain_sha256": {
+        "sql": "230bd5076a3a8cb3a017cc5f6b4ed5aa88881fc2a29911e4fa33f7f77ca38676",
+        "red": "e91bec43a198441e602ea8df42aea7d53116ad04ee9d1d76fbd71fd11bfdca89"
+      },
+      "framework_sha256": {
+        "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "496d89f2152fd29d16c18c9a6f48d13bdb7ca05017f3ca5dbb56bba6f8af9bd7",
+        "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+        "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "af479f331cbcdf5a51fbcd271f0bc1ad5e4e3ca79f230dbf0b5a2c384f88d02b",
+        "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+        "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "faba2205b7f3b3eeef0e6eec5d39e26a9aaf6b62efc11436db2b8040516e4bdd",
+        "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "efab2f05fe4bf70fe8f242e6682658faf3353ae120753e910e4c9b7a10e0e6b5",
+        "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "95f57d4c8532c1c8f9ac8dcd0b01794c696ba5e731e1d1bd569fdbbddd5c1737",
+        "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+        "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+        "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+        "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+        "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+        "lib/RedSourcing/Command.rakumod": "d51db202d4dc237074853f41a942e3ea2b082ad9d418e21d4bcb5cf453bce90e",
+        "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+        "lib/RedSourcing/Context.rakumod": "42a7b401605697f4bd542e29a08dddc97c963b7433e79f99d91bb874067f41f4",
+        "lib/RedSourcing/Counters.rakumod": "220504100cd79025aeee05c2e8d1710afa5c507578e89009b2e2d89897e7d000",
+        "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+        "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+        "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+        "lib/RedSourcing/Event.rakumod": "54838396a93d65b46e3c8520b3fabcd3b763028e91d9e20b9156040d13ae2613",
+        "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+        "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e",
+        "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+        "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+        "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+        "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+        "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+        "lib/RedSourcing/IsService.rakumod": "45bdc94e4fce07a6c1bd99b331adbcc510848adb3223bdb7fb5452bfd7ee7a9e",
+        "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+        "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+        "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+        "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+        "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+        "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+        "lib/RedSourcing/Projection.rakumod": "74a97771b3d461b329aa8d825f6f8ed53aa6af009cdf84690415ca89893e4b25",
+        "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+        "lib/RedSourcing/Saga.rakumod": "e297cca52272ff7dee21f2990ffbcb298fbd6632283e0d34adcdca801a4b7ba0",
+        "lib/RedSourcing/Service/Context.rakumod": "5d9762fac060bb7e84d24f3876e0fc193655d88bd4ab80fe9aae43c24a0ee2bd",
+        "lib/RedSourcing/Service/Lease.rakumod": "c49012a3b74b76d8d5a5cadb31917bebd052020e62ccac97a782ae2d58f0634d",
+        "lib/RedSourcing/Service/Protocol.rakumod": "0cffc56fa73117720d09f37df2e787f8de1964a018d88780ffa21cf79b56c82b",
+        "lib/RedSourcing/Service.rakumod": "eba7e755848cc7c8299c18938f0532d4adc954dde05c01dbf0b50546c24ded53",
+        "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+        "lib/RedSourcing/StoredCommand.rakumod": "72650281509b63431cd538e226cf397f9c6b8939bb8f8ee8b601c52103db7f99",
+        "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+        "lib/RedSourcing/StoredEvent.rakumod": "22d01db1be3e7f92d8953cec30308bb514fc6d339ee7acd625c073d772893575",
+        "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+        "lib/RedSourcing/Traits.rakumod": "6dddf25e7ca333d28ec03beec70b9a7ff19fdcf07bd8b4ad23fed1e80deb25ae",
+        "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+        "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+        "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+        "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+        "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+        "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+        "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+        "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+        "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+        "lib/RedSourcing/Web/Server.rakumod": "0e3fc0d7354649ccc353caf4d29b0ae1c166f1c88e74b774d756de43d4d99867",
+        "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+        "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+        "lib/RedSourcing.rakumod": "0d7bf619bfa9a40794fe383ed423046974d3a613f872105b87e08897f5afeb80"
+      }
+    },
+    "Pg": {
+      "measured_at": "2026-10-24T04:14:41.705401+00:00",
+      "driver": "Pg",
+      "configuration": {
+        "history": 300,
+        "initial_seed_tweets": 3,
+        "publish_per_round": 20,
+        "reads_per_kind_per_round": 20,
+        "pairs": 5,
+        "page_size": 50,
+        "warmup_publish": 5,
+        "warmup_reads_per_kind": 20
+      },
+      "methodology": "Two independent persistent workers/stores; fixture and warmup excluded; five alternating pairs by default; domain commands and projection reads, without HTTP; statement counters installed only after timings. Each round grows both stores equally. SQL baseline reconstructed from pre-Red reader/writer paths, with identical current framework and schema.",
+      "versions": {
+        "sql": {
+          "red": "0.2.7",
+          "driver": "Pg",
+          "rakudo": "2026.09",
+          "history": 303,
+          "ready": true
+        },
+        "red": {
+          "driver": "Pg",
+          "ready": true,
+          "red": "0.2.7",
+          "rakudo": "2026.09",
+          "history": 303
+        }
+      },
+      "metrics": {
+        "timeline": {
+          "sql_ms": 48.98718,
+          "red_ms": 181.1001436,
+          "change_percent": 269.68885247119755,
+          "ratio": 3.6968885247119756
+        },
+        "publish": {
+          "sql_ms": 61.35565670000001,
+          "red_ms": 81.87242930000001,
+          "change_percent": 33.439088917778626,
+          "ratio": 1.3343908891777863
+        },
+        "author": {
+          "sql_ms": 8.3917416,
+          "red_ms": 139.75780735,
+          "change_percent": 1565.4207673649057,
+          "ratio": 16.654207673649058
+        },
+        "cursor": {
+          "sql_ms": 48.429934749999994,
+          "red_ms": 185.36846309999999,
+          "change_percent": 282.7559629326158,
+          "ratio": 3.827559629326158
+        }
+      },
+      "samples_seconds": {
+        "sql": [
+          {
+            "timeline": 0.9797436,
+            "publish": 1.423114254,
+            "author": 0.167834832,
+            "cursor": 1.00421763
+          },
+          {
+            "publish": 1.405884032,
+            "timeline": 1.441797598,
+            "author": 0.173454598,
+            "cursor": 0.977997264
+          },
+          {
+            "publish": 1.191379655,
+            "cursor": 0.89650718,
+            "author": 0.147642409,
+            "timeline": 0.874540005
+          },
+          {
+            "cursor": 0.840808867,
+            "publish": 1.133851338,
+            "author": 0.12585803,
+            "timeline": 0.822482366
+          },
+          {
+            "author": 0.169385871,
+            "cursor": 0.968598695,
+            "publish": 1.227113134,
+            "timeline": 1.294886041
+          }
+        ],
+        "red": [
+          {
+            "author": 2.508705592,
+            "publish": 1.749292514,
+            "cursor": 3.804195231,
+            "timeline": 4.028339516
+          },
+          {
+            "timeline": 3.801977842,
+            "cursor": 3.707369262,
+            "author": 3.092991071,
+            "publish": 1.637448586
+          },
+          {
+            "timeline": 3.019382226,
+            "publish": 1.59794643,
+            "cursor": 3.12465824,
+            "author": 2.795156147
+          },
+          {
+            "author": 2.917204415,
+            "publish": 1.34488546,
+            "cursor": 3.043080611,
+            "timeline": 2.965062114
+          },
+          {
+            "cursor": 3.953016086,
+            "author": 2.489139893,
+            "timeline": 3.622002872,
+            "publish": 2.219622804
+          }
+        ]
+      },
+      "untimed_statement_counts_for_three_operations": {
+        "sql": {
+          "author": {
+            "tweet-select": 3,
+            "all": 9
+          },
+          "timeline": {
+            "tweet-select": 3,
+            "all": 9
+          },
+          "publish": {
+            "tweet-select": 3,
+            "all": 42,
+            "tweet-insert": 3
+          },
+          "cursor": {
+            "all": 12,
+            "tweet-select": 4
+          }
+        },
+        "red": {
+          "publish": {
+            "tweet-select": 3,
+            "all": 42,
+            "tweet-insert": 3
+          },
+          "cursor": {
+            "all": 12,
+            "tweet-select": 4
+          },
+          "author": {
+            "all": 9,
+            "tweet-select": 3
+          },
+          "timeline": {
+            "all": 9,
+            "tweet-select": 3
+          }
+        }
+      },
+      "domain_sha256": {
+        "sql": "230bd5076a3a8cb3a017cc5f6b4ed5aa88881fc2a29911e4fa33f7f77ca38676",
+        "red": "e91bec43a198441e602ea8df42aea7d53116ad04ee9d1d76fbd71fd11bfdca89"
+      },
+      "framework_sha256": {
+        "lib/Metamodel/RedSourcing/AggregateHOW.rakumod": "496d89f2152fd29d16c18c9a6f48d13bdb7ca05017f3ca5dbb56bba6f8af9bd7",
+        "lib/Metamodel/RedSourcing/CommandContainer.rakumod": "7d7b86ff558a43c67006d71d3fc90ff599b6b5b2e5d6d25dab4ea0a8a242c1a3",
+        "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "af479f331cbcdf5a51fbcd271f0bc1ad5e4e3ca79f230dbf0b5a2c384f88d02b",
+        "lib/Metamodel/RedSourcing/EntityIdContainer.rakumod": "cbaf25c5e5d91bc8c560e60e638affcb8bae3c87fa0f525d8a7921994f4c56e4",
+        "lib/Metamodel/RedSourcing/ProjectionHOW.rakumod": "faba2205b7f3b3eeef0e6eec5d39e26a9aaf6b62efc11436db2b8040516e4bdd",
+        "lib/Metamodel/RedSourcing/ProxyHOW.rakumod": "efab2f05fe4bf70fe8f242e6682658faf3353ae120753e910e4c9b7a10e0e6b5",
+        "lib/Metamodel/RedSourcing/SagaHOW.rakumod": "95f57d4c8532c1c8f9ac8dcd0b01794c696ba5e731e1d1bd569fdbbddd5c1737",
+        "lib/RedSourcing/C.rakumod": "ba00b467f3a159479c95279d1197f04019574a7bc738a47e85a17a6f32f7d412",
+        "lib/RedSourcing/CLI/Application.rakumod": "8c617f1ed40047e0961b021010a0617ae202dc4b6aa2371a71a294d0f023e9b6",
+        "lib/RedSourcing/CLI/Config.rakumod": "cd83b416e46690eedb5a1c4803771f3c8a2f8b66caf18750b72c8d5a25de7ca7",
+        "lib/RedSourcing/CLI/Help.rakumod": "bde1e82799cc418410a45f943a2260513f7f90da343703e9f63355eb2c926f73",
+        "lib/RedSourcing/CLI/Output.rakumod": "9dc6d774380bb03908d87ed4dd70c02ec8b2bc43111dd3558f22f1e3b2b646fc",
+        "lib/RedSourcing/Command.rakumod": "d51db202d4dc237074853f41a942e3ea2b082ad9d418e21d4bcb5cf453bce90e",
+        "lib/RedSourcing/Config.rakumod": "187303bc77778bb9661096b9473f6dc7710a7044b4ebc6046296837525237c53",
+        "lib/RedSourcing/Context.rakumod": "42a7b401605697f4bd542e29a08dddc97c963b7433e79f99d91bb874067f41f4",
+        "lib/RedSourcing/Counters.rakumod": "220504100cd79025aeee05c2e8d1710afa5c507578e89009b2e2d89897e7d000",
+        "lib/RedSourcing/Decision.rakumod": "aa4e3bb951f9a76bc36b6a01bf34cb5bbd15853ba405f084d538e10a5f828097",
+        "lib/RedSourcing/Declaration.rakumod": "5b16ff9fcf09ff97cd4d4aef720ea86cbe368b5b0a77745096e6b38d44e2e420",
+        "lib/RedSourcing/Entity.rakumod": "7dfb1410286eab8f2166df33d0ecd96b29ad4f9e08fae90b6aae3d1ec4522092",
+        "lib/RedSourcing/Event.rakumod": "54838396a93d65b46e3c8520b3fabcd3b763028e91d9e20b9156040d13ae2613",
+        "lib/RedSourcing/EventType.rakumod": "5437f078e41bc16600b3cc817f3a92352a3358ff7b5eb0defcfb4827b840abca",
+        "lib/RedSourcing/Flow/Projection.rakumod": "6b04967148b10b4e2c5a8543a0a27ee9d7370868fca493241a10595b54910d6e",
+        "lib/RedSourcing/Flow.rakumod": "e70a7e9bc622a0019ff7ee683221bb10fa88063845bb3eb26b99f755dded1c59",
+        "lib/RedSourcing/Inspector.rakumod": "a6f1ccfc78c44cd653e9d3cee3f99171661af78e4b2c3dd9f70ffebf3dbcf222",
+        "lib/RedSourcing/IsCommand.rakumod": "c4fe1dc2e7fab461fcd82696f0a7fa9c8214c53ddc72e20307adbb5e18613bcf",
+        "lib/RedSourcing/IsEntityId.rakumod": "83a12215a6258a575884edb1c41abb7cdb8b94ab5bdb9a43716d10d1e66ef1c3",
+        "lib/RedSourcing/IsEntityIdMap.rakumod": "69260af38256e8abc0ef0abe039c385d679f2624eeebef6d82920f71bceeda64",
+        "lib/RedSourcing/IsService.rakumod": "45bdc94e4fce07a6c1bd99b331adbcc510848adb3223bdb7fb5452bfd7ee7a9e",
+        "lib/RedSourcing/IsTransactional.rakumod": "4bdb83c5ea3ded34d7bbdc0f61b0c112eb827185026b357fc688a6b44c1a19d6",
+        "lib/RedSourcing/Journal.rakumod": "180eadd538740eb66debd7c40ba5753fa6078db1d36c9d5769ad6cde59c4db99",
+        "lib/RedSourcing/Lifecycle.rakumod": "beb5e47e5f3de63c0e0eac87f4fb06b01727f25a8032b1d3274a8b98d3fa3cee",
+        "lib/RedSourcing/Metrics/Projection.rakumod": "161f44ea1eae72aef8a6fb0fe12395a11a2eeba49f6b426510b95827c3229001",
+        "lib/RedSourcing/PgJSON.rakumod": "2317f871eeafc4dfef963917fc07eb52536d95b2470278d4026cc8db0d00272e",
+        "lib/RedSourcing/Predicate.rakumod": "9ce32b3a06b81f85b2fe40a13840768fc04e14e482b568335f597d4ac166e485",
+        "lib/RedSourcing/Projection.rakumod": "74a97771b3d461b329aa8d825f6f8ed53aa6af009cdf84690415ca89893e4b25",
+        "lib/RedSourcing/QueryTemplate.rakumod": "d87b1d036c005c1249c10093d6842f1ff59d80a308fc08f0e9a94c884e52190f",
+        "lib/RedSourcing/Saga.rakumod": "e297cca52272ff7dee21f2990ffbcb298fbd6632283e0d34adcdca801a4b7ba0",
+        "lib/RedSourcing/Service/Context.rakumod": "5d9762fac060bb7e84d24f3876e0fc193655d88bd4ab80fe9aae43c24a0ee2bd",
+        "lib/RedSourcing/Service/Lease.rakumod": "c49012a3b74b76d8d5a5cadb31917bebd052020e62ccac97a782ae2d58f0634d",
+        "lib/RedSourcing/Service/Protocol.rakumod": "0cffc56fa73117720d09f37df2e787f8de1964a018d88780ffa21cf79b56c82b",
+        "lib/RedSourcing/Service.rakumod": "eba7e755848cc7c8299c18938f0532d4adc954dde05c01dbf0b50546c24ded53",
+        "lib/RedSourcing/Storage.rakumod": "84bf6705b9cd8b3067cf0faf27ca97f63bf7662d56df1cdad4a39326331347e3",
+        "lib/RedSourcing/StoredCommand.rakumod": "72650281509b63431cd538e226cf397f9c6b8939bb8f8ee8b601c52103db7f99",
+        "lib/RedSourcing/StoredCounter.rakumod": "25e9877b3c8378e42d51af3d8b8f16128fb5b477489c10bc57b60c248dcbc8ce",
+        "lib/RedSourcing/StoredEvent.rakumod": "22d01db1be3e7f92d8953cec30308bb514fc6d339ee7acd625c073d772893575",
+        "lib/RedSourcing/Tags.rakumod": "086fe01c363f365d4da69697eecc9a73fc30f01632a2cd4be4ebbcea4d69c270",
+        "lib/RedSourcing/Traits.rakumod": "6dddf25e7ca333d28ec03beec70b9a7ff19fdcf07bd8b4ad23fed1e80deb25ae",
+        "lib/RedSourcing/Utils.rakumod": "c1aa0888f8b4692b760ff4a3149d57ff4fda1237a4bcbb2cead75317ff8dad6b",
+        "lib/RedSourcing/Web/Charts.rakumod": "301d49f7f41a94f3c519d070e098af7172e5c12167a6d969e589f4ef1cd45913",
+        "lib/RedSourcing/Web/Console.rakumod": "06d12b5a7e547e648afde092a1b43f1b4ade6bdd2493b9b0b299a7a36af4ec85",
+        "lib/RedSourcing/Web/Flows.rakumod": "c67f505bbb224ef1d2cb7ac00fade39e2e7729473544161ae29c4dd863ca9b8d",
+        "lib/RedSourcing/Web/HTML.rakumod": "59d3e7596e6899ee498422230995042a5a5d395b50d826d96deeddf0f8857e26",
+        "lib/RedSourcing/Web/Metrics.rakumod": "f90a5bcaf7b90dcde20b4906d40cce204bbf9ed8d00076518bff696228d6839b",
+        "lib/RedSourcing/Web/Monitor.rakumod": "e723121bd9219b9dabc154eec1557a4559b1c7d1eaaf036c5642d058e8dc1a71",
+        "lib/RedSourcing/Web/Operations.rakumod": "2c5c9129b30f26dce7a7f798daac433e7d41d0d215dc7d65df6538ed66032399",
+        "lib/RedSourcing/Web/Presentation.rakumod": "6d54cfd9d99239280366ad3b3a0f4b2ac62d660d41f7755dd8fa128563638c06",
+        "lib/RedSourcing/Web/Server.rakumod": "0e3fc0d7354649ccc353caf4d29b0ae1c166f1c88e74b774d756de43d4d99867",
+        "lib/RedSourcing/Web.rakumod": "604faa01e365fca63fb2090e18422b504f7778510d747484bb4827b80c0240db",
+        "lib/RedSourcing/X/OptimisticLockFailed.rakumod": "6ddb8989aa7fb47c7ed519b9d1292a8dacbbfa5aba709b8e160e855d3cd478b5",
+        "lib/RedSourcing.rakumod": "0d7bf619bfa9a40794fe383ed423046974d3a613f872105b87e08897f5afeb80"
+      }
+    }
+  }
+}

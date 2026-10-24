@@ -78,3 +78,9 @@ docker compose -f examples/simple-flow/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Reading through proxies
+
+Simple status reads use `is query` through the proxy. The tutorial deliberately
+keeps a loaded `OrderCard` to compare captured state with a later reload; saga
+loads also remain explicit when inspecting durable decisions.

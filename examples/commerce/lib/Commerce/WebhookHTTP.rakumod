@@ -3,7 +3,7 @@ use Cro::HTTP::Client;
 unit module Commerce::WebhookHTTP;
 
 # Kept separate so the simulated demonstration does not load native TLS libraries.
-our sub post-webhook(Str $endpoint, Hash $payload, Str :$idempotency-key! --> UInt) {
+our sub post-webhook(Str $endpoint, Hash $payload, Str :$idempotency-key! --> UInt) is export {
     die Permanent.new(:message('Webhook endpoint must use HTTP or HTTPS'))
         unless $endpoint.starts-with('http://') || $endpoint.starts-with('https://');
     my @headers = 'Idempotency-Key' => $idempotency-key;

@@ -17,6 +17,7 @@ $cart.set-quantity(:product-id<coffee>, :quantity(2));
 $cart.remove-item(:product-id<mug>);
 
 my $summary-proxy = CartSummary.^with-ids(:cart-id<ana>);
+# Load one view for several fields and checkpoint that same state.
 my $summary = $summary-proxy.^load;
 say "Cart: {$summary.lines} product, {$summary.item-count} units, total {$summary.total}";
 $summary.^emit-snapshot;
@@ -29,7 +30,7 @@ say "Order {%order<order-id>}: {%order<item-count>} units, total {%order<total>}
 say "  {.<name>}: {.<quantity>} x {.<unit-price>}" for %order<items>.list;
 my %same-order = $pending.run;
 say "Repeated run: {%same-order<order-id>}";
-say "Restored summary: {$summary-proxy.^load.summary<checked-out> ?? 'checked out' !! 'open'}";
+say "Restored summary: {$summary-proxy.summary<checked-out> ?? 'checked out' !! 'open'}";
 
 try {
     CATCH { default { say "Rejected: {.message}" } }

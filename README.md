@@ -79,7 +79,7 @@ class CounterIncremented does Event {
 
 aggregate Counter {
     has Int $.id is entity-id;
-    has Int $.value = 0;
+    has Int $.value is query = 0;
 
     method APPLY(CounterIncremented $event) {
         $!value += $event.amount;
@@ -92,24 +92,24 @@ aggregate Counter {
 }
 
 projection CounterTotal {
-    has Int $.id is entity-id;
-    has Int $.value = 0;
+    has Int $.id    is entity-id;
+    has Int $.value is query = 0;
 
     method APPLY(CounterIncremented $event where { .id eqv $!id }) {
         $!value += $event.amount;
     }
 }
 
-my $counter = Counter.^with-ids(:id(1));
+my $counter = Counter.^with-ids: :1id;
 $counter.^create;                       # Initial snapshot, before any command
-say $counter.increment(:amount(2));    # 2
+say $counter.increment: :2amount;       # 2
 
-my $pending = $counter.increment(:amount(3), :!sync);
-say $pending.state;                    # Pending
-say $pending.run;                      # 5
-say $pending.run;                      # 5; reuse the stored result
+my $pending = $counter.increment: :3amount, :!sync;
+say $pending.state;                     # Pending
+say $pending.run;                       # 5
+say $pending.run;                       # 5; reuse the stored result
 
-say CounterTotal.^with-ids(:id(1)).^load.value; # 5
+say CounterTotal.^with-ids(:1id).value; # 5
 ```
 
 `red-sourcing-defaults` configures the store and creates missing tables by default.
@@ -120,6 +120,11 @@ The event emission method `counter-incremented` is generated from the aggregate'
 `APPLY` signature. It fills the entity ID, writes the next event version and
 applies the event. The command returns the resulting state. The projection's
 signature selects only events belonging to its counter.
+
+`is query` on `value` exposes its accessor through the proxy. Calling
+`CounterTotal.^with-ids(:1id).value` loads the current projection and returns
+its value. Read methods can also declare `is query`; their results preserve
+Raku types and collections are copied so callers cannot mutate entity state.
 
 Run the equivalent [counter example](examples/counter/README.md), or continue with
 the [aggregate, projection and saga REPL tutorial](docs/tutorials/simple-flow.md)
@@ -162,7 +167,7 @@ Importing the module alone does not configure a connection. Choose another file
 or override its values:
 
 ```raku
-my $settings = red-sourcing-defaults(:file<deployment.rakuconf>);
+my $settings  = red-sourcing-defaults(:file<deployment.rakuconf>);
 my $temporary = red-sourcing-defaults(:driver<SQLite>, :database(':memory:'));
 ```
 
@@ -186,10 +191,11 @@ See the [shared configuration guide](docs/configuration.md).
 | `saga` | Coordinate work over time | Its own committed control state; `.^advance` consumes new source events |
 
 `is entity-id` defines identity. `Entity.^with-ids(...)` returns a proxy; domain
-command calls use ordinary methods, while lifecycle/metadata helpers use `.^`:
+commands and declared queries use ordinary methods, while lifecycle/metadata
+helpers use `.^`:
 
 ```raku
-my $proxy = Counter.^with-ids(:id(1));
+my $proxy = Counter.^with-ids: :1id;
 $proxy.^create;                 # Persist the initial snapshot once
 my $entity = $proxy.^load;      # Reconstruct committed state
 $entity.^emit-snapshot;         # Save a checkpoint
@@ -218,8 +224,10 @@ its saved failure. Sagas submit fresh child records when retrying business failu
 
 Application domain events should only be emitted inside aggregate command
 handlers, through generated event methods. Projections cannot declare commands
-or own/emit domain events: load them and call ordinary query methods, such as
-`$projection-proxy.^load.summary`. Sagas call aggregate commands to change domain
+or own/emit domain events. Declare read methods with `is query`, such as
+`method summary is query { ... }`, and call them through the proxy:
+`$projection-proxy.summary`. Use `.^load` when you need an explicit entity for
+a checkpoint or inspection. Sagas call aggregate commands to change domain
 state; their native control events are managed by the runtime.
 
 Use `is transactional` on a projection's `APPLY` candidate to advance and

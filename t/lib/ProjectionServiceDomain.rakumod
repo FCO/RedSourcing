@@ -3,7 +3,7 @@ use ServiceDomain;
 unit module ProjectionServiceDomain;
 projection SharedProjection is export {
     has Str $.room-id is entity-id;
-    has @.messages;
+    has @.messages is query;
     method APPLY(ServiceMessage $e where { .room-id eq $!room-id }) { @!messages.push($e.text) }
     method serve(ServiceContext $context) is service {
         start {

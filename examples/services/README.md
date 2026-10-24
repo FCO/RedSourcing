@@ -15,8 +15,9 @@ Service: stopped
 
 The aggregate implements `serve`; a built-in saga controls its lifecycle through
 an internal service adapter. A Supplier is the simulated transport. Its callback
-uses fenced aggregate commands to record messages and explicit activity. Cleanup
-closes the subscription. Promises, subscriptions and callbacks stay in memory.
+uses `$runtime.bind(...)` to capture the service context, then calls commands
+on `$runtime.proxy` to record messages with the current ownership fence. Activity
+is renewed explicitly. Cleanup closes the subscription. Promises, subscriptions and callbacks stay in memory.
 
 This example uses a temporary SQLite file and one executor. The runtime's background
 loop wakes for context requests instead of waiting for the periodic timer pass.
@@ -45,4 +46,6 @@ curl http://127.0.0.1:3080/messages
 
 `POST /messages` returns `201` with the message count. `GET /messages` returns
 the room and its persisted messages. Writes use the fenced aggregate command;
-reads use `ServiceContext.state`. Cleanup closes the HTTP listener.
+reads use the `messages is query` accessor on the same proxy. The HTTP helper
+binds request processing to the service context automatically. Cleanup closes
+the HTTP listener.

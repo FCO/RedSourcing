@@ -7,7 +7,7 @@ class StockReleased does Event is export { has Str $.order-id; }
 
 aggregate Inventory is export {
     has Str $.order-id is entity-id;
-    has Bool $.reserved = False;
+    has Bool $.reserved is query = False;
     multi method APPLY(StockReserved $) { $!reserved = True }
     multi method APPLY(StockReleased $) { $!reserved = False }
     method reserve is command {

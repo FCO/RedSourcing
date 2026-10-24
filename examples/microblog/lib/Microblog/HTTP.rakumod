@@ -2,28 +2,24 @@ use RedSourcing;
 use Microblog::Domain;
 use Cro::HTTP::Router;
 use JSON::Fast;
-unit module Microblog::Server;
+unit module Microblog::HTTP;
 
 our $SUBSCRIBERS = 0;
 our $SUBSCRIBER-LOCK = Lock.new;
 
-projection MicroblogServer is export {
-    has Str $.application-id is entity-id;
-    has Str $.server-id is entity-id;
-    method APPLY(UserRegistered $e where { .application-id eq $!application-id }) { }
-    method serve(ServiceContext $runtime, Str :$host = '127.0.0.1', Int :$port = 3090,
-            Str :$assets!) is service {
-        my $application = $!application-id;
+sub serve-http(ServiceContext $runtime, Str :$application-id!, Str :$host = '127.0.0.1',
+        Int :$port = 3090, Str :$assets!) is export {
+        my $application = $application-id;
         sub user(Str $id) { User.^with-ids(:application-id($application), :user-id($id)) }
         sub timeline(Str $id) { UserTimeline.^with-ids(:application-id($application), :user-id($id)) }
         sub exists(Str $id) {
-            die 'User does not exist' unless $runtime.read(Directory.^with-ids(:application-id($application))).users{$id}:exists;
+            die 'User does not exist' unless Directory.^with-ids(:application-id($application)).users{$id}:exists;
         }
         sub page(Str $id, Bool :$profile = False, Int :$before = 0, Int :$limit = 50) {
             exists($id);
             my $proxy = $profile
                 ?? UserTweets.^with-ids(:application-id($application), :user-id($id)) !! timeline($id);
-            $runtime.read($proxy, :method<page>, :arguments(%(:$before, :$limit)))
+            $proxy.page(:$before, :$limit)
         }
         sub json(&action, Int :$status = 200) {
             CATCH {
@@ -42,13 +38,13 @@ projection MicroblogServer is export {
             get -> { static $assets.IO, 'index.html' }
             get -> 'assets', Str $file where * eq any(<app.css app.js>) { static $assets.IO, $file }
             get -> 'api', 'users' {
-                json { $runtime.read(Directory.^with-ids(:application-id($application)), :method<list>) }
+                json { Directory.^with-ids(:application-id($application)).list }
             }
             post -> 'api', 'users' {
                 request-body -> %body {
                     json :status(201), {
                         die 'Provide string id and name' unless %body<id> ~~ Str && %body<name> ~~ Str;
-                        $runtime.command(Accounts.^with-ids(:application-id($application)), 'register-user',
+                        Accounts.^with-ids(:application-id($application)).register-user(
                             :user-id(%body<id>), :name(%body<name>))
                     }
                 }
@@ -56,9 +52,9 @@ projection MicroblogServer is export {
             get -> 'api', 'users', Str $id {
                 json {
                     exists($id);
-                    my $state = $runtime.read(user($id));
+                    my $state = user($id);
                     %(id => $id, name => $state.name,
-                        following => $runtime.read(timeline($id), :method<follows>))
+                        following => timeline($id).follows)
                 }
             }
             get -> 'api', 'users', Str $id, 'tweets', Int :$before = 0, Int :$limit = 50 {
@@ -69,7 +65,7 @@ projection MicroblogServer is export {
                     json :status(201), {
                         exists($id);
                         die 'Provide a text string' unless %body<text> ~~ Str;
-                        $runtime.command(user($id), 'tweet', :text(%body<text>))
+                        user($id).tweet(:text(%body<text>))
                     }
                 }
             }
@@ -77,10 +73,10 @@ projection MicroblogServer is export {
                 json { page($id, :$before, :$limit) }
             }
             post -> 'api', 'users', Str $id, 'following', Str $author {
-                json { exists($id); exists($author); $runtime.command(user($id), 'follow', :author-id($author)); %(ok => True) }
+                json { exists($id); exists($author); user($id).follow(:author-id($author)); %(ok => True) }
             }
             delete -> 'api', 'users', Str $id, 'following', Str $author {
-                json { exists($id); exists($author); $runtime.command(user($id), 'unfollow', :author-id($author)); %(ok => True) }
+                json { exists($id); exists($author); user($id).unfollow(:author-id($author)); %(ok => True) }
             }
             get -> 'api', 'users', Str $id, 'events' {
                 CATCH { default { response.status = 404; content 'application/json', %(error => .message) } }
@@ -94,7 +90,7 @@ projection MicroblogServer is export {
                     my $ticks = 0;
                     sub update {
                         my $payload = %(page => page($id),
-                            following => $runtime.read(timeline($id), :method<follows>));
+                            following => timeline($id).follows);
                         unless $previous.defined && $payload eqv $previous {
                             $previous = $payload;
                             my $data = to-json($payload, :!pretty);
@@ -102,14 +98,14 @@ projection MicroblogServer is export {
                         }
                     }
                     update();
-                    whenever Supply.interval(1) {
+                    my &tick = $runtime.bind({
                         update();
                         $ticks++;
                         emit ": heartbeat\n\n".encode('utf-8') if $ticks %% 15;
                         $runtime.touch if $ticks %% 30;
-                    }
+                    });
+                    whenever Supply.interval(1) { tick() }
                 }
             }
         })
-    }
 }

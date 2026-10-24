@@ -11,7 +11,7 @@ has Bool $.checked-out = False;
 has Str $.order-id = '';
 has %.quantities;
 
-method summary {
+method summary is query {
     %(:$!cart-id, :$!lines, :$!item-count, :$!total, :$!checked-out, :$!order-id)
 }
 

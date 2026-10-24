@@ -74,7 +74,8 @@
     "RedSourcing::Service": "lib/RedSourcing/Service.rakumod",
     "RedSourcing::Service::Protocol": "lib/RedSourcing/Service/Protocol.rakumod",
     "RedSourcing::Service::Context": "lib/RedSourcing/Service/Context.rakumod",
-    "RedSourcing::Service::Lease": "lib/RedSourcing/Service/Lease.rakumod"
+    "RedSourcing::Service::Lease": "lib/RedSourcing/Service/Lease.rakumod",
+    "RedSourcing::Query": "lib/RedSourcing/Query.rakumod"
   },
   "resources": [
     "app.css",

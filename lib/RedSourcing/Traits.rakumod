@@ -5,6 +5,7 @@ use RedSourcing::IsEntityId;
 use RedSourcing::IsEntityIdMap;
 use RedSourcing::IsCommand;
 use RedSourcing::IsService;
+use RedSourcing::Query;
 use RedSourcing::IsTransactional;
 use RedSourcing::Tags;
 
@@ -34,11 +35,13 @@ multi trait_mod:<is>(Attribute $r, Bool :$entity-id where *.so) is export {
 
 multi trait_mod:<is>(Method $method, :$command) is export {
 	die 'A service cannot also be a command' if $method ~~ RedSourcing::IsService;
+    die 'A query cannot also be a command' if $method ~~ IsQuery;
 	$method does IsCommand
 }
 
 multi trait_mod:<is>(Method $method, Bool :$service where *.so) is export {
     die 'A service cannot also be a command' if $method ~~ IsCommand;
+    die 'A query cannot also be a service' if $method ~~ IsQuery;
     my $receiver = $method.signature.params.first(*.invocant);
     my $entity = $receiver.defined && $receiver.type.HOW.^mro
         .map(*.^name).first(* eq 'Metamodel::RedSourcing::EntityHOW').defined;
@@ -51,6 +54,27 @@ multi trait_mod:<is>(Method $method, Bool :$service where *.so) is export {
             && @parameters.head.type.^name eq 'RedSourcing::Service::Context::ServiceContext'
             && @parameters.skip(1).map(*.named).all;
     $method does RedSourcing::IsService;
+}
+
+sub query-owner(Mu $type) {
+    $type.HOW.^mro.grep(*.^name eq 'Metamodel::RedSourcing::EntityHOW').elems
+        && !$type.HOW.^mro.grep(*.^name eq 'Metamodel::RedSourcing::SagaHOW').elems
+}
+sub query-name(Str $name) {
+    die "Reserved query name: $name" if $name.starts-with('_rs-') || $name eq any(<APPLY REACT new bless clone BUILD BUILDALL TWEAK DESTROY FALLBACK>);
+}
+multi trait_mod:<is>(Method $method, Bool :$query where *.so) is export {
+    my $receiver = $method.signature.params.first(*.invocant);
+    die 'is query requires an aggregate or projection method' unless $receiver.defined && query-owner($receiver.type);
+    query-name($method.name);
+    die 'A query cannot also be a command or service' if $method ~~ IsCommand || $method ~~ RedSourcing::IsService;
+    $method does IsQuery;
+}
+multi trait_mod:<is>(Attribute $attribute, Bool :$query where *.so) is export {
+    die 'is query requires an aggregate or projection attribute' unless query-owner($attribute.package);
+    die 'is query requires a public accessor' unless $attribute.has_accessor;
+    query-name($attribute.name.substr(2));
+    $attribute does QueryAttribute;
 }
 
 multi trait_mod:<is>(Method $method, Bool :$transactional where *.so) is export {

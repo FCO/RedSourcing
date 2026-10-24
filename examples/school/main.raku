@@ -39,7 +39,7 @@ multi sub MAIN('demo' = 'demo', Str :$database, Str :$file) {
     $school.cancel('student-1', 'math');
     $school.enroll('student-31', 'math');
     say 'Math students after cancellation and enrollment: ' ~ $school.classroom('math').student-count;
-    say 'Replayed active enrollments: ' ~ SchoolOverview.^with-ids.^load.enrollment-count;
+    say 'Replayed active enrollments: ' ~ SchoolOverview.^with-ids.enrollment-count;
 }
 
 multi sub MAIN('student-add', Str $id, Str :$name!, Str :$database, Str :$file) {

@@ -116,7 +116,8 @@ sequenceDiagram
 
 ## Projections
 
-- `Balance`: current balance for one client. Its `.amount` method reads a loaded projection; `.^load.balance` reads the loaded projection directly.
+- `Balance`: current balance for one client. Its `is query` method is available
+  directly on the proxy: `Balance.^with-ids(:client-id(1)).amount`.
 - `MonthlyStatement`: one projection per client, with a current `balance`,
   closing balances in `balance-by-month` and entry lists in `transactions-by-month`.
   The hash keys are numeric periods (`year * 100 + month`, such as `202610`).
@@ -135,7 +136,7 @@ my $statement = $proxy.^load;
 say $statement.balance;
 say $statement.balance-by-month{202610};
 .say for $statement.transactions-by-month{202610}.list;
-say $proxy.^load.amount-on-month(:period(202610));
+say $proxy.amount-on-month(:period(202610));
 $statement.^emit-snapshot;
 my $restored = $proxy.^load;
 ```

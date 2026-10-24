@@ -47,8 +47,8 @@ method reserve(Str :$order-id!, UInt :$quantity! where * > 0) is command {
     %(:$!warehouse-id, :$!sku, :$order-id, :$quantity)
 }
 method release(Str :$order-id!) is command {
-    require ::('Commerce::Order');
-    my $order = ::('Commerce::Order').^with-ids(:$order-id).^load;
+    require Commerce::Order;
+    my $order = Commerce::Order.^with-ids(:$order-id).^load;
     die Permanent.new(:message('Dispatch-authorized reservations cannot be released'))
         if $order.defined && $order.status eq any(<dispatching shipped delivered return-requested return-received returned>);
     die 'Dispatched stock needs a physical return' if $!dispatched{$order-id}:exists;
@@ -62,8 +62,8 @@ method dispatch(Str :$order-id!, UInt :$quantity! where * > 0) is command {
     if $!dispatched{$order-id}:exists {
         die 'Dispatch reused with different quantity' unless $!dispatched{$order-id} == $quantity;
     } else {
-        require ::('Commerce::Shipment');
-        my $shipment = ::('Commerce::Shipment').^with-ids(:$order-id).^load;
+        require Commerce::Shipment;
+        my $shipment = Commerce::Shipment.^with-ids(:$order-id).^load;
         die 'Physical handoff must be confirmed first' unless $shipment.defined && $shipment.status eq any(<dispatched delivered>);
         die 'Missing or mismatched reservation' unless $!reservations{$order-id}:exists
             && $!reservations{$order-id} == $quantity;
@@ -72,8 +72,8 @@ method dispatch(Str :$order-id!, UInt :$quantity! where * > 0) is command {
     %(:$order-id, :$!sku, :$quantity)
 }
 method restock-return(Str :$order-id!, UInt :$quantity! where * > 0) is command {
-    require ::('Commerce::Order');
-    my $order = ::('Commerce::Order').^with-ids(:$order-id).^load;
+    require Commerce::Order;
+    my $order = Commerce::Order.^with-ids(:$order-id).^load;
     die 'Warehouse must acknowledge the returned goods first' unless $order.defined && $order.status eq any(<return-received returned>);
     die 'Return does not match dispatched goods' unless $!dispatched{$order-id}:exists
         && $!dispatched{$order-id} == $quantity;

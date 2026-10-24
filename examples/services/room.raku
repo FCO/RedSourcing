@@ -7,16 +7,21 @@ my $incoming = Supplier.new;
 class MessageRecorded does Event { has Str $.room-id; has Str $.text }
 aggregate Room[:!auto-snapshot] {
     has Str $.room-id is entity-id;
-    has @.messages;
+    has @.messages is query;
     method APPLY(MessageRecorded $event) { @!messages.push($event.text) }
-    method record-message(Str :$text!) is command { self.message-recorded(:$text); @!messages.elems }
+    method record-message(Str :$text!) is command {
+        self.message-recorded(:$text);
+        @!messages.elems
+    }
     method serve(ServiceContext $runtime) is service {
         start {
-            my $id = $runtime.state.room-id;
-            my $subscription = $incoming.Supply.grep(*.<room> eq $id).tap(-> %message {
+            my $room = $runtime.proxy;
+            my $id = $room.room-id;
+            my &receive = $runtime.bind(-> %message {
                 $runtime.touch;
-                $runtime.aggregate.record-message(:text(%message<text>));
+                $room.record-message(:text(%message<text>));
             });
+            my $subscription = $incoming.Supply.grep(*.<room> eq $id).tap(&receive);
             $runtime.on-stop({ $subscription.close });
             $runtime.ready;
             await $runtime.stopping;
@@ -46,5 +51,5 @@ $room.^stop-service('serve');
 wait-phase('stopped');
 $runtime.shutdown;
 await $controller;
-say 'Messages: ' ~ $room.^load.messages.join(', ');
+say 'Messages: ' ~ $room.messages.join(', ');
 say 'Service: ' ~ $room.^service-status('serve')<phase>;

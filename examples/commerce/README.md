@@ -224,7 +224,7 @@ $shop.drain;
 # An external carrier integration would submit this confirmation.
 $shop.shipment('order-1').deliver;
 $shop.drain;
-say $shop.order('order-1').^load.status; # delivered
+say $shop.order('order-1').status; # delivered
 ```
 
 Run with `-Iexamples/commerce/lib` when using those imports outside `main.raku`.

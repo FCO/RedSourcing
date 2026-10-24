@@ -6,7 +6,7 @@ unit projection Balance;
 has Int $.client-id is entity-id;
 has Rat() $.balance = 0.0;
 
-method amount { $!balance }
+method amount is query { $!balance }
 
 multi method APPLY(Deposited $_ where { .client-id == $!client-id }) {
     $!balance += .amount;

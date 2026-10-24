@@ -54,14 +54,15 @@ until $room.^service-status('serve')<phase> eq 'active' {
 }
 my $status = $room.^service-status('serve');
 my $context = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$status<service-id>} });
-my $queued = $context.command($target, 'record-message', :text<old-queued>, :!sync);
+my $queued = $context.bind({ $target.record-message(:text<old-queued>, :!sync) })();
 $directory.IO.add('ready').spurt(to-json(%(generation => $context.generation, command => $queued.id)));
 # Simulate a paused executor: no ticks and no heartbeats until the parent resumes it.
 $deadline = now + 60;
 until $directory.IO.add('resume').e { die 'Resume timed out' if now > $deadline; await Promise.in(.02) }
 my %result;
 try { $queued.run; %result<queued> = 'accepted'; CATCH { default { %result<queued> = .message } } }
-try { $context.command($target, 'record-message', :text<old-direct>); %result<direct> = 'accepted'; CATCH { default { %result<direct> = .message } } }
+try { $context.bind({ $target.record-message(:text<old-direct>) })(); %result<direct> = 'accepted'; CATCH { default { %result<direct> = .message } } }
+try { $context.bind({ $room.messages })(); %result<query> = 'accepted'; CATCH { default { %result<query> = .message } } }
 $runtime.tick;
 %result<stopping> = $context.stopping.status.Str;
 $directory.IO.add('result').spurt(to-json(%result));
@@ -100,6 +101,7 @@ $directory.add('resume').spurt('resume');
 my %result = wait-file('result');
 like %result<queued>, / 'ownership' /, 'persisted old command is rejected after takeover';
 like %result<direct>, / 'ownership' /, 'old live context cannot submit an authorized command';
+like %result<query>, / 'ownership' /, 'old implicit query is rejected after takeover';
 is %result<stopping>, 'Kept', 'resumed executor observes loss and receives stop signal';
 await Promise.anyof($finished, Promise.in(15));
 is $finished.status, Kept, 'worker exits';
@@ -109,5 +111,5 @@ is $room.^load.messages.elems, 0, 'stale execution persisted no domain messages'
 is $room.^service-status('serve')<lease><owner>, 'replacement', 'old shutdown cannot release the newer lease';
 my $id = $current<service-id>;
 my $ctx = $ServiceDomain::LOCK.protect({ %ServiceDomain::CONTEXTS{$id} });
-is $ctx.command($target, 'record-message', :text<current>), 1, 'current generation can still write';
+is $ctx.bind({ $target.record-message(:text<current>) })(), 1, 'current generation can still write';
 done-testing;

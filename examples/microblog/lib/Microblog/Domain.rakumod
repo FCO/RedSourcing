@@ -66,8 +66,8 @@ sub tweet-page (Str $application, @authors, Int :$before = 0, Int :$limit = 50 -
 aggregate User is export {
     has Str $.application-id is entity-id;
     has Str $.user-id is entity-id;
-    has Bool $.registered = False;
-    has Str $.name        = "";
+    has Bool $.registered is query = False;
+    has Str $.name is query = "";
     has %.following;
 
     multi method APPLY (UserRegistered $e) {
@@ -106,7 +106,7 @@ aggregate User is export {
     method follow (Str :$author-id!) is command {
         die "User does not exist" unless $!registered;
         die "Cannot follow yourself" if $author-id eq $!user-id;
-        die "Author does not exist" unless User.^with-ids(:application-id($!application-id), :user-id($author-id)).^load.registered;
+        die "Author does not exist" unless User.^with-ids(:application-id($!application-id), :user-id($author-id)).registered;
         self.user-followed(:author-id($author-id)) unless %!following{$author-id}:exists;
         True
     }
@@ -157,6 +157,13 @@ projection TweetIndex is export {
             && $record.body eq $e.text && $record.published eq $e.published-at
             && $record.position == $e.StoredEvent.id
     }
+    method serve(ServiceContext $runtime, Str :$host = '127.0.0.1', Int :$port = 3090,
+            Str :$assets!) is service {
+        require Microblog::HTTP <&serve-http>;
+        serve-http($runtime,
+            :application-id($!application-id), :$host, :$port, :$assets)
+    }
+
 }
 
 projection UserTweets is export {
@@ -167,7 +174,7 @@ projection UserTweets is export {
         .application-id eq $!application-id && .user-id eq $!user-id
     }) { }
 
-    method page (Int :$before = 0, Int :$limit = 50) {
+    method page (Int :$before = 0, Int :$limit = 50) is query {
         tweet-page($!application-id, [$!user-id], :before($before), :limit($limit))
     }
 }
@@ -189,18 +196,18 @@ projection UserTimeline is export {
         %!following{$e.author-id}:delete
     }
 
-    method page (Int :$before = 0, Int :$limit = 50) {
+    method page (Int :$before = 0, Int :$limit = 50) is query {
         tweet-page($!application-id, [$!user-id, |%!following.keys.sort], :before($before), :limit($limit))
     }
 
-    method follows {
+    method follows is query {
         %!following.keys.sort.Array
     }
 }
 
 projection Directory is export {
     has Str $.application-id is entity-id;
-    has %.users;
+    has %.users is query;
 
     method APPLY (UserRegistered $e where {
         .application-id eq $!application-id
@@ -208,7 +215,7 @@ projection Directory is export {
         %!users{$e.user-id} = $e.name
     }
 
-    method list {
+    method list is query {
         %!users.keys.sort.map({ %(id => $_, name => %!users{$_}) }).Array
     }
 }

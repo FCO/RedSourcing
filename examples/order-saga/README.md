@@ -119,3 +119,9 @@ docker compose -f examples/order-saga/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Reading through proxies
+
+The inventory's `reserved is query` accessor can be read directly through its
+proxy. The saga is explicitly loaded where the demo inspects its durable actions
+and compensations.

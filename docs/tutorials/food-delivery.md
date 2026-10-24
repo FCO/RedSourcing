@@ -391,7 +391,7 @@ method APPLY(ForDeliveryOrder $event where { .customer-id eq $!customer-id }) {
 ```
 
 The module imports `RedSourcing` and `DeliveryEvents` and defines the query
-commands `tracking(:$order-id!)` and `orders-list` as well. The event role matches
+methods `tracking(:$order-id!)` and `orders-list`, both declared `is query`. The event role matches
 every order lifecycle event, and the `where` constraint binds the selected
 customer to the loaded projection. RedSourcing derives SQL selection rules from
 that signature. The status method runs in the handler after event reconstruction.
@@ -402,8 +402,8 @@ an empty view.
 
 ```raku
 my $customer = CustomerOrders.^with-ids(:customer-id<ana>);
-say $customer.^load.tracking(:order-id<order-1001>)<status>; # assigned
-say $customer.^load.orders-list.elems;                    # 1
+say $customer.tracking(:order-id<order-1001>)<status>; # assigned
+say $customer.orders-list.elems;                    # 1
 ```
 
 [RestaurantBoard.rakumod](../../examples/food-delivery/RestaurantBoard.rakumod)
@@ -412,7 +412,7 @@ uses the same role with `where { .restaurant-id eq $!restaurant-id }`. Its
 
 ```raku
 my $board = RestaurantBoard.^with-ids(:restaurant-id<green-kitchen>);
-say $board.^load.active-orders.elems; # 1
+say $board.active-orders.elems; # 1
 ```
 
 [DeliveryTotals.rakumod](../../examples/food-delivery/DeliveryTotals.rakumod)
@@ -421,8 +421,8 @@ from every order stream. It counts each outcome and adds the total only on
 `OrderDelivered`. Its delivered value includes the delivery fee and does not
 represent a payment settlement or restaurant profit.
 
-Projection queries are ordinary methods on loaded read models, such as
-`$customer.^load.tracking(...)` or `DeliveryTotals.^with-ids.^load.report`.
+Projection queries are methods declared `is query` and called on proxies, such as
+`$customer.tracking(...)` or `DeliveryTotals.^with-ids.report`.
 Projections cannot declare commands or own/emit domain events. Their `APPLY`
 methods derive state from facts emitted by aggregate commands. The `where` blocks
 in their signatures become SQL filters through Red: they are not called once
@@ -508,7 +508,7 @@ $other.place-order(:restaurant-id<green-kitchen>, :customer-id<bob>,
     :address('20 Market Street'), :items{ bowl => 1 });
 $other.cancel(:reason('Customer changed plans'));
 
-my %totals = DeliveryTotals.^with-ids.^load.report;
+my %totals = DeliveryTotals.^with-ids.report;
 say %totals<placed>;          # 2
 say %totals<delivered>;       # 1
 say %totals<cancelled>;       # 1

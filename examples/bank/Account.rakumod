@@ -5,7 +5,7 @@ use BankMoney;
 unit aggregate Account;
 
 has Int   $.client-id is entity-id;
-has Rat() $.amount = 0.0;
+has Rat() $.amount is query = 0.0;
 
 multi method APPLY(Deposited $event) { $!amount += $event.amount }
 multi method APPLY(Transaction $event) is entity-id-map(:from-client<client-id>) {

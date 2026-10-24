@@ -309,3 +309,9 @@ docker compose -f examples/real-estate/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Reading through proxies
+
+Public projection reads such as `Portfolio.properties` and `RepairChat.messages`
+use `is query` and are called directly on proxies. The rent view is loaded once
+when several fields must come from the same reconstructed state.

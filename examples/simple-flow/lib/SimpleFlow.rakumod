@@ -14,7 +14,7 @@ class OrderConfirmed does Event is export {
 aggregate Order is export {
     has Str $.order-id is entity-id;
     has Str $.item = '';
-    has Str $.status = 'new';
+    has Str $.status is query = 'new';
 
     multi method APPLY(OrderPlaced $event) {
         $!item = $event.item;
@@ -40,7 +40,7 @@ aggregate Order is export {
 projection OrderCard is export {
     has Str $.order-id is entity-id;
     has Str $.item = '';
-    has Str $.status = 'new';
+    has Str $.status is query = 'new';
 
     multi method APPLY(OrderPlaced $event where { .order-id eqv $!order-id }) {
         $!item = $event.item;

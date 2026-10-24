@@ -82,11 +82,11 @@ submission revalidates the current cart state. Sagas can coordinate retries.
 
 `CartSummary` selects events for one cart through the `APPLY` signatures. It shows
 the number of distinct product lines, total units, total price and checkout state.
-Its `summary` method is an ordinary query on the loaded projection:
+Its `summary` method is declared `is query` and can be called directly on the proxy:
 
 ```raku
 my $proxy = CartSummary.^with-ids(:cart-id<ana>);
-my %summary = $proxy.^load.summary;
+my %summary = $proxy.summary;
 say %summary<item-count>;
 say %summary<total>;
 my $loaded = $proxy.^load;

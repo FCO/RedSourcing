@@ -27,8 +27,8 @@ $order.assign-courier(:courier-id<sam>);
 
 my $customer = CustomerOrders.^with-ids(:customer-id<ana>);
 my $board = RestaurantBoard.^with-ids(:restaurant-id<green-kitchen>);
-say "Customer tracking: {$customer.^load.tracking(:order-id<order-1001>)<status>}";
-say "Restaurant board: {$board.^load.active-orders.elems} active order";
+say "Customer tracking: {$customer.tracking(:order-id<order-1001>)<status>}";
+say "Restaurant board: {$board.active-orders.elems} active order";
 $order.^load.^emit-snapshot;
 $customer.^load.^emit-snapshot;
 
@@ -41,15 +41,15 @@ my $pending = $order.deliver(:courier-id<sam>, :!sync);
 say "Deferred delivery: {$pending.state}";
 say "Delivery result: {$pending.run}";
 say "Repeated command: {$pending.run}";
-say "Tracking after checkpoint: {$customer.^load.tracking(:order-id<order-1001>)<status>}";
+say "Tracking after checkpoint: {$customer.tracking(:order-id<order-1001>)<status>}";
 
 my $other = DeliveryOrder.^with-ids(:order-id<order-1002>);
 $other.^create;
 $other.place-order(:restaurant-id<green-kitchen>, :customer-id<bob>,
     :address('20 Market Street'), :items{ bowl => 1 });
 $other.cancel(:reason('Customer changed plans'));
-say "Restaurant board: {$board.^load.active-orders.elems} active orders";
+say "Restaurant board: {$board.active-orders.elems} active orders";
 
-my %totals = DeliveryTotals.^with-ids.^load.report;
+my %totals = DeliveryTotals.^with-ids.report;
 say "Totals: {%totals<placed>} placed, {%totals<delivered>} delivered, "
     ~ "{%totals<cancelled>} cancelled, delivered value {%totals<delivered-value>}";

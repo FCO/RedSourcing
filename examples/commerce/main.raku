@@ -19,32 +19,36 @@ sub MAIN(Str :$database = ':memory:', Str :$webhook-url = %*ENV<COMMERCE_WEBHOOK
         $shop.drain(:now($clock));
         $shop.shipment('delivered').deliver;
         $shop.drain(:now($clock));
-        say "Delivered order: {$shop.order('delivered').^load.status}";
+        say "Delivered order: {$shop.order('delivered').status}";
 
         $shop.order('delivered').request-return(:reason('Changed my mind'));
         $shop.drain(:now($clock));
         $shop.order('delivered').receive-return;
         $shop.drain(:now($clock));
-        say "Returned order: {$shop.order('delivered').^load.status}";
+        say "Returned order: {$shop.order('delivered').status}";
 
-        $shop.purchase('cancelled', :items{:mug(1)}); $shop.drain(:now($clock));
+        $shop.purchase('cancelled', :items{:mug(1)});
+        $shop.drain(:now($clock));
         $shop.order('cancelled').request-cancellation(:reason('Wrong address'));
         $shop.drain(:now($clock));
-        say "Cancelled order: {$shop.order('cancelled').^load.status}";
+        say "Cancelled order: {$shop.order('cancelled').status}";
 
         provider-fault('payments', 'charge', :kind<permanent>);
-        $shop.purchase('declined', :items{:coffee(1)}); $shop.drain(:now($clock));
-        say "Declined order: {$shop.order('declined').^load.status}";
+        $shop.purchase('declined', :items{:coffee(1)});
+        $shop.drain(:now($clock));
+        say "Declined order: {$shop.order('declined').status}";
 
         provider-fault('payments', 'charge', :kind<uncertain>);
-        $shop.purchase('recovered', :items{:coffee(1)}); $shop.drain(:now($clock));
+        $shop.purchase('recovered', :items{:coffee(1)});
+        $shop.drain(:now($clock));
         $shop.checkpoint;
         $shop = Shop.new(:$webhook-url).initialize;
         $shop.drain(:now($clock.later(:seconds(10))));
-        say "Recovered purchase: {$shop.order('recovered').^load.status}";
+        say "Recovered purchase: {$shop.order('recovered').status}";
 
         # Reserve almost all coffee; its independent replenishment saga receives stock.
-        $shop.purchase('large-order', :items{:coffee(9)}); $shop.drain(:now($clock.later(:seconds(20))));
+        $shop.purchase('large-order', :items{:coffee(9)});
+        $shop.drain(:now($clock.later(:seconds(20))));
         $shop.checkpoint;
     }
     my $summary = $shop.summary;

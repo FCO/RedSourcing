@@ -3,7 +3,7 @@ use lib 'examples/microblog/lib';
 use RedSourcing;
 use RedSourcing::Service;
 use Microblog::Domain;
-use Microblog::Server;
+use Microblog::HTTP;
 use Cro::HTTP::Client;
 use JSON::Fast;
 
@@ -16,7 +16,7 @@ seed('http');
 my $runtime = ServiceRuntime.new(:poll-interval(.05), :stop-grace(1)).initialize;
 LEAVE $runtime.shutdown;
 my $port = 40000 + (^20000).pick;
-my $server = MicroblogServer.^with-ids(:application-id<http>, :server-id<public>);
+my $server = TweetIndex.^with-ids(:application-id<http>);
 $server.^start-service('serve', :args(%(:$port, assets => 'examples/microblog/public'.IO.absolute.Str)));
 my $controller = $runtime.run;
 sub wait-for(&check, Numeric $seconds = 10) {
@@ -63,6 +63,28 @@ is $status, 201, 'registration creates aggregate through fenced command';
 ($status, $body) = fetch('/api/users/dani');
 is from-json($body)<name>, 'Dani', 'registered user can be read';
 
+# Split request body arrives on a later socket callback, outside the route's
+# original stack. It must still carry the service context and command fence.
+{
+    my $socket = await IO::Socket::Async.connect('127.0.0.1', $port);
+    my $received = '';
+    my $complete = Promise.new;
+    my $tap = $socket.Supply.tap(-> $chunk {
+        $received ~= $chunk;
+        $complete.keep(True) if $complete.status == Planned && $received.contains('201 Created');
+    }, :quit(-> $ { }));
+    my $payload = '{"text":"split HTTP body"}';
+    await $socket.print("POST /api/users/ana/tweets HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {$payload.encode.elems}\r\n\r\n");
+    await Promise.in(.1);
+    await $socket.print($payload);
+    await Promise.anyof($complete, Promise.in(10));
+    is $complete.status, Kept, 'delayed request body keeps service context';
+    $socket.close; $tap.close;
+    my $command = StoredCommand.^all.grep({ .method eq 'tweet' && .data<text> eq 'split HTTP body' }).head;
+    is $command.service-context<service-id>, $server.^service-status('serve')<service-id>,
+        'implicit HTTP command persists its source generation';
+}
+
 # Real TCP disconnect must cancel the SSE supply and its polling interval.
 for ^3 -> $attempt {
     my $socket = await IO::Socket::Async.connect('127.0.0.1', $port);
@@ -81,12 +103,12 @@ for ^3 -> $attempt {
         await Promise.in(2.2);
         is $received.match(/ 'event: timeline' /, :g).elems, 1, 'unchanged state does not resend and redraw the feed';
     }
-    is $Microblog::Server::SUBSCRIBER-LOCK.protect({ $Microblog::Server::SUBSCRIBERS }), 1, 'one active subscriber';
+    is $Microblog::HTTP::SUBSCRIBER-LOCK.protect({ $Microblog::HTTP::SUBSCRIBERS }), 1, 'one active subscriber';
     fetch('/api/users/ana/tweets', :method<post>, :body(%(text => "SSE publication $attempt")));
     await Promise.anyof($changed, Promise.in(10));
     is $changed.status, Kept, 'SSE receives a new tweet';
     $socket.close; $tap.close;
-    wait-for({ $Microblog::Server::SUBSCRIBER-LOCK.protect({ $Microblog::Server::SUBSCRIBERS }) == 0 });
+    wait-for({ $Microblog::HTTP::SUBSCRIBER-LOCK.protect({ $Microblog::HTTP::SUBSCRIBERS }) == 0 });
     pass 'disconnect cancels subscriber and timer';
 }
 $server.^stop-service('serve');

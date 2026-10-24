@@ -9,6 +9,7 @@ use RedSourcing::EventType;
 use RedSourcing::Lifecycle;
 use RedSourcing::IsService;
 use RedSourcing::Context;
+use RedSourcing::Query;
 use RedSourcing::Config;
 use Red::DB;
 use JSON::Fast;
@@ -202,6 +203,10 @@ sub control-service($entity, Str :$operation!, Str :$service!, Hash :$arguments 
                 %next<generation> = $fence<generation>; %next<owner> = $fence<owner>;
                 %next<phase> = 'starting'; %next<ready-deadline> = $now + $report<ready-timeout>;
             }
+            when 'stop-claimed' {
+                die 'Service is not stopping' unless !%next<desired> && %next<phase> eq 'stopping';
+                %next<generation> = $fence<generation>; %next<owner> = $fence<owner>;
+            }
             when 'ready' {
                 die 'Service is stopping' unless %next<desired> && %next<generation> == $fence<generation>;
                 %next<phase> = 'active';
@@ -297,13 +302,17 @@ class ServiceRuntime is export {
         })
     }
     method context-command(ServiceContext $context, Str $method, Capture $args, :$target = $context.proxy) {
+        die 'command submission is forbidden in QUERY' if ((try $*REDSOURCING-PHASE) // '') eq 'QUERY';
         self.context-work({
+            my $*REDSOURCING-PHASE = 'EXECUTE';
+            my $*REDSOURCING-SERVICE-CONTEXT = $context;
             my $*REDSOURCING-SERVICE-FENCE = $context.fence;
             die "Not an aggregate command: $method" unless $target.^entity-type.^commands{$method}:exists;
             $target."$method"(|$args)
         })
     }
     method context-state(ServiceContext $context, :$target = $context.proxy, Str :$method, Hash :$arguments = {}) {
+        my $read-phase = ((try $*REDSOURCING-PHASE) // '') eq 'QUERY' ?? 'QUERY' !! 'SERVICE-READ';
         self.context-work({ journal-do {
             assert-service-fence(journal-connection(), $context.fence);
             my $entity = $target.^entity-type.^restore-and-replay(:stream($target.^stream-name),
@@ -311,10 +320,25 @@ class ServiceRuntime is export {
             if $method.defined {
                 die "Cannot invoke a command or service as a read: $method"
                     if ($entity.^commands{$method}:exists) || ($entity.^services{$method}:exists);
-                my $*REDSOURCING-PHASE = 'SERVICE-READ';
+                my $*REDSOURCING-PHASE = $read-phase;
                 copy-data($entity."$method"(|$arguments))
             } else { $entity }
         } })
+    }
+    method context-query(ServiceContext $context, $target, Str $method, Capture $arguments) {
+        self.context-work({
+            my $*REDSOURCING-PHASE = 'EXECUTE';
+            my $*REDSOURCING-SERVICE-CONTEXT = $context;
+            # The envelope also commits maintenance when a query returns Nil.
+            my $result = journal-do {
+                assert-service-fence(journal-connection(), $context.fence);
+                die "Not a declared query: $method" unless $target.^entity-type.^queries{$method}:exists;
+                my $entity = $target.^entity-type.^restore-and-replay(:stream($target.^stream-name),
+                    |$target.^ids-map)<entity>;
+                %(value => query-invoke($entity, $method, $arguments))
+            };
+            $result<value>
+        })
     }
     method context-report(ServiceContext $context, Str $operation) {
         self.context-work({ self.report($context, $operation) })
@@ -374,6 +398,7 @@ class ServiceRuntime is export {
             my $method = $definition<method>;
             my %arguments = copy-data($definition<arguments>);
             my $promise = start {
+                my $*REDSOURCING-SERVICE-CONTEXT = $context;
                 my $*REDSOURCING-PHASE = 'SERVICE';
                 my $*RED-TRANSACTION-RUNNING = False;
                 my $*COMMAND = Any;
@@ -487,11 +512,14 @@ class ServiceRuntime is export {
                         && (%definition<generation> != $lease<generation> || %definition<phase> eq any(<requested retry>)) {
                     self.report($context, 'claimed', :ready-timeout($!ready-timeout));
                 }
-                if !%!runs{$id}.defined && !%definition<desired> && !$pending && %definition<phase> eq 'stopping' {
-                    # No local resource can confirm the previous executor's stop.
-                    self.report($context, 'stop-unconfirmed');
+                if !%!runs{$id}.defined && !%definition<desired> && %definition<phase> eq 'stopping' {
+                    # A never-claimed request has no resources to close. For an
+                    # earlier owner, a replacement cannot confirm external stop.
+                    my $never-started = %definition<generation> == 0;
+                    self.report($context, 'stop-claimed');
+                    self.report($context, $never-started ?? 'exited' !! 'stop-unconfirmed');
                     release-lease($db, $context.fence);
-                    @results.push(%(service-id => $id, phase => 'unconfirmed-stop'));
+                    @results.push(%(service-id => $id, phase => $never-started ?? 'stopped' !! 'unconfirmed-stop'));
                     next;
                 }
                 load-saga($id).^advance(:now(DateTime.new($now)));

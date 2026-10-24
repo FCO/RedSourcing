@@ -10,7 +10,7 @@ has Str $.email = '';
 has Str $.address = '';
 has Array $.items = [];
 has Rat() $.total = 0.0;
-has Str $.status = 'draft';
+has Str $.status is query = 'draft';
 has Str $.payment-id = '';
 has Str $.tracking-code = '';
 has Str $.issue = '';
@@ -57,8 +57,8 @@ method confirm-payment(Str :$payment-id!, Rat() :$amount!) is command {
 # both win an optimistic version check on the same paid order.
 method authorize-dispatch is command {
     self!require('paid');
-    require ::('Commerce::Shipment');
-    my $shipment = ::('Commerce::Shipment').^with-ids(:$!order-id).^load;
+    require Commerce::Shipment;
+    my $shipment = Commerce::Shipment.^with-ids(:$!order-id).^load;
     die 'Shipment must be booked first' unless $shipment.defined && $shipment.status eq 'booked';
     self.order-dispatch-authorized; %(authorized => True)
 }

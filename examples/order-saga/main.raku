@@ -38,7 +38,7 @@ my $now = DateTime.now;
 my $saga = $proxy.^advance(:$now);
 say "Payment confirmed: {$saga.paid}";
 say "Registered compensations: {$saga.^state<compensations>.elems}";
-say "Stock reserved: {$inventory.^load.reserved}";
+say "Stock reserved: {$inventory.reserved}";
 $saga.^emit-snapshot;
 
 # Reloading is pure: it restores state without calling either adapter again.
@@ -47,5 +47,5 @@ say "Restored compensations: {$proxy.^load.^state<compensations>.elems}";
 # An external controller calls advance periodically. Here we move the clock forward.
 $saga = $proxy.^check-timeouts(:now($now.later(:seconds(901))));
 say "After deadline: {$saga.^status}";
-say "Stock reserved: {$inventory.^load.reserved}";
+say "Stock reserved: {$inventory.reserved}";
 say .Str for @payments;

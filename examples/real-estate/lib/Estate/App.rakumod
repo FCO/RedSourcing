@@ -173,10 +173,10 @@ class App is export {
             my $cursor = $last ?? $last.id !! 0;
             if !%!models || $cursor != $!model-cursor {
                 my $rent = RentLedger.^with-ids.^load;
-                %!models = %(properties => Portfolio.^with-ids.^load.properties,
-                    tenants => TenantDirectory.^with-ids.^load.tenants,
+                %!models = %(properties => Portfolio.^with-ids.properties,
+                    tenants => TenantDirectory.^with-ids.tenants,
                     rent => $rent.bills, received => $rent.received,
-                    repairs => RepairBoard.^with-ids.^load.repairs);
+                    repairs => RepairBoard.^with-ids.repairs);
                 $!model-cursor = $cursor;
             }
             %(|copy-view(%!models), receipts => ProviderReceipt.^all.sort(*.id).Seq.map({
@@ -186,7 +186,7 @@ class App is export {
         })
     }
     method chat(Str $repair-id) {
-        self.locked({ RepairChat.^with-ids(:$repair-id).^load.messages })
+        self.locked({ RepairChat.^with-ids(:$repair-id).messages.list })
     }
     method id(Str $prefix --> Str) { "$prefix-{DateTime.now.Instant.to-posix.head.Int}-{(100000..999999).pick}" }
     method execute(Str $action, %data) {

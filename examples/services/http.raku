@@ -6,13 +6,14 @@ use Cro::HTTP::Router;
 class HTTPMessageRecorded does Event { has Str $.room-id; has Str $.text }
 aggregate HTTPRoom[:!auto-snapshot] {
     has Str $.room-id is entity-id;
-    has @.messages;
+    has @.messages is query;
     method APPLY(HTTPMessageRecorded $event) { @!messages.push($event.text) }
     method record-message(Str :$text!) is command {
         self.http-message-recorded(:$text);
         @!messages.elems
     }
     method serve(ServiceContext $runtime, Str :$host!, Int :$port!) is service {
+        my $room = $runtime.proxy;
         $runtime.http: :$host, :$port, {
             get -> {
                 $runtime.touch;
@@ -20,14 +21,13 @@ aggregate HTTPRoom[:!auto-snapshot] {
             }
             get -> 'messages' {
                 $runtime.touch;
-                my $state = $runtime.state;
-                content 'application/json', %(room => $state.room-id, messages => $state.messages.Array);
+                content 'application/json', %(room => $room.room-id, messages => $room.messages);
             }
             post -> 'messages' {
                 request-body -> %body {
                     if %body<text> ~~ Str && %body<text>.chars {
                         $runtime.touch;
-                        my $count = $runtime.aggregate.record-message(:text(%body<text>));
+                        my $count = $room.record-message(:text(%body<text>));
                         response.status = 201;
                         content 'application/json', %(count => $count);
                     } else {

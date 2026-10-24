@@ -1,0 +1,235 @@
+{
+  "verified_at": "2026-10-24T19:59:46.611687+00:00",
+  "environment": {
+    "red": "0.2.7",
+    "rakudo": "2026.09"
+  },
+  "scope": "Example readability and public proxy queries. Focused checks, not a full repository test run.",
+  "main_initial": [
+    {
+      "test": "08-bank-example",
+      "exitcode": 0,
+      "seconds": 20.09
+    },
+    {
+      "test": "09-shopping-cart-example",
+      "exitcode": 0,
+      "seconds": 15.52
+    },
+    {
+      "test": "12-food-delivery-example",
+      "exitcode": 0,
+      "seconds": 26.53
+    },
+    {
+      "test": "13-sagas",
+      "exitcode": 0,
+      "seconds": 17.37
+    },
+    {
+      "test": "14-real-estate-example",
+      "exitcode": 0,
+      "seconds": 40.0
+    },
+    {
+      "test": "16-web-real-estate-http",
+      "exitcode": 4,
+      "seconds": 9.88
+    },
+    {
+      "test": "36-shopping-cart-reminder",
+      "exitcode": 0,
+      "seconds": 43.17
+    },
+    {
+      "test": "37-commerce-example",
+      "exitcode": 0,
+      "seconds": 223.73
+    },
+    {
+      "test": "38-documentation",
+      "exitcode": 0,
+      "seconds": 27.21
+    },
+    {
+      "test": "39-commerce-notifications",
+      "exitcode": 0,
+      "seconds": 45.46
+    },
+    {
+      "test": "42-repl-tutorial",
+      "exitcode": 0,
+      "seconds": 11.56
+    },
+    {
+      "test": "56-school-example",
+      "exitcode": 0,
+      "seconds": 22.29
+    },
+    {
+      "test": "62-example-query-templates",
+      "exitcode": 0,
+      "seconds": 39.58
+    },
+    {
+      "test": "78-service-http",
+      "exitcode": 0,
+      "seconds": 1.71
+    },
+    {
+      "test": "79-projection-services",
+      "exitcode": 0,
+      "seconds": 5.8
+    },
+    {
+      "test": "80-microblog",
+      "exitcode": 0,
+      "seconds": 37.24
+    },
+    {
+      "test": "81-microblog-http",
+      "exitcode": 0,
+      "seconds": 38.28
+    },
+    {
+      "test": "83-query-proxies",
+      "exitcode": 0,
+      "seconds": 2.32
+    },
+    {
+      "test": "84-proxy-service-context",
+      "exitcode": 0,
+      "seconds": 5.47
+    }
+  ],
+  "main_reruns": [
+    {
+      "test": "16-web-real-estate-http",
+      "exitcode": 0,
+      "note": "Rerun passed all 53 assertions after App.chat explicitly returned messages.list, preserving its original Array/list assignment behavior."
+    },
+    {
+      "test": "14-real-estate-example",
+      "exitcode": 0,
+      "note": "Rerun passed all nine subtests after the same helper adjustment."
+    }
+  ],
+  "pg_and_rakuast": [
+    {
+      "frontend": "pg",
+      "test": "79-projection-services",
+      "exitcode": 0
+    },
+    {
+      "frontend": "pg",
+      "test": "80-microblog",
+      "exitcode": 0
+    },
+    {
+      "frontend": "pg",
+      "test": "82-projection-service-ownership-pg",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "62-example-query-templates",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "81-microblog-http",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "83-query-proxies",
+      "exitcode": 0
+    }
+  ],
+  "executable_demos": [
+    {
+      "test": "bank",
+      "exitcode": 0,
+      "missing": []
+    },
+    {
+      "test": "room",
+      "exitcode": 0,
+      "missing": []
+    },
+    {
+      "test": "commerce",
+      "exitcode": 0,
+      "missing": []
+    },
+    {
+      "test": "optional-http",
+      "exitcode": 0,
+      "missing": []
+    },
+    {
+      "test": "http-demo",
+      "exitcode": 0
+    }
+  ],
+  "summary": {
+    "main_passed_after_reruns": 19,
+    "pg_and_rakuast_passed": 6,
+    "demos_passed": 5
+  },
+  "preserved": "Explicit snapshot/replay/saga loads, captured views in the REPL, App helper contracts, lazy HTTP dependencies, event and command behavior. No schema migration.",
+  "example_source_sha256": {
+    "examples/bank/Account.rakumod": "ef86afd6c6c8a73fd396da105180ff25b8584b1a0ebcaa567959b556e0532e75",
+    "examples/bank/Balance.rakumod": "58b84055be88bcc2e57b6845a6bb07bb4f50031796af68516d9d43ed27c03bd8",
+    "examples/bank/BankEvents.rakumod": "e515f3c298259cc28abbf224caf9d1c9b5d0bad4320385e0185cad9b259d366a",
+    "examples/bank/BankMoney.rakumod": "a4216417cc2698ab466eae89c2f3ad03bb2d5c777fecc274254af4dad3b93927",
+    "examples/bank/BankTotals.rakumod": "86c1ff3782ad2fd76b90925cdf750af5dea7112a83939c1260501f73d2be0361",
+    "examples/bank/MonthlyStatement.rakumod": "aee8d83505ac91abdf47177e28217884259ceee51d68eb6f306c9ac2ae5eb8fc",
+    "examples/bank/main.raku": "3e1c47143fc4a8d7dbb5abf5c93eb403118d6aae9bd083630801801e2a0a85da",
+    "examples/commerce/controller.raku": "d4ac5132bc623777d2d31172fd38d77238454d006d163773e8f8272a37fb4687",
+    "examples/commerce/lib/Commerce/App.rakumod": "98f1835f4236699b632657412fab07d1cab9dcb5e6ac7d96687ba100d986a393",
+    "examples/commerce/lib/Commerce/Events.rakumod": "91d3e5963adf1439a1d48a8164d40824d3848b307319f45a116f829c5ebdb213",
+    "examples/commerce/lib/Commerce/Inventory.rakumod": "e0bae48d75d19c361192ef1fb58604368ec1dd4c898f197793f5648e3eb0d6b8",
+    "examples/commerce/lib/Commerce/Order.rakumod": "120eacb71d79e7d61bdb7748276a87522f88c8159723293ef43a7a7bfca7fec0",
+    "examples/commerce/lib/Commerce/Providers.rakumod": "c59f7194a752c29e3f9498a7ce50b0d83d8b2416a045128191fcd0dc72f04567",
+    "examples/commerce/lib/Commerce/ReadModels.rakumod": "10e98f34bde98935b62d7966a5feef08769a60cfb5479afeebb4a8c28312d60c",
+    "examples/commerce/lib/Commerce/Shipment.rakumod": "7c80431d279543658b8bba094b35f9bf669bc994e0d659407219924c02621cff",
+    "examples/commerce/lib/Commerce/Utils.rakumod": "bb4be6e723fda78c03fe4a7193252738c65f0c99a2a12d83df29199658faa33b",
+    "examples/commerce/lib/Commerce/WebhookHTTP.rakumod": "b6c96f1f0c46949a1f84cc5452141a438a2d025be0a4d3fac12fc5403e99a09a",
+    "examples/commerce/lib/Commerce/Webhooks.rakumod": "2a8cff91251e29b2d2e1bee867ba19e810ecc4e37ce21b07841e8f93b092bd44",
+    "examples/commerce/lib/Commerce/Workflows.rakumod": "9da1bc56b0caa87ee408441a79bdd44d498902a49a6c225ddd25a522b926e50c",
+    "examples/commerce/main.raku": "603909b3a55de4278a046186c4487b73a918924a19c818245e997fbdd9f5cb71",
+    "examples/counter/lib/CounterDemo.rakumod": "1886e1fe76846dc532a7d7ba42bbfc584d5bbb7cd14c4c1cd6e7180ceaaa0f50",
+    "examples/counter/main.raku": "279451356707ae6b59ee65ded66341d25b02a3721a3b745d0953f2564bd3e529",
+    "examples/food-delivery/CustomerOrders.rakumod": "dd989b212a9314b97e799628aa87b53270dc7e06bc45b3f320d554e66b55da42",
+    "examples/food-delivery/DeliveryEvents.rakumod": "15e5b599005e5589f35041348d42edaded2f909401b12000163584b76f8e9d44",
+    "examples/food-delivery/DeliveryOrder.rakumod": "59e8a07b5f6bf6865d81c9c5b0f3a0f5d4f51067bf6ddd1996347ea4583a00d6",
+    "examples/food-delivery/DeliveryTotals.rakumod": "353c9d225dbce678e6b6bdde299977af6666b289592dbe1363b96ee0fcc586f1",
+    "examples/food-delivery/Restaurant.rakumod": "001fd1f75595cc6a3c158b41526fdb9ff5765e8594ac23805ebbd0eb1e26f0ab",
+    "examples/food-delivery/RestaurantBoard.rakumod": "308311c3b4d469975da6869a74122070b739040dd4c242d024a273c54b0c72a7",
+    "examples/food-delivery/main.raku": "53584d3090737cc31d1f33a4bfb84bc0c4bd856477c0a586bd0429a4670ae2fb",
+    "examples/microblog/lib/Microblog/Domain.rakumod": "82611b49260008a4a86421809aa06b1e97d3030f93bb9f375ee2eb2d8a8b0c56",
+    "examples/microblog/lib/Microblog/HTTP.rakumod": "c66929fdbb1e5300b57812b84855ef664838b8efec50c1d4647e50a2a4b7341b",
+    "examples/microblog/lib/Microblog/Server.rakumod": "a28bcc5239f19711d02eb8106e6f4221c25a16465842b91cb87aea34a6f00be0",
+    "examples/microblog/main.raku": "5a740a2f889bbe535948bf91fcdc0e84cae1553c8d497d095970bb06756616e7",
+    "examples/order-saga/OrderDomain.rakumod": "e44e2557acd7ed58470fafd9c930ff58560fa3a3e665a232ded8b5f7925f574b",
+    "examples/order-saga/main.raku": "583522ed0ababc3b1b050122ec6461648a4a6343755b94041e9f15aad8a8c4e6",
+    "examples/real-estate/lib/Estate/App.rakumod": "1dca2b8f8a6f56c96e2b586c1cabafdbc1b50462be26fecd7f0b15dc6fa51135",
+    "examples/real-estate/lib/Estate/Domain.rakumod": "e379121ca97ed921164c4c479cd61d266bb890f635fa698208de0f7c6a224a5d",
+    "examples/real-estate/lib/Estate/Routes.rakumod": "c59386ba5028d65377cee981ade44a34187102c0021af5953a3ac6fd4a21ce3a",
+    "examples/real-estate/lib/Estate/View.rakumod": "5dade61b7659c92f2d4b40d7386c0867c8bbf76c0a4f116724a19c6809b4438c",
+    "examples/real-estate/main.raku": "904c82ee54c9724834315fe85f01fa3440be93bb1a816799ed2169459e0bcfd5",
+    "examples/school/lib/School.rakumod": "b471b1db6c7de327141df70ac781726638649a4e5e47b3e1c21464a0ba3ee9b3",
+    "examples/school/main.raku": "d359f1616776c04878663ac46f45a897c7ee703ca1896cbbd767c61ac17598b7",
+    "examples/services/http.raku": "71c2ca4f21e4941b0042d78bf812e9b684ec833d72713df76cd483acbc0d742c",
+    "examples/services/room.raku": "f2b3598051a33149cd2d341b854e1be350ce30371dc2d62af54d0825dbef1b7a",
+    "examples/shopping-cart/Cart.rakumod": "5ef89abb4388b0d69f61b4a1971b6b3fbeee9c8e9381889bf5c3755ad6ea21be",
+    "examples/shopping-cart/CartEvents.rakumod": "d7a931a4f7cd423b950b4bc21e381df8ee2699c74abc5af5ed4cf5f89644b2ed",
+    "examples/shopping-cart/CartReminder.rakumod": "621392393132cad6c01a8f79f69fba4af0a88110e90bfc7d91212c152bb8763f",
+    "examples/shopping-cart/CartSummary.rakumod": "6fdd3a461aa6977f271412d690bd358542fd4d6853f391fbaba65f399c14cfdf",
+    "examples/shopping-cart/ShopSales.rakumod": "2b6c98fd63c8bb567230ac1a42d63379689d120c5258cf65baedf70e208018af",
+    "examples/shopping-cart/main.raku": "e485e147543c368a0690ccb80c47a4896c050f3a083a4d7b69c75946d99aac83",
+    "examples/simple-flow/lib/SimpleFlow.rakumod": "a5ff76c5d534e9b03a9d8b0bfb9f9fa335e9f7ac54d176226d54267b56d20a11",
+    "examples/simple-flow/repl.raku": "bc3644cf698ab2030cda374a142889ef29bd39a793030d56ae0d05c529a591d3"
+  }
+}

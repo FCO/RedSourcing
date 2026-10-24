@@ -127,7 +127,7 @@ class Shop is export {
         if $fulfillment.^status eq 'compensated' && $order.status eq any(<paid cancellation-requested>) {
             my $reason = $fulfillment.^state<reason> // 'Fulfillment failed';
             self.order($order-id).request-cancellation(:$reason) if $order.status eq 'paid';
-            self.shipment($order-id).cancel(:$reason) unless self.shipment($order-id).^load.status eq 'cancelled';
+            self.shipment($order-id).cancel(:$reason) unless self.shipment($order-id).status eq 'cancelled';
         }
     }
     method tick(DateTime :$now = DateTime.now, UInt :$limit = 100) {

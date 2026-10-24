@@ -8,6 +8,8 @@ use RedSourcing::Context;
 use RedSourcing::Flow;
 use RedSourcing::IsTransactional;
 use RedSourcing::IsService;
+use RedSourcing::IsCommand;
+use RedSourcing::Query;
 use RedSourcing::Journal;
 use RedSourcing::Tags;
 use RedSourcing::Lifecycle;
@@ -21,6 +23,9 @@ also does Metamodel::RedSourcing::CommandContainer;
 
 use RedSourcing::Entity;
 
+has %!queries;
+has Map $!query-descriptors;
+method queries(|) { $!query-descriptors // Map.new }
 has %!services;
 method services(|) { %!services.Map }
 
@@ -139,6 +144,47 @@ method compose(Mu \entity, |) {
             if $method.is_dispatcher && $method.candidates.grep(* ~~ RedSourcing::IsService);
         %!services{$method.name} = $method if $method ~~ RedSourcing::IsService;
     }
+    for entity.^private_methods.values -> $method {
+        die 'is query requires a public method' if $method ~~ IsQuery
+            || ($method.is_dispatcher && $method.candidates.grep(* ~~ IsQuery).elems);
+    }
+    my %accessors = entity.^attributes.grep(* ~~ QueryAttribute).map({ .name.substr(2) => True });
+    for entity.^methods -> $method {
+        my @candidates = $method.is_dispatcher ?? $method.candidates.List !! ($method,);
+        my $marked = @candidates.grep(* ~~ IsQuery).elems;
+        next unless $marked || (%accessors{$method.name}:exists);
+        die "Every candidate of query {$method.name} must be marked is query"
+            if $marked && $marked != @candidates.elems;
+        die 'A query cannot also be a command or service'
+            if @candidates.grep({ $_ ~~ IsCommand || $_ ~~ RedSourcing::IsService }).elems;
+        if %accessors{$method.name}:exists {
+            for @candidates -> $candidate { $candidate does IsQuery unless $candidate ~~ IsQuery }
+        }
+        %!queries{$method.name} = $method;
+        unless %accessors{$method.name}:exists {
+            for @candidates -> $candidate {
+                next if $candidate ~~ QueryGuarded;
+                $candidate.wrap(my method (Mu \SELF: |arguments) {
+                    my $*REDSOURCING-PHASE = 'QUERY';
+                    callsame
+                });
+                $candidate does QueryGuarded;
+            }
+        }
+    }
+    for entity.^commands.values -> $method {
+        my @candidates = $method.is_dispatcher ?? $method.candidates.List !! ($method,);
+        for @candidates -> $candidate {
+            next if $candidate ~~ CommandGuarded;
+            $candidate.wrap(my method (Mu \SELF: |arguments) {
+                assert-effect-allowed('command execution')
+                    if ((try $*REDSOURCING-PHASE) // '') eq 'QUERY';
+                callsame
+            });
+            $candidate does CommandGuarded;
+        }
+    }
+    $!query-descriptors = %!queries.Map;
 	my @trusted;
 	for entity.^mro.skip(1) -> $parent {
 		@trusted.append($parent.^validated-handlers)
@@ -212,6 +258,11 @@ method compose(Mu \entity, |) {
 
 		# TODO: use the original signature
 		$!proxy.^add_method: $name, my method (Mu \SELF: :$sync = True, *%pars) {
+            my $phase = (try $*REDSOURCING-PHASE) // '';
+            my $context = try $*REDSOURCING-SERVICE-CONTEXT;
+            if $context.defined && $phase eq 'SERVICE' {
+                return $context.executor.context-command($context, $name, \(:$sync, |%pars), :target(SELF));
+            }
 			assert-effect-allowed('command submission');
 			my $cmd = SELF.^prepare-command($name, |%pars);
 			my $stream = SELF.^stream-name;
@@ -225,6 +276,12 @@ method compose(Mu \entity, |) {
 			$row
 		}
 	}
+    for %!queries.keys -> $name {
+        next if entity.^entity-id-names.first(* eq $name).defined;
+        $!proxy.^add_method($name, my method (Mu \SELF: |arguments) {
+            proxy-query(SELF, $name, arguments)
+        });
+    }
 	$!proxy.^compose
 }
 

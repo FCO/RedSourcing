@@ -11,4 +11,4 @@ my $pending = $counter.increment(:amount(3), :!sync);
 say $pending.state;
 say $pending.run;
 say $pending.run;
-say CounterTotal.^with-ids(:id(1)).^load.value;
+say CounterTotal.^with-ids(:1id).value;

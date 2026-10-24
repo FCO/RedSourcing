@@ -1,0 +1,57 @@
+use Test;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Service;
+use lib 't/lib';
+use ProxyQueryDomain;
+my $file = $*TMPDIR.add('proxy-service-test-' ~ $*PID ~ '.db');
+LEAVE $file.unlink if $file.e;
+red-sourcing-defaults(:driver<SQLite>, :database($file.Str), :!flow-tracing);
+my $target = ProxyQueryCounter.^with-ids(:id<target>); $target.^create;
+my $runtime = ServiceRuntime.new(:poll-interval(.02), :stop-grace(1)).initialize;
+LEAVE $runtime.shutdown;
+my $a = ProxyQueryView.^with-ids(:id<a>);
+my $b = ProxyQueryView.^with-ids(:id<b>);
+$a.^start-service('serve'); $b.^start-service('serve');
+my $controller = $runtime.run;
+sub wait-for(&check) {
+    my $until = now + 10;
+    until check() { die 'Timed out' if now > $until; await Promise.in(.01) }
+}
+wait-for({ $a.^service-status('serve')<phase> eq 'active' && $b.^service-status('serve')<phase> eq 'active' });
+my ($ida,$idb) = ($a,$b).map({ .^service-status('serve')<service-id> });
+my ($ca,$cb) = $ProxyQueryDomain::LOCK.protect({ (%ProxyQueryDomain::CONTEXTS{$ida}, %ProxyQueryDomain::CONTEXTS{$idb}) });
+is $ProxyQueryDomain::LOCK.protect({ %ProxyQueryDomain::INITIAL{$ida} }), 0, 'service body automatically sees its context';
+my &read-a = $ca.bind({ $a.origin });
+my &read-b = $cb.bind({ $a.origin });
+is read-a(), $ida, 'proxy query uses source service A';
+is read-b(), $idb, 'same proxy uses source service B';
+is $cb.bind({ read-a() })(), $ida, 'bound callback overrides emitter context';
+my %typed = $ca.bind({ $a.typed })();
+is %typed<fraction>.WHAT, Rat, 'executor preserves Rat';
+is %typed<fraction>, 1/3, 'executor preserves exact value';
+isa-ok %typed<date>, DateTime, 'executor preserves DateTime';
+my $copy = $ca.bind({ $a.details })(); $copy<array>[0] = 99;
+is $ca.bind({ $a.details<array>[0] })(), 1, 'service query collection is detached';
+my @jobs = ($ca,$cb).map(-> $ctx { start $ctx.bind({ $target.add(:!sync) })() });
+my @queued = await @jobs;
+is-deeply @queued.map(*.service-context<service-id>).sort.Array, [$ida,$idb].sort.Array,
+    'concurrent implicit commands capture their own service fences';
+is @queued[0].run, 1, 'queued command runs normally';
+is @queued[1].run, 2, 'second command is independent';
+is $ca.bind({ $a.cross('target') })(), 2, 'nested query runs on executor without requeue deadlock';
+throws-like { $ca.bind({ $a.bad })() }, Exception, :message(/ 'QUERY' /), 'query cannot call explicit command helper';
+my $supplier = Supplier.new;
+my $seen;
+my $tap = $supplier.Supply.tap($ca.bind(-> $ { $seen = $a.origin }));
+$cb.bind({ $supplier.emit(1) })(); $tap.close;
+is $seen, $ida, 'Supply callback uses subscriber binding rather than emitter';
+$a.^stop-service('serve');
+wait-for({ $a.^service-status('serve')<phase> eq 'stopped' });
+throws-like { read-a() }, Exception, :message(/ 'ownership' /), 'old bound query rejects revoked generation';
+is $cb.bind({ $target.add })(), 3, 'other service can still submit commands';
+$b.^stop-service('serve'); wait-for({ $b.^service-status('serve')<phase> eq 'stopped' });
+$runtime.shutdown; await $controller;
+throws-like { read-b() }, Exception, :message(/ 'closed' /), 'closed executor never falls back to application access';
+is $target.total, 3, 'ordinary proxy query still works outside services';
+done-testing;

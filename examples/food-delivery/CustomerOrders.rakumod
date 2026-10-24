@@ -6,13 +6,13 @@ unit projection CustomerOrders;
 has Str $.customer-id is entity-id;
 has %.orders;
 
-method tracking(Str :$order-id!) {
+method tracking(Str :$order-id!) is query {
     die "Order '$order-id' is not tracked for customer '$!customer-id'"
         unless %!orders{$order-id}:exists;
     %!orders{$order-id}
 }
 
-method orders-list {
+method orders-list is query {
     %!orders.keys.sort.map({ %!orders{$_} }).Array
 }
 

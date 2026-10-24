@@ -1,4 +1,5 @@
 unit module RedSourcing::Service::Context;
+use RedSourcing::Context;
 
 class ServiceProxy {
     has $.context is required;
@@ -31,13 +32,24 @@ class ServiceContext is export {
         ServiceProxy.new(:context(self), :proxy($!proxy))
     }
     method command($target, Str $method, |arguments) {
+        die 'command submission is forbidden in QUERY' if ((try $*REDSOURCING-PHASE) // '') eq 'QUERY';
         $!executor.context-command(self, $method, arguments, :$target)
     }
     method read($target, Str :$method, Hash :$arguments = {}) {
         $!executor.context-state(self, :$target, :$method, :$arguments)
     }
     method state { $!executor.context-state(self) }
+    method bind(&callback --> Callable) {
+        my $context = self;
+        -> |arguments {
+            my $phase = (try CALLERS::<$*REDSOURCING-PHASE>) // '';
+            my $*REDSOURCING-SERVICE-CONTEXT = $context;
+            my $*REDSOURCING-PHASE = $phase eq any('QUERY', 'APPLY', 'REACT', 'SERVICE-READ') ?? $phase !! 'SERVICE';
+            callback(|arguments)
+        }
+    }
     method ready {
+        assert-effect-allowed('service readiness');
         my $first = $!lock.protect({
             die 'Service is stopping' if $!stopped;
             return False if $!ready;
@@ -53,6 +65,7 @@ class ServiceContext is export {
     }
     # Keep Cro loading optional for applications that do not start HTTP services.
     method http($application, Str :$host = '127.0.0.1', Int :$port = 3000 --> Promise) {
+        assert-effect-allowed('HTTP service startup');
         die 'HTTP port must be between 1 and 65535' unless 1 <= $port <= 65535;
         start {
             require ::('RedSourcing::Web::Server');
@@ -62,7 +75,7 @@ class ServiceContext is export {
                 $routes = ::('Cro::HTTP::Router::EXPORT::DEFAULT::&route')($application);
             }
             my $readiness = Promise.new;
-            my $server = ::('RedSourcing::Web::Server::EXPORT::DEFAULT::&web-server')(:$host, :$port, :application($routes), :$readiness);
+            my $server = ::('RedSourcing::Web::Server::EXPORT::DEFAULT::&web-server')(:$host, :$port, :application($routes), :$readiness, :scope(self.bind(-> &work { work() })));
             my $lock = Lock.new;
             my Bool $closed = False;
             sub close-server {
@@ -83,19 +96,22 @@ class ServiceContext is export {
             await self.stopping;
         }
     }
-    method touch { $!executor.context-report(self, 'touch') }
+    method touch { assert-effect-allowed('service activity'); $!executor.context-report(self, 'touch') }
     method on-stop(&callback) {
+        assert-effect-allowed('service cleanup registration');
+        my &bound = self.bind(&callback);
         my $run = $!lock.protect({
-            if $!stopped { True } else { @!callbacks.push(&callback); False }
+            if $!stopped { True } else { @!callbacks.push(&bound); False }
         });
         if $run {
             CATCH { default { $!late-cleanup-error = .message; .rethrow } }
-            my $result = callback();
+            my $result = bound();
             await $result if $result ~~ Promise;
         }
         self
     }
     method request-stop {
+        assert-effect-allowed('service stop');
         my @callbacks = $!lock.protect({
             return () if $!stopped;
             $!stopped = True;

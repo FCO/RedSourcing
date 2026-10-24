@@ -26,14 +26,15 @@ my class LiveReplier is Cro::TCP::Replier {
 }
 my class LiveConnection is Cro::TCP::ServerConnection {
     has $!socket;
+    has &!scope;
     has Promise $!disconnected .= new;
-    submethod BUILD(:$!socket!) { }
+    submethod BUILD(:$!socket!, :&!scope) { }
     method replier { LiveReplier.new(:$!socket, :$!disconnected) }
     method incoming {
         my $incoming = callsame;
         supply {
             whenever $incoming -> $message {
-                emit $message;
+                &!scope.defined ?? &!scope({ emit $message }) !! emit($message);
                 QUIT {
                     default {
                         .rethrow unless .message.lc.contains('connection reset by peer');
@@ -71,13 +72,14 @@ my class ListenerReadiness does Tappable {
 }
 my class LiveListener is Cro::TCP::Listener {
     has Promise $.readiness;
+    has &.scope;
     method incoming {
         supply {
             my $source = IO::Socket::Async.listen($.host, $.port);
             $source = Supply.new(ListenerReadiness.new(:$source, :$!readiness)) if $!readiness.defined;
             whenever $source -> $socket {
                 nodelay($socket) if $.nodelay;
-                emit LiveConnection.new(:$socket);
+                emit LiveConnection.new(:$socket, :scope(&!scope));
             }
         }
     }
@@ -85,9 +87,9 @@ my class LiveListener is Cro::TCP::Listener {
 
 # Local HTTP server with disconnect-aware streaming; the Cro HTTP routing and
 # serialization pipeline is unchanged. TLS servers need their own listener.
-sub web-server(:$host = '127.0.0.1', :$port = 3000, :$application!, Promise :$readiness) is export {
+sub web-server(:$host = '127.0.0.1', :$port = 3000, :$application!, Promise :$readiness, :&scope) is export {
     my $server = Cro::HTTP::Server.new(:$host, :$port, :$application);
-    $server.components[0] = LiveListener.new(:$host, :$port, :nodelay, :$readiness);
+    $server.components[0] = LiveListener.new(:$host, :$port, :nodelay, :$readiness, :&scope);
     $server
 }
 

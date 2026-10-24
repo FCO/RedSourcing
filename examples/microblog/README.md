@@ -28,11 +28,10 @@ raku -Ilib examples/microblog/main.raku --/seed --database=/tmp/pio-empty.db
 | --- | --- | --- |
 | `User` aggregate | application + user | Publish, follow, unfollow; keep business rules |
 | `Accounts` aggregate | application | Reserve user IDs and create User aggregates atomically |
-| `TweetIndex` projection | application | Transactional APPLY materializes tweets in SQL |
+| `TweetIndex` projection | application | Transactional APPLY materializes tweets in SQL; declares the managed HTTP service |
 | `UserTweets` projection | application + user | Query an author's tweets from that table |
 | `UserTimeline` projection | application + user | Reconstruct follows; query the same table for a feed |
 | `Directory` projection | application | Reconstruct public user names |
-| `MicroblogServer` projection | application + server | Declare the managed Cro HTTP service |
 
 `TweetIndex` is registered before seed or application commands run. Its APPLY
 uses Red `.^find` / `.^create` inside the event-emission transaction, including
@@ -53,9 +52,10 @@ claim constant memory as the number of users or follows grows. The entity cache
 limits resident instances. Index reconstruction reads journal IDs in batches of
 500 rather than loading the journal into memory.
 
-`MicroblogServer.serve` gives a block of endpoints to `$runtime.http`. Queries run
-through `$runtime.read`; writes run through `$runtime.command` targeting User or
-Accounts. The executor owns the connection and validates the service generation.
+`TweetIndex.serve` gives the block of endpoints from `Microblog::HTTP` to
+`$runtime.http`. Queries use `is query` methods/accessors on the entity proxies;
+writes call User or Accounts commands on their proxies. Request processing binds
+the service context automatically; the SSE timer uses `$runtime.bind`. The executor owns the connection and validates the service generation.
 Projection services keep lifecycle controls in an infrastructure aggregate, not
 in their projection stream. Sockets and promises are never snapshotted.
 
@@ -64,6 +64,13 @@ changes. It checks once per second, sends a heartbeat every 15 seconds, and
 renews service activity every 30 seconds while connected. Disconnect cancels the
 polling Supply. The browser reuses tweet elements, preserving the list when no
 data changed. The service idle timeout is one hour.
+
+Queries are also available outside services, for example:
+
+```raku
+Directory.^with-ids(:application-id<microblog>).list;
+UserTweets.^with-ids(:application-id<microblog>, :user-id<ana>).page(:limit(10));
+```
 
 ## API
 
@@ -119,9 +126,18 @@ The focused tests are `t/79-projection-services.rakutest`,
 when `RED_SOURCING_TEST_PG_DATABASE` and the normal libpq environment are set;
 the Pg ownership test otherwise skips. Each Pg test uses an isolated schema.
 
-The recorded run used Red 0.2.7 and Rakudo 2026.09. Focused tests passed in
+The proxy/query follow-up is recorded separately in
+[query-validation.json](query-validation.json), including `t/83-query-proxies.rakutest`
+and `t/84-proxy-service-context.rakutest`. It is a focused regression run, not a
+rerun of the entire suite.
+
+The earlier recorded run used Red 0.2.7 and Rakudo 2026.09. Focused tests passed in
 SQLite, Pg and RakuAST, including HTTP/SSE and multiprocess ownership. The full
 suite passed 80 of 82 files after an isolated rerun of commerce
 (the parallel run exceeded its 360-second limit). The two installation failures
 are compiler warnings reproduced on the unchanged pre-service baseline. See
 [validation.json](validation.json) for the results and source hashes.
+
+A reproducible [performance comparison of Red and manual SQL](PERFORMANCE.md)
+records publication and paged-read costs in SQLite and Pg, plus the cost of
+query dispatch through entity proxies.

@@ -8,7 +8,7 @@ has UInt $.delivered = 0;
 has UInt $.cancelled = 0;
 has Rat() $.delivered-value = 0.0;
 
-method report {
+method report is query {
     %(:$!placed, :$!delivered, :$!cancelled, :$!delivered-value,
         active => $!placed - $!delivered - $!cancelled)
 }

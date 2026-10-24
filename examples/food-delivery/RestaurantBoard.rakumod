@@ -6,7 +6,7 @@ unit projection RestaurantBoard;
 has Str $.restaurant-id is entity-id;
 has %.orders;
 
-method active-orders {
+method active-orders is query {
     %!orders.keys.sort.map({ %!orders{$_} }).grep({
         .<status> ne 'delivered' && .<status> ne 'cancelled'
     }).Array

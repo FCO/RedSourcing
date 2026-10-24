@@ -82,9 +82,11 @@ aggregate Property is export {
     method start-tenancy(Str :$tenant-id!) is command {
         die 'Register the property first' unless $!name.chars;
         die 'This property already has a tenant' if $!tenant-id.chars;
-        my $p = Tenant.^with-ids(:$tenant-id);
-        die 'Tenant does not exist' unless exists-in-store($p) && $p.^load.name.chars;
-        self.tenancy-started(:$tenant-id, :tenant-name($p.^load.name), :monthly-rent($!monthly-rent));
+        my $proxy = Tenant.^with-ids(:$tenant-id);
+        die 'Tenant does not exist' unless exists-in-store($proxy);
+        my $tenant = $proxy.^load;
+        die 'Tenant does not exist' unless $tenant.name.chars;
+        self.tenancy-started(:$tenant-id, :tenant-name($tenant.name), :monthly-rent($!monthly-rent));
         %(:$!property-id, :$tenant-id)
     }
     method end-tenancy is command {
@@ -134,9 +136,11 @@ aggregate Repair is export {
                           Str :$description = '', Str :$priority = 'normal') is command {
         die 'Repair has already been requested' unless $!status eq 'new';
         die 'Choose normal or urgent priority' unless $priority eq any(<normal urgent>);
-        my $p = Property.^with-ids(:$property-id);
-        die 'Property does not exist' unless exists-in-store($p) && $p.^load.name.chars;
-        self.repair-requested(:$property-id, :tenant-id($p.^load.tenant-id), :$title, :$description, :$priority);
+        my $proxy = Property.^with-ids(:$property-id);
+        die 'Property does not exist' unless exists-in-store($proxy);
+        my $property = $proxy.^load;
+        die 'Property does not exist' unless $property.name.chars;
+        self.repair-requested(:$property-id, :tenant-id($property.tenant-id), :$title, :$description, :$priority);
         %(:$!repair-id)
     }
     method schedule(Str :$contractor! where *.trim.chars > 0, Rat() :$estimate! where * > 0) is command {
@@ -187,7 +191,7 @@ aggregate Conversation is export {
 
 # These read models consume domain events across aggregate streams.
 projection Portfolio is export {
-    has Hash $.properties = {};
+    has Hash $.properties is query = {};
     multi method APPLY(PropertyRegistered $e) {
         $!properties{$e.property-id} = %(property-id => $e.property-id, name => $e.name,
             address => $e.address, kind => $e.kind, bedrooms => $e.bedrooms,
@@ -202,7 +206,7 @@ projection Portfolio is export {
     }
 }
 projection TenantDirectory is export {
-    has Hash $.tenants = {};
+    has Hash $.tenants is query = {};
     method APPLY(TenantRegistered $e) {
         $!tenants{$e.tenant-id} = %(tenant-id => $e.tenant-id, name => $e.name, email => $e.email, phone => $e.phone);
     }
@@ -218,7 +222,7 @@ projection RentLedger is export {
     }
 }
 projection RepairBoard is export {
-    has Hash $.repairs = {};
+    has Hash $.repairs is query = {};
     method APPLY(ForRepair $e) {
         return if $e ~~ MessagePosted;
         my $id = $e.repair-id;
@@ -239,7 +243,7 @@ projection RepairBoard is export {
 }
 projection RepairChat is export {
     has Str $.repair-id is entity-id;
-    has Array $.messages = [];
+    has Array $.messages is query = [];
     method APPLY(MessagePosted $e where { .repair-id eq $!repair-id }) {
         $!messages.push: %(message-id => $e.message-id, author => $e.author,
             body => $e.body, sent-at => $e.sent-at, notification => $e.notification);

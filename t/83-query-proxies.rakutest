@@ -1,0 +1,88 @@
+use Test;
+use MONKEY-SEE-NO-EVAL;
+use RedSourcing;
+use RedSourcing::Config;
+use RedSourcing::Journal;
+use lib 't/lib';
+use MicroblogTestStore;
+
+class QueryFact does Event { has Str $.id; has Int $.amount }
+aggregate QueryCounter {
+    has Str $.id is entity-id;
+    has Int $.total = 0;
+    method APPLY(QueryFact $e) { $!total += $e.amount }
+    method badself is query { self.mutate-first }
+    method mutate-first is command { $!total += 100; self.query-fact(:amount(0)) }
+    method add(Int :$amount = 1) is command { self.query-fact(:$amount); $!total }
+}
+projection QueryView {
+    has Str $.id is entity-id;
+    has Str $.name is rw is query = 'view';
+    has Hash $.details is query = {nested => [1, %(x => 2)]};
+    has Int @.numbers is query = 1,2;
+    has SetHash $.selected is query = SetHash.new(<a b>);
+    has BagHash $.counts is query = BagHash.new(<a a>);
+    has Rat $.fraction is query = 1/3;
+    has DateTime $.created is query = DateTime.new('2026-01-01T00:00:00Z');
+    has Int $.total is query = 0;
+    method APPLY(QueryFact $e where { .id eq $!id }) { $!total += $e.amount }
+    method list is query { [$!name, $!total] }
+    method greet(Str $person, Str :$prefix = 'Hello') is query { "$prefix $person" }
+    multi method label(Int $n) is query { "integer $n" }
+    multi method label(Str $n) is query { "string $n" }
+    method nested is query { QueryView.^with-ids(:$!id).total }
+    method bad is query { QueryCounter.^with-ids(:$!id).add }
+    method bad-start is query { QueryView.^with-ids(:$!id).^start-service('missing') }
+    method unmarked { 42 }
+    method sequence is query { (1, 2, 3).map(* * 2) }
+    method delayed-effect is query { (gather { QueryCounter.^with-ids(:$!id).add; take 1 }).List }
+    method nothing is query { Nil }
+    method resource is query { Promise.new }
+    method cyclic is query { my %h; %h<self> = %h; %h }
+}
+projection QueryChild is QueryView { }
+my $*RED-DB = test-store('83');
+schema(StoredEvent, StoredCommand).create;
+my $counter = QueryCounter.^with-ids(:id<a>); $counter.^create; $counter.add(:amount(5));
+my $view = QueryView.^with-ids(:id<a>);
+is-deeply $view.list, ['view',5], 'explicit forwarder overrides Any.list';
+is $view.greet('Ana', :prefix<Oi>), 'Oi Ana', 'query forwards positional and named arguments';
+is $view.label(3), 'integer 3', 'multi query dispatches integer candidate';
+is $view.label('3'), 'string 3', 'multi query dispatches string candidate';
+is $view.nested, 5, 'nested proxy query works';
+throws-like { $counter.badself }, Exception, :message(/ 'QUERY' /), 'query cannot call command on its loaded receiver';
+is $counter.^load.total, 5, 'command body never mutates cached state before rejection';
+is QueryChild.^with-ids(:id<a>).total, 5, 'inherited query attribute is exposed';
+is QueryChild.^with-ids(:id<a>).greet('Ana'), 'Hello Ana', 'inherited query method is exposed';
+is $view.fraction.WHAT, Rat, 'Rat type preserved';
+is $view.fraction, 1/3, 'Rat precision preserved';
+isa-ok $view.created, DateTime, 'DateTime preserved';
+is $view.numbers.WHAT, Array[Int], 'typed array preserved';
+my $details = $view.details; $details<nested>[1]<x> = 99;
+is $view.details<nested>[1]<x>, 2, 'nested collection mutations do not affect owner';
+my $numbers = $view.numbers; $numbers[0] = 99;
+is $view.numbers[0], 1, 'typed collection is detached';
+my $set = $view.selected; $set<c> = True;
+ok !$view.selected<c>, 'SetHash copy is detached';
+my $bag = $view.counts; $bag<a>++;
+is $view.counts<a>, 2, 'BagHash copy is detached';
+throws-like { $view.name = 'changed' }, Exception, 'proxy accessor is not writable';
+is $view.name, 'view', 'rw source attribute remains unchanged';
+is-deeply $view.sequence.List, (2,4,6), 'finite sequence is materialized inside the query';
+ok !$view.nothing.defined, 'Nil is preserved';
+throws-like { $view.delayed-effect }, Exception, :message(/ 'QUERY' /), 'lazy lists are materialized before leaving query scope';
+throws-like { $view.unmarked }, X::Method::NotFound, 'unmarked methods are not exposed';
+throws-like { $view.bad }, Exception, :message(/ 'QUERY' /), 'query cannot submit commands';
+throws-like { $view.^load.bad }, Exception, :message(/ 'QUERY' /), 'direct query method is guarded too';
+throws-like { $view.resource }, Exception, :message(/ 'Unsupported query result' /), 'resource cannot escape';
+throws-like { $view.cyclic }, Exception, :message(/ 'acyclic' /), 'cyclic results rejected';
+throws-like { EVAL q[use RedSourcing; class Plain { method x is query { 1 } }] }, Exception;
+throws-like { EVAL q[use RedSourcing; projection Private { has $!x is query; method APPLY {} }] }, Exception,
+    :message(/ 'public accessor' /);
+throws-like { EVAL q[use RedSourcing; aggregate Mixed { method APPLY {}; method x is command is query {} }] }, Exception;
+throws-like { EVAL q[use RedSourcing; aggregate Mixed { method APPLY {}; method x is query is command {} }] }, Exception;
+throws-like { EVAL q[use RedSourcing; projection Hook { method APPLY is query {} }] }, Exception;
+throws-like { EVAL q[use RedSourcing; projection MixedMulti { method APPLY {}; multi method x(Int $x) is query { 1 }; multi method x(Str $x) { 2 } }] }, Exception,
+    :message(/ 'Every candidate' /);
+throws-like { EVAL q[use RedSourcing; projection PrivateMethod { method APPLY {}; method !hidden is query { 1 } }] }, Exception, :message(/ 'public method' /);
+done-testing;

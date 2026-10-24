@@ -49,7 +49,7 @@ sequenceDiagram
     Caller->>X: Run the same completed command again
     X->>J: Read saved result
     X-->>Caller: 5, without another event
-    Caller->>P: load
+    Caller->>P: value (is query)
     P->>J: Read optional snapshot and matching facts for this id
     P->>P: APPLY facts in global ID order
     P-->>Caller: value 5
@@ -92,3 +92,8 @@ docker compose -f examples/counter/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Reading through proxies
+
+`value` is declared `is query`, so `CounterTotal.^with-ids(:1id).value`
+loads the current projection and returns its value through the proxy.

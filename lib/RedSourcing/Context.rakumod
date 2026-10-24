@@ -3,6 +3,7 @@ unit module RedSourcing::Context;
 # Dynamic scopes also cover calls made through an aggregate proxy.
 sub assert-effect-allowed(Str $operation) is export {
     my $phase = (try $*REDSOURCING-PHASE) // '';
+    die "$operation is forbidden in QUERY" if $phase eq 'QUERY';
     die "Use ServiceContext for state changes ($operation)"
         if $phase eq any('SERVICE', 'SERVICE-READ') && $operation eq any('command submission', 'command execution', 'event emission', 'snapshot emission');
     die "$operation is forbidden in APPLY" if $phase eq 'APPLY';

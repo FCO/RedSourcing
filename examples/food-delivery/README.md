@@ -153,3 +153,9 @@ docker compose -f examples/food-delivery/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Reading through proxies
+
+Read methods such as `tracking`, `active-orders` and `report` are declared
+`is query`. Call them directly on their entity proxies; use `.^load` when an
+explicit loaded entity is needed, such as the snapshot steps in the demo.

@@ -1,0 +1,193 @@
+{
+  "verified_at": "2026-10-24T17:45:56.470631+00:00",
+  "environment": {
+    "red": "0.2.7",
+    "rakudo": "2026.09"
+  },
+  "scope": "Focused query/proxy, services, HTTP, sagas, decision-model and cached entity regressions. This is not a rerun of every repository test.",
+  "main_and_rakuast": [
+    {
+      "frontend": "main",
+      "test": "01-basic",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "04-commands",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "06-signature-rules",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "11-exports",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "13-sagas",
+      "exitcode": 0,
+      "note": "Rerun after narrowing the new command-body guard to QUERY; saga timeout commands remain supported."
+    },
+    {
+      "frontend": "main",
+      "test": "43-saga-controller",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "44-projection-boundaries",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "46-transactional-projections",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "54-decision-model",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "66-cached-entities",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "69-decision-snapshots",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "72-decision-state-cache",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "73-managed-services",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "74-service-recovery",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "77-service-declarations",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "78-service-http",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "79-projection-services",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "80-microblog",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "81-microblog-http",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "83-query-proxies",
+      "exitcode": 0,
+      "note": "Rerun after eager List materialization: all 34 top-level tests passed."
+    },
+    {
+      "frontend": "main",
+      "test": "84-proxy-service-context",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "60-projection-plans",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "80-microblog",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "81-microblog-http",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "83-query-proxies",
+      "exitcode": 0,
+      "note": "Rerun after eager List materialization: all 34 top-level tests passed."
+    },
+    {
+      "frontend": "rakuast",
+      "test": "84-proxy-service-context",
+      "exitcode": 0
+    }
+  ],
+  "pg": [
+    {
+      "test": "75-service-ownership-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "79-projection-services",
+      "exitcode": 0
+    },
+    {
+      "test": "80-microblog",
+      "exitcode": 0
+    },
+    {
+      "test": "82-projection-service-ownership-pg",
+      "exitcode": 0
+    },
+    {
+      "test": "83-query-proxies",
+      "exitcode": 0
+    }
+  ],
+  "source_sha256": {
+    "lib/RedSourcing/Query.rakumod": "7798d2b8fa277ed4dc5e7f58852e6a76a07712701ad7e95cf3a7a7d16f19e1fc",
+    "lib/RedSourcing/Traits.rakumod": "4188a68102ba89bcd5bdc97fd3d0e850abd345aa6312a9fa475b2ceaa1e9fd5f",
+    "lib/Metamodel/RedSourcing/EntityHOW.rakumod": "216179831afd3ab7d3f8045ce48fc4949be9179c3f90910698f7122d7fd83716",
+    "lib/RedSourcing/Service.rakumod": "9718517ae3469a1784cb2c365be1f3fa0127210b6f3d60fd4f137e55b51c9df0",
+    "lib/RedSourcing/Service/Context.rakumod": "ca21f2791214f87e439404d1154d6f3f8f9d1ace37c8252c5abe2ba59a846ae4",
+    "lib/RedSourcing/Web/Server.rakumod": "261d734c28f2786819bbfcfd88910c816ca725c2983f8a4ab6b45d47c90d47c5",
+    "examples/microblog/lib/Microblog/Domain.rakumod": "b6584f98ae730dc2520dbdad1db83ab9e9dfa6f4ba7033b34e70bdaed0a34c8c",
+    "examples/microblog/lib/Microblog/HTTP.rakumod": "c66929fdbb1e5300b57812b84855ef664838b8efec50c1d4647e50a2a4b7341b",
+    "examples/microblog/lib/Microblog/Server.rakumod": "a28bcc5239f19711d02eb8106e6f4221c25a16465842b91cb87aea34a6f00be0"
+  },
+  "final_targeted_reruns": [
+    {
+      "frontend": "main",
+      "test": "83-query-proxies",
+      "exitcode": 0
+    },
+    {
+      "frontend": "main",
+      "test": "84-proxy-service-context",
+      "exitcode": 0
+    },
+    {
+      "frontend": "rakuast",
+      "test": "83-query-proxies",
+      "exitcode": 0
+    }
+  ]
+}

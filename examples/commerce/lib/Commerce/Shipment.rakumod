@@ -5,7 +5,7 @@ use Commerce::Inventory;
 unit aggregate Commerce::Shipment;
 
 has Str $.order-id is entity-id;
-has Str $.status = 'new';
+has Str $.status is query = 'new';
 has Str $.booking-id = '';
 has Str $.tracking-code = '';
 has Str $.issue = '';

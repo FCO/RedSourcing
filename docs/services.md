@@ -34,34 +34,76 @@ result is not persisted. A kept Promise ends the service, while a broken Promise
 uses the configured restart budget. Direct event emission from service bodies
 is rejected: use `ServiceContext.aggregate` for state changes.
 
-## Services on projections and other entities
+## Queries and commands through entity proxies
 
-Projection services use the same lifecycle APIs as aggregates. Their controls
-are stored in an internal aggregate per service, outside the projection's
-stream; projections still cannot declare commands. Existing aggregate service
-identities and their queued control commands keep their original path.
-
-`state` reconstructs the owning entity, including a projection. To use another
-entity from a handler:
+Declare the public read surface with `is query`, on methods or attributes:
 
 ```raku
-my $page = $runtime.read($timeline, :method<page>, :arguments(%(:limit(50))));
-$runtime.command($user, 'tweet', :text('Hello'));
-my $pending = $runtime.command($user, 'tweet', :text('Later'), :!sync);
+projection Directory {
+    has Str $.application-id is entity-id;
+    has %.users is query;
+    method APPLY(UserRegistered $event where { .application-id eq $!application-id }) {
+        %!users{$event.user-id} = $event.name;
+    }
+    method list is query { %!users.keys.sort.Array }
+}
+my $directory = Directory.^with-ids(:application-id<demo>);
+my $names = $directory.list;
+my %users = $directory.users;
+$user.tweet(:text('Hello'));
 ```
 
-`read($proxy)` returns fresh detached state. With `:method` and `:arguments`, it
-runs the query on the executor and returns JSON-compatible materialized data;
-queries must return bounded plain data, not ORM cursors. Declared commands and
-services cannot be invoked as read methods. Framework effects are forbidden
-inside a read method. `command` accepts only declared aggregate commands, and
-preserves the source service's fence even when the target is another aggregate.
-The `aggregate` shortcut remains available for aggregate owners; projection
-owners use an explicit target through `command`.
+Queries work inside and outside services. Outside, the proxy loads the entity
+using the application's connection and lifecycle. Inside a service, a dynamic
+`ServiceContext` routes both queries and declared commands through that service's
+executor, carrying its owner/generation. Proxies retain only identity, so the
+same proxy can be reused by different services. Existing identity getters remain
+local metadata reads.
 
-The [microblog example](../examples/microblog/README.md) demonstrates a shared
-transactional tweet index, author/feed projections and a projection-owned HTTP
-service with SSE.
+`is query` on an attribute marks its public accessor. The proxy exposes only a
+getter, even when the source attribute is `is rw`. Changing a returned collection
+does not mutate the entity. Private attributes without accessors are rejected.
+Only marked queries are forwarded; framework hooks, constructors/destructors and
+mixed query/command/service declarations are rejected. Inherited queries and
+uniformly marked multi candidates are supported, with positional and named
+arguments. Explicit forwarders also handle names such as `list` already present
+on `Any`.
+
+Results preserve Raku types rather than round-tripping through JSON: numeric and
+string values, `Rat`, dates/instants/durations, and finite data collections.
+Arrays and hashes are copied recursively, including typed containers. Sequences
+are materialized on the executor. Cycles, ORM models/cursors, handles, Promises,
+Supplies and opaque objects are rejected; return plain data collections instead.
+Queries must be bounded and finite. Their bodies cannot invoke effects through
+the framework, including commands on the receiver or explicit service helpers.
+This is a CQRS API guard, not a sandbox for arbitrary SQL written by a developer.
+
+The service entrypoint has its context bound automatically. The HTTP helper also
+binds request processing, including delayed request bodies. For callbacks invoked
+by outside emitters or timers, capture the context explicitly:
+
+```raku
+my &receive = $runtime.bind(-> %message {
+    $user.tweet(:text(%message<text>));
+});
+my $subscription = $incoming.Supply.tap(&receive);
+```
+
+`bind` preserves arguments and protected query scopes. It binds the exact service
+instance, not just its runtime. Revoked generations and closed executors fail;
+they never fall back to ordinary application access. `on-stop` callbacks are
+bound automatically. `runtime.proxy` returns the owning entity's normal proxy.
+
+The explicit `read`, `command`, `aggregate` and `state` helpers remain compatible.
+In particular, `read($proxy, :method, :arguments)` keeps its existing JSON data
+contract; the new typed return contract applies to proxy queries. The `aggregate`
+shortcut still targets aggregate owners; projection services can use any
+aggregate proxy directly. `:!sync` keeps the originating service fence in queued
+commands.
+
+Projection service controls still belong to an internal aggregate, outside the
+projection stream. Projections do not gain domain commands. Existing aggregate
+service identities and queued controls keep their original path.
 
 ## Cro HTTP services
 
@@ -207,6 +249,14 @@ and a real HTTP server owned by the aggregate service. They do not supply a
 distributed HTTP gateway or WebSocket hibernation.
 
 ## Verification
+
+The proxy/query API has a separate focused regression record in
+[query-validation.json](../examples/microblog/query-validation.json), covering
+SQLite, Pg, RakuAST, delayed HTTP request bodies, callbacks, typed detached
+results and stale service generations. Timing comparisons are documented in
+[the microblog performance notes](../examples/microblog/PERFORMANCE.md).
+
+The earlier managed-services validation below predates the proxy/query change.
 
 Verified with Red 0.2.7 and Rakudo 2026.09. All new service tests pass, including
 SQLite transaction isolation/recovery, Pg ownership across processes, migration

@@ -134,3 +134,9 @@ Para reproduzir, com PostgreSQL já iniciado:
 ```sh
 python3 tools/compare-school-drivers.py --pg-host=127.0.0.1 --pg-port=5432 --pg-user=postgres --pg-database=postgres
 ```
+
+## Reading through proxies
+
+`SchoolOverview.enrollment-count` is declared `is query` and is available
+directly on its proxy. The application helpers still return loaded views when
+the caller needs several fields from the same reconstructed state.

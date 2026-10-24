@@ -37,8 +37,7 @@ sub register-commerce-providers is export {
             if $provider eq 'webhook' && $operation eq 'deliver' {
                 %webhook-payload = |%args<payload>, delivery-id => $idempotency-key;
                 unless %args<endpoint> eq 'simulated://commerce' {
-                    require ::('Commerce::WebhookHTTP');
-                    my &post-webhook = ::('Commerce::WebhookHTTP').WHO{'&post-webhook'};
+                    require Commerce::WebhookHTTP <&post-webhook>;
                     $webhook-status = post-webhook(
                         %args<endpoint>, %webhook-payload, :$idempotency-key);
                 }
@@ -69,8 +68,8 @@ sub register-commerce-providers is export {
                     %result = :$booking-id, tracking-code => "TRACK-$order-id";
                 }
                 when 'carrier/cancel' {
-                    require ::('Commerce::Shipment');
-                    my $shipment = ::('Commerce::Shipment').^with-ids(:$order-id).^load;
+                    require Commerce::Shipment;
+                    my $shipment = Commerce::Shipment.^with-ids(:$order-id).^load;
                     die Permanent.new(:message('Carrier handoff cannot be cancelled')) if $shipment.status eq any(<dispatched delivered>);
                     my $booking-id = %args<booking-id>;
                     my $stream = "CommerceBookingCancelled: $booking-id";
