@@ -28,7 +28,7 @@ $tmp.add('CliOperations.rakumod').spurt(q:to/MODULE/);
         has Bool $.finished = False;
         method APPLY(Renamed $e where { .id eqv $!id }) { }
         method REACT(Renamed $e where { .id eqv $!id }) {
-            self.^command(Account, 'rename', \(:name('From saga')), :!compensation);
+            Account.^with-ids(:id($.id)).rename(:name('From saga'), :!service-compensation);
         }
     }
     saga ServiceWorkflow is export {

@@ -54,7 +54,7 @@ method add-item(
 ) is command {
     self!ensure-open;
     if %!items{$product-id}:exists {
-        my %item = self!item($product-id);
+        my %item = self!item: $product-id;
         die "Product '$product-id' already has a different name or price"
             unless %item<name> eq $name && %item<unit-price>.Rat == $unit-price;
     }
@@ -69,27 +69,27 @@ method set-quantity(
     Str :$product-id!, UInt :$quantity! where * > 0,
 ) is command {
     self!ensure-open;
-    my %item = self!item($product-id);
+    my %item = self!item: $product-id;
     my $previous-quantity = %item<quantity>;
     my $unit-price = %item<unit-price>.Rat;
     # Setting an unchanged quantity is a successful command with no new event.
     if $quantity != $previous-quantity {
-        self.quantity-changed(
+        self.quantity-changed:
             :$product-id, :$unit-price,
             :$previous-quantity, :$quantity,
-        );
+        ;
     }
     %(product-id => $product-id, :$quantity, total => $!total)
 }
 
 method remove-item(Str :$product-id!) is command {
     self!ensure-open;
-    my %item = self!item($product-id);
+    my %item = self!item: $product-id;
     my $unit-price = %item<unit-price>.Rat;
     my $quantity = %item<quantity>;
-    self.item-removed(
+    self.item-removed:
         :$product-id, :$unit-price, :$quantity,
-    );
+    ;
     $!total
 }
 
@@ -102,9 +102,9 @@ method checkout is command {
         %item<unit-price> = %item<unit-price>.Rat;
         %item
     };
-    my $item-count = [+] @items.map(*.<quantity>);
-    self.cart-checked-out(
+    my $item-count = [+] @items.map: *.<quantity>;
+    self.cart-checked-out:
         :$order-id, :total($!total), :$item-count, :@items,
-    );
+    ;
     %(:$order-id, :total($!total), :$item-count, :@items)
 }

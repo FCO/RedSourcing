@@ -31,24 +31,25 @@ saga OrderSaga is export {
     }
     multi method APPLY(StepSucceeded $event where { .step eq 'charge-payment' }) { $!paid = True }
     multi method REACT(OrderSubmitted $event where { .order-id eq $!order-id }) {
-        self.set-timeout('delivery-deadline', 15 * 60,
-            expire => \(reason => 'Delivery deadline exceeded'));
+        self.set-timeout: 'delivery-deadline', 15 * 60,
+            expire => \(reason => 'Delivery deadline exceeded');
         self.reserve-stock;
     }
     multi method REACT(StepSucceeded $event where { .step eq 'reserve-stock' }) { self.charge-payment }
-    multi method REACT(StepFailed $event) { self.^compensate(:reason($event.error)) }
+    multi method REACT(StepFailed $event) { self.^compensate: :reason($event.error) }
     method reserve-stock {
-        self.^command(Inventory, 'reserve', \(), :retry{:3max,:2delay})
+        Inventory.^with-ids(:$.order-id).reserve: :service-retry{:3max, :2delay}
     }
     method compensate-reserve-stock(Str :$reservation-id!, |) {
-        self.^command(Inventory, 'release', \(:$reservation-id), :retry{:5max,:10delay})
+        Inventory.^with-ids(:$.order-id).release:
+            :$reservation-id, :service-retry{:5max, :10delay}
     }
     method charge-payment {
-        self.^service('payments', 'charge', \(:order-id($.order-id), :amount($.amount)),
-            :retry{:5max,:backoff(Exponential),:1init-delay,:30max-delay})
+        self.^service: 'payments', 'charge', \(:$.order-id, :$.amount),
+            :retry{:5max,:backoff(Exponential),:1init-delay,:30max-delay}
     }
     method compensate-charge-payment(Str :$payment-id!, |) {
-        self.^service('payments', 'refund', \(:$payment-id), :retry{:5max,:10delay})
+        self.^service: 'payments', 'refund', \(:$payment-id), :retry{:5max,:10delay}
     }
-    method expire(Str :$reason!) is command { self.^compensate(:$reason) }
+    method expire(Str :$reason!) is command { self.^compensate: :$reason }
 }

@@ -30,9 +30,9 @@ declaration. `.^cache-size` and `.^cache-size(:declared)` query the type capacit
 Configuration calls return the type and accept the same named pairs as brackets:
 
 ```raku
-Account.^lifecycle(:retained, :auto-snapshot{ :100count, :300seconds });
+Account.^lifecycle: :retained, :auto-snapshot{ :100count, :300seconds };
 Account.^lifecycle;           # Query the effective lifecycle
-Account.^lifecycle(:declared); # Query the declaration default
+Account.^lifecycle: :declared; # Query the declaration default
 ```
 
 `:declared` is a query option; do not combine it with configuration options.
@@ -93,11 +93,11 @@ can be reapplied. Cache state is local to the process and connection/pool.
 ## Load, update and release
 
 ```raku
-my $proxy = Account.^with-ids(:account-id<a1>);
+my $proxy = Account.^with-ids: :account-id<a1>;
 $proxy.^create;
 my $account = $proxy.^load;
 my $same = $proxy.^load; # Same object while still cached
-$proxy.credit(:amount(5)); # Existing reference updates after commit
+$proxy.credit: :amount(5); # Existing reference updates after commit
 $proxy.^release; # Future loads reconstruct a new instance
 ```
 

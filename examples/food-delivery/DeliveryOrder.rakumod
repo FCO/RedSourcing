@@ -61,8 +61,8 @@ method place-order(
     Str :$address! where *.chars > 0,
     :%items! where *.elems > 0,
 ) is command {
-    self!require-status('new');
-    my $restaurant-proxy = Restaurant.^with-ids(:$restaurant-id);
+    self!require-status: 'new';
+    my $restaurant-proxy = Restaurant.^with-ids: :$restaurant-id;
     die "Restaurant '$restaurant-id' does not exist"
         unless StoredEvent.^all.grep({
             .class eq Restaurant.^name && .stream eq $restaurant-proxy.^stream-name
@@ -82,49 +82,49 @@ method place-order(
         %(item-id => $item-id, name => %item<name>,
             unit-price => %item<unit-price>.Rat, :$quantity)
     };
-    my Rat $subtotal = [+] @lines.map({ .<unit-price> * .<quantity> });
+    my Rat $subtotal = [+] @lines.map: { .<unit-price> * .<quantity> };
     my Rat $delivery-fee = 2.50;
     my Rat $total = $subtotal + $delivery-fee;
-    self.order-placed(:$restaurant-id, :$customer-id, :$address,
-        :items(@lines), :$subtotal, :$delivery-fee, :$total);
+    self.order-placed: :$restaurant-id, :$customer-id, :$address,
+        :items(@lines), :$subtotal, :$delivery-fee, :$total;
     %(:$!order-id, :$!status, :$!subtotal, :$!delivery-fee, :$!total, :$!items)
 }
 
 method accept is command {
-    self!require-status('placed');
-    self.order-accepted(|self!event-ids);
+    self!require-status: 'placed';
+    self.order-accepted: |self!event-ids;
     $!status
 }
 
 method mark-ready is command {
-    self!require-status('accepted');
-    self.order-ready(|self!event-ids);
+    self!require-status: 'accepted';
+    self.order-ready: |self!event-ids;
     $!status
 }
 
 method assign-courier(Str :$courier-id! where *.chars > 0) is command {
-    self!require-status('ready');
-    self.courier-assigned(|self!event-ids, :$courier-id);
+    self!require-status: 'ready';
+    self.courier-assigned: |self!event-ids, :$courier-id;
     $!status
 }
 
 method pick-up(Str :$courier-id! where *.chars > 0) is command {
-    self!require-status('assigned');
-    self!require-courier($courier-id);
-    self.order-picked-up(|self!event-ids, :$courier-id);
+    self!require-status: 'assigned';
+    self!require-courier: $courier-id;
+    self.order-picked-up: |self!event-ids, :$courier-id;
     $!status
 }
 
 method deliver(Str :$courier-id! where *.chars > 0) is command {
-    self!require-status('picked-up');
-    self!require-courier($courier-id);
-    self.order-delivered(|self!event-ids, :$courier-id, :total($!total));
+    self!require-status: 'picked-up';
+    self!require-courier: $courier-id;
+    self.order-delivered: |self!event-ids, :$courier-id, :total($!total);
     $!status
 }
 
 method cancel(Str :$reason! where *.chars > 0) is command {
     die "Order '$!order-id' cannot be cancelled while '$!status'"
         unless $!status eq any('placed', 'accepted');
-    self.order-cancelled(|self!event-ids, :$reason);
+    self.order-cancelled: |self!event-ids, :$reason;
     $!status
 }

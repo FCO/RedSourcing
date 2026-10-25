@@ -12,9 +12,9 @@ sub MAIN(Str :f(:$file) = $?FILE.IO.parent.add('red-sourcing.rakuconf').Str,
     say "Commerce controller: {$settings.driver} / {$settings.database}";
     $*OUT.flush;
     my $stopped = Promise.new;
-    my $tap = signal(SIGINT).tap({ $stopped.keep(True) unless $stopped.status });
+    my $tap = signal(SIGINT).tap: { $stopped.keep: True unless $stopped.status };
     until $stopped.status {
-        await Promise.anyof($stopped, Promise.in($interval));
+        await Promise.anyof: $stopped, Promise.in($interval);
         $shop.drain unless $stopped.status;
     }
     $tap.close;

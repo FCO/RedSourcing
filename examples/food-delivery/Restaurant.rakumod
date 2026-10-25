@@ -24,7 +24,7 @@ method set-menu-item(
     Rat() :$unit-price! where { $_ > 0 && ($_ * 100).denominator == 1 },
     Bool :$available = True,
 ) is command {
-    self.menu-item-set(:$item-id, :$name, :$unit-price, :$available);
+    self.menu-item-set: :$item-id, :$name, :$unit-price, :$available;
     %!menu{$item-id}
 }
 

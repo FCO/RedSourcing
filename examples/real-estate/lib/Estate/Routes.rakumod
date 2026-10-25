@@ -35,7 +35,7 @@ sub estate-routes($app, IO::Path :$assets) is export {
         }
         get -> 'live' {
             header 'X-Accel-Buffering', 'no';
-            content 'text/event-stream', $app.updates.map(*.encode('utf-8'));
+            content 'text/event-stream', $app.updates.map: *.encode('utf-8');
         }
         get -> 'health' { content 'application/json', %(ok => !$app.controller-error.chars, controller-error => $app.controller-error) }
         post -> 'actions', Str $action {
@@ -51,7 +51,7 @@ sub estate-routes($app, IO::Path :$assets) is export {
                                 content 'text/html', '<p class="notice error">' ~ escape-html(.message) ~ '</p>';
                             }
                         }
-                        $app.execute($action, %data);
+                        $app.execute: $action, %data;
                         # Controller owns effects. A request merely commits a command.
                         header 'HX-Trigger', 'redsourcing:update';
                         if request.header('HX-Request') {

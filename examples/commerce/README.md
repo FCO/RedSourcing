@@ -212,8 +212,8 @@ use Commerce::App;
 
 red-defaults 'SQLite', :database(':memory:');
 my $shop = Shop.new.initialize;
-$shop.product('coffee', :name<Coffee>, :price(12.50), :quantity(10));
-$shop.purchase('order-1', :items{:coffee(2)}, :email<ana@example.test>);
+$shop.product: 'coffee', :name<Coffee>, :price(12.50), :quantity(10);
+$shop.purchase: 'order-1', :items{:coffee(2)}, :email<ana@example.test>;
 $shop.drain;
 
 # Warehouse approves the handoff; cancellation and this transition share
@@ -257,7 +257,7 @@ saga without refunding a payment that already reached the paid order.
 Paid cancellation is accepted **before dispatch authorization**:
 
 ```raku
-$shop.order('order-1').request-cancellation(:reason('Wrong address'));
+$shop.order('order-1').request-cancellation: :reason('Wrong address');
 $shop.drain;
 ```
 
@@ -285,7 +285,7 @@ controller; it does not implement distributed leases or a physical warehouse API
 The example supports one full-order return after delivery:
 
 ```raku
-$shop.order('order-1').request-return(:reason('Changed my mind'));
+$shop.order('order-1').request-return: :reason('Changed my mind');
 $shop.drain;                    # Obtain a simulated return label
 $shop.order('order-1').receive-return; # Warehouse acknowledges physical receipt
 $shop.drain;
@@ -347,8 +347,8 @@ code, optionally overriding or disabling it for a particular order:
 
 ```raku
 my $shop = Shop.new(:webhook-url('https://partner.example/hooks')).initialize;
-$shop.purchase('order-1', :items{:coffee(2)});
-$shop.purchase('order-2', :items{:coffee(1)}, :webhook-url('')); # Disable this order
+$shop.purchase: 'order-1', :items{:coffee(2)};
+$shop.purchase: 'order-2', :items{:coffee(1)}, :webhook-url(''); # Disable this order
 ```
 
 These snippets assume registered products and unused order IDs. For the demo,

@@ -49,20 +49,22 @@ aggregate User {
     has Str $.name = '';
     method APPLY(UserRegistered $event) { $!name = $event.name }
     method register(Str :$name!, Str :$email!) is command {
-        my $row = self.user-registered(:$name, :$email);
+        my $row = self.user-registered: :$name, :$email;
         %(name => $!name, emitted-at => $row.created.Str)
     }
 }
-my $user = User.^with-ids(:user-id<ana>);
+my $user = User.^with-ids: :user-id<ana>;
 $user.^create;
-say $user.register(:name<Ana>, :email<ana@example.com>);
+say $user.register: :name<Ana>, :email<ana@example.com>;
 ```
 
 Give `UserRegistered` a `$.user-id` attribute when that identity belongs in its
 payload. Projections only consume facts: they cannot declare `is command`, own
-domain events or emit them. Query a loaded projection with ordinary methods,
-such as `$proxy.^load.summary`. Sagas request domain changes by calling aggregate
-commands; their snapshots and native control events are runtime bookkeeping.
+domain events or emit them. Declare read methods with `is query` and call them
+on the proxy, such as `$proxy.summary`. Within saga planning, aggregate proxy
+commands schedule durable actions; `:service-retry` and `:service-compensation`
+configure those actions without becoming command arguments. Saga snapshots and
+native control events are runtime bookkeeping.
 
 The low-level `Event.emit(:stream, :version, ...)` storage interface remains
 available for framework internals and test fixtures. It bypasses aggregate command
@@ -177,9 +179,9 @@ class RegistrationsByName {
     multi method APPLY(UserRegistered $_ where { .name eq $!name }) { ... }
 }
 
-my $registrations = RegistrationsByName.new(:name<Jane>);
+my $registrations = RegistrationsByName.new: :name<Jane>;
 my @rules = rules-from-func($registrations, $registrations.^find_method('APPLY'));
-say .name for StoredEvent.list-events(|@rules);
+say .name for StoredEvent.list-events: |@rules;
 ```
 
 For a subroutine, use `rules-from-func(&handler)` without an instance. Each
@@ -212,7 +214,7 @@ class UsersByName {
     has $.name;
 }
 
-my $projection = UsersByName.new(name => "Jane");
+my $projection = UsersByName.new: name => "Jane";
 
 my &load-jane = StoredEvent.map-list-events:
     (UserRegistered) => %(name => "name"),
@@ -283,16 +285,16 @@ aggregate Counter {
     }
 
     method increment(Int :$amount = 1) is command {
-        self.counter-incremented(:$amount);
+        self.counter-incremented: :$amount;
         $!value
     }
 }
 
-my $counter = Counter.^with-ids(:id(42));
+my $counter = Counter.^with-ids: :id(42);
 $counter.^create;                            # Persist the initial entity snapshot
 say $counter.increment;                      # 1
 
-my $row = $counter.increment(:amount(2), :!sync);
+my $row = $counter.increment: :amount(2), :!sync;
 say $row.state;                             # Pending
 say $row.run;                               # 3
 say $row.run;                               # 3; the handler does not run again
@@ -357,7 +359,7 @@ multi method APPLY(Transaction $event)
 }
 
 method transfer(Int :$to-client!, Rat() :$amount!) is command {
-    self.transaction(:$to-client, :$amount);
+    self.transaction: :$to-client, :$amount;
     $!amount
 }
 ```
@@ -438,7 +440,7 @@ projection TotalIncreases {
     method APPLY(CounterIncremented $event) { $!value += $event.amount }
 }
 
-my $totals = TotalIncreases.^with-ids(:name<all>);
+my $totals = TotalIncreases.^with-ids: :name<all>;
 my $projection = $totals.^load;
 $projection.^emit-snapshot;   # Persist state and consumed cursor
 $projection = $totals.^load; # Restore, then replay newer events
@@ -527,7 +529,8 @@ using the same executor as the synchronous path. The entity and event classes mu
 loaded in the executing process, and the entity must implement `APPLY` for its
 domain events. Aggregate command execution requires an existing snapshot in its
 stream. Saga command execution restores its committed control state. Projections
-are read with `.^load` and ordinary methods rather than this command executor.
+are read through proxy methods/accessors marked `is query`, rather than this
+command executor. Use `.^load` for explicit entity inspection or checkpoints.
 Synchronous and deferred aggregate commands use the same metaclass-driven loader.
 The executor and explicit row coercion use `resolve-class` from
 `RedSourcing::Utils`: it first checks the current scope, then requires the
@@ -561,10 +564,10 @@ future, leaving its state and attempt count unchanged. Use `.run(:wait)` to wait
 for that time and receive the result of an execution attempt:
 
 ```raku
-my $scheduled = $counter.increment(:!sync);
-$scheduled.next-run = DateTime.now.later(:seconds(0.1));
+my $scheduled = $counter.increment: :!sync;
+$scheduled.next-run = DateTime.now.later: :seconds(0.1);
 $scheduled.^save;
-say $scheduled.run(:wait);                 # 4, after the earlier examples
+say $scheduled.run: :wait;                 # 4, after the earlier examples
 ```
 
 Waiting happens outside the transaction. If the locked read finds a newly

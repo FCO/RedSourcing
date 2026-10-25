@@ -39,6 +39,7 @@ method compose(Mu \entity, |) {
         %!handlers{$name} = &handler;
         &handler.wrap(my method (Mu:D \SELF: |c) {
             my $*REDSOURCING-SAGA-METHOD = $name;
+            my $*REDSOURCING-SAGA = SELF;
             if phase() eq 'REACT' {
                 callsame
             } else {
@@ -165,6 +166,7 @@ method plan-operation(\entity, &code) {
     my %before = copy-data($copy.^values);
     my $result = do {
         my $*REDSOURCING-PHASE = 'REACT';
+        my $*REDSOURCING-SAGA = $copy;
         code($copy)
     };
     die 'REACT cannot change persisted domain state; use APPLY'
@@ -178,6 +180,7 @@ method react(\entity, $event) {
     return unless $handler && $handler.cando(\(entity, $event));
     my %before = copy-data(entity.^values);
     my $*REDSOURCING-PHASE = 'REACT';
+    my $*REDSOURCING-SAGA = entity;
     entity.REACT($event);
     die 'REACT cannot change persisted domain state; use APPLY'
         unless %before eqv copy-data(entity.^values);
@@ -471,6 +474,7 @@ method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 
         my $copy = entity.^clone-state;
         $copy.^state<timers>{$name}:delete;
         my $*REDSOURCING-PHASE = 'REACT';
+        my $*REDSOURCING-SAGA = $copy;
         my %before = copy-data($copy.^values);
         $copy."{%timer<method>}"(|%timer<positional>.List, |%timer<named>);
         die 'REACT cannot change persisted domain state; use APPLY'
@@ -500,6 +504,7 @@ method advance-operation(\entity, DateTime :$now = DateTime.now, UInt :$limit = 
                 my $*REDSOURCING-COMPENSATION = %entry<id>;
                 my $invocation = $copy.^clone-state;
                 $invocation.^adopt(%entry<context>, $copy.^state, $copy.^current-id);
+                my $*REDSOURCING-SAGA = $invocation;
                 my %before = copy-data($invocation.^values);
                 my $count = $copy.^state<actions>.elems;
                 $invocation."{%entry<method>}"(|%entry<result>);

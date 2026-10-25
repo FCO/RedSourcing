@@ -125,3 +125,7 @@ separate monitor at `http://127.0.0.1:3001/monitor`. See the
 The inventory's `reserved is query` accessor can be read directly through its
 proxy. The saga is explicitly loaded where the demo inspects its durable actions
 and compensations.
+
+Proxy command calls inside saga methods schedule durable actions.
+`:service-retry{...}` configures their retry policy; compensator methods use the
+same proxy syntax. Registered external adapters still use `self.^service(...)`.

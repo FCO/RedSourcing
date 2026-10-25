@@ -9,7 +9,7 @@ aggregate HTTPRoom[:!auto-snapshot] {
     has @.messages is query;
     method APPLY(HTTPMessageRecorded $event) { @!messages.push($event.text) }
     method record-message(Str :$text!) is command {
-        self.http-message-recorded(:$text);
+        self.http-message-recorded: :$text;
         @!messages.elems
     }
     method serve(ServiceContext $runtime, Str :$host!, Int :$port!) is service {
@@ -27,7 +27,7 @@ aggregate HTTPRoom[:!auto-snapshot] {
                 request-body -> %body {
                     if %body<text> ~~ Str && %body<text>.chars {
                         $runtime.touch;
-                        my $count = $room.record-message(:text(%body<text>));
+                        my $count = $room.record-message: :text(%body<text>);
                         response.status = 201;
                         content 'application/json', %(count => $count);
                     } else {
@@ -41,19 +41,19 @@ aggregate HTTPRoom[:!auto-snapshot] {
 }
 
 sub MAIN(Str :$host = '127.0.0.1', Int :$port = 3080) {
-    my $file = $*TMPDIR.add('redsourcing-http-' ~ $*PID ~ '.db');
+    my $file = $*TMPDIR.add: 'redsourcing-http-' ~ $*PID ~ '.db';
     LEAVE $file.unlink if $file.e;
     red-sourcing-defaults(:driver<SQLite>, :database($file.Str), :!flow-tracing);
     my $runtime = ServiceRuntime.new(:poll-interval(.05)).initialize;
     LEAVE $runtime.shutdown;
-    my $room = HTTPRoom.^with-ids(:room-id<general>);
+    my $room = HTTPRoom.^with-ids: :room-id<general>;
     $room.^create;
-    $room.^start-service('serve', :args(%(:$host, :$port)), :idle-timeout(3600));
+    $room.^start-service: 'serve', :args(%(:$host, :$port)), :idle-timeout(3600);
     my $controller = $runtime.run;
     my $deadline = now + 30;
     until $room.^service-status('serve')<phase> eq 'active' {
         die 'HTTP service did not become ready: ' ~ $room.^service-status('serve').raku if now > $deadline;
-        await Promise.in(.05);
+        await Promise.in: .05;
     }
     say "Room HTTP: http://{$host}:{$port}/messages";
     say 'Press Ctrl+C to stop. Idle timeout: 1 hour. Database: ' ~ $file;
@@ -62,7 +62,7 @@ sub MAIN(Str :$host = '127.0.0.1', Int :$port = 3080) {
         whenever signal(SIGINT) { done }
         whenever signal(SIGTERM) { done }
     }
-    $room.^stop-service('serve');
+    $room.^stop-service: 'serve';
     $runtime.shutdown;
     await $controller;
 }

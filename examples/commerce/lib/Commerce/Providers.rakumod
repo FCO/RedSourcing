@@ -11,7 +11,7 @@ sub provider-fault(Str $provider, Str $operation, Str :$kind = 'retryable', UInt
 }
 sub clear-provider-faults is export { %faults = () }
 sub facts(Mu:U $type, Str $stream) { StoredEvent.list-events(:types[$type], :$stream).Array }
-sub persist(Mu:U $type, Str $stream, *%data) { $type.emit(:$stream, :version(1), |%data) }
+sub persist(Mu:U $type, Str $stream, *%data) { $type.emit: :$stream, :version(1), |%data }
 
 sub register-commerce-providers is export {
     for <payments carrier supplier email webhook> -> $provider {
@@ -19,15 +19,15 @@ sub register-commerce-providers is export {
             my %args = from-json(to-json($arguments.hash.Hash));
             my $receipt-stream = "CommerceProviderReceipt: $idempotency-key";
             if facts(ProviderReceipt, $receipt-stream).head -> $receipt {
-                die Permanent.new(:message('Idempotency key reused with different arguments'))
+                die Permanent.new: :message('Idempotency key reused with different arguments')
                     unless $receipt.provider eq $provider && $receipt.operation eq $operation && $receipt.arguments eqv %args;
                 return $receipt.result;
             }
             my %fault := %faults{"$provider/$operation"} // {};
             my $fault = %fault<left> ?? %fault<kind> !! '';
             %fault<left>-- if %fault<left>;
-            die Permanent.new(:message("$provider/$operation rejected")) if $fault eq 'permanent';
-            die Retryable.new(:message("$provider/$operation temporarily unavailable")) if $fault eq 'retryable';
+            die Permanent.new: :message("$provider/$operation rejected") if $fault eq 'permanent';
+            die Retryable.new: :message("$provider/$operation temporarily unavailable") if $fault eq 'retryable';
             my %result;
             my $order-id = %args<order-id> // '';
             # HTTP runs outside the receipt transaction. Receivers must deduplicate
@@ -48,14 +48,14 @@ sub register-commerce-providers is export {
                     my $payment-id = "payment/$order-id";
                     my $stream = "CommercePayment: $order-id";
                     if facts(PaymentCaptured, $stream).head -> $payment {
-                        die Permanent.new(:message('Order payment reused with another amount')) unless $payment.amount == %args<amount>;
+                        die Permanent.new: :message('Order payment reused with another amount') unless $payment.amount == %args<amount>;
                     } else { persist(PaymentCaptured, $stream, :$order-id, :$payment-id, :amount(%args<amount>.Rat)) }
                     %result = :$payment-id, amount => %args<amount>;
                 }
                 when 'payments/refund' {
                     my $payment-id = %args<payment-id>;
-                    my $paid = StoredEvent.list-events(:types[PaymentCaptured]).first(*.payment-id eq $payment-id);
-                    die Permanent.new(:message('Unknown payment')) unless $paid;
+                    my $paid = StoredEvent.list-events(:types[PaymentCaptured]).first: *.payment-id eq $payment-id;
+                    die Permanent.new: :message('Unknown payment') unless $paid;
                     my $stream = "CommerceRefund: $payment-id";
                     persist(PaymentRefunded, $stream, :order-id($paid.order-id), :$payment-id, :amount($paid.amount))
                         unless facts(PaymentRefunded, $stream);
@@ -70,7 +70,7 @@ sub register-commerce-providers is export {
                 when 'carrier/cancel' {
                     require Commerce::Shipment;
                     my $shipment = Commerce::Shipment.^with-ids(:$order-id).^load;
-                    die Permanent.new(:message('Carrier handoff cannot be cancelled')) if $shipment.status eq any(<dispatched delivered>);
+                    die Permanent.new: :message('Carrier handoff cannot be cancelled') if $shipment.status eq any(<dispatched delivered>);
                     my $booking-id = %args<booking-id>;
                     my $stream = "CommerceBookingCancelled: $booking-id";
                     persist(CarrierBookingCancelled, $stream, :$order-id, :$booking-id) unless facts(CarrierBookingCancelled, $stream);
@@ -95,7 +95,7 @@ sub register-commerce-providers is export {
                         :source-id(%args<payload><event-id>), :payload(%webhook-payload), :status($webhook-status));
                     %result = delivery-id => $idempotency-key, status => $webhook-status;
                 }
-                default { die Permanent.new(:message("Unknown provider operation $provider/$operation")) }
+                default { die Permanent.new: :message("Unknown provider operation $provider/$operation") }
             }
             persist(ProviderReceipt, $receipt-stream, :$provider, :$operation, :arguments(%args), :result(%result));
             True

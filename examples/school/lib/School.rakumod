@@ -25,7 +25,7 @@ aggregate Student is export {
     has Str $.name = '';
     method APPLY(StudentRegistered $event) { $!name = $event.name }
     method register(Str :$name! where *.chars) is command {
-        unless $!name.chars { self.student-registered(:$name) }
+        unless $!name.chars { self.student-registered: :$name }
         $!name
     }
 }
@@ -35,7 +35,7 @@ aggregate SchoolClass is export {
     has Str $.title = '';
     method APPLY(ClassCreated $event) { $!title = $event.title }
     method register(Str :$title! where *.chars) is command {
-        unless $!title.chars { self.class-created(:$title) }
+        unless $!title.chars { self.class-created: :$title }
         $!title
     }
 }
@@ -125,11 +125,11 @@ sub ensure($proxy) {
 
 class App is export {
     method initialize {
-        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        .^create-table: :unless-exists for StoredEvent, StoredCommand;
         self
     }
-    method add-student(Str $id, Str $name) { ensure(Student.^with-ids(:student-id($id))).register(:$name) }
-    method add-class(Str $id, Str $title) { ensure(SchoolClass.^with-ids(:class-id($id))).register(:$title) }
+    method add-student(Str $id, Str $name) { ensure(Student.^with-ids(:student-id($id))).register: :$name }
+    method add-class(Str $id, Str $title) { ensure(SchoolClass.^with-ids(:class-id($id))).register: :$title }
     method enrollment(Str $student-id, Str $class-id) { ensure(Enrollment.^with-ids(:$student-id, :$class-id)) }
     method enroll(Str $student-id, Str $class-id) { self.enrollment($student-id, $class-id).enroll }
     method cancel(Str $student-id, Str $class-id) { self.enrollment($student-id, $class-id).cancel }

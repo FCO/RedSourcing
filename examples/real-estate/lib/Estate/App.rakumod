@@ -57,8 +57,8 @@ class App is export {
         }
     }
     method initialize(Bool :$seed = True) {
-        $_.^create-table(:unless-exists) for StoredEvent, StoredCommand, ProviderReceipt, ProviderSettings;
-        ProviderSettings.^create(:id(1)) unless ProviderSettings.^all.head;
+        $_.^create-table: :unless-exists for StoredEvent, StoredCommand, ProviderReceipt, ProviderSettings;
+        ProviderSettings.^create: :id(1) unless ProviderSettings.^all.head;
         self!adapters;
         self.seed if $seed && !StoredEvent.^all.head;
         self.tick;
@@ -70,48 +70,48 @@ class App is export {
             my %args = $args.hash;
             my $receipt = ProviderReceipt.^all.grep(*.key eq $idempotency-key).head;
             if $receipt {
-                die Permanent.new(:message('Idempotency key reused for a different payment'))
+                die Permanent.new: :message('Idempotency key reused for a different payment')
                     unless $receipt.operation eq $operation && from-json($receipt.arguments) eqv from-json(to-json(%args));
                 return from-json($receipt.response) if $receipt.done;
             } else {
-                $receipt = ProviderReceipt.^create(:key($idempotency-key), :$operation, :arguments(to-json(%args)));
+                $receipt = ProviderReceipt.^create: :key($idempotency-key), :$operation, :arguments(to-json(%args));
             }
             $receipt.attempts++;
             $receipt.^save;
             my $settings = ProviderSettings.^all.head;
             if $operation eq 'pay' && $settings.failures-left > 0 {
                 $settings.failures-left--; $settings.^save;
-                die Retryable.new(:message('Demo provider temporarily unavailable; no payment was made'));
+                die Retryable.new: :message('Demo provider temporarily unavailable; no payment was made');
             }
             my %result;
             given $operation {
                 when 'pay' {
-                    die Permanent.new(:message('Payment must be positive')) unless %args<amount>.Rat > 0;
+                    die Permanent.new: :message('Payment must be positive') unless %args<amount>.Rat > 0;
                     %result = %(payment-id => "payment-{$receipt.id}", amount => %args<amount>.Rat);
                 }
                 when 'refund' {
-                    my $original = ProviderReceipt.^all.grep(*.operation eq 'pay').grep(*.done).Seq.first({
+                    my $original = ProviderReceipt.^all.grep(*.operation eq 'pay').grep(*.done).Seq.first: {
                         from-json(.response)<payment-id> eq %args<payment-id>
-                    });
-                    die Permanent.new(:message('Original payment was not found')) unless $original;
+                    };
+                    die Permanent.new: :message('Original payment was not found') unless $original;
                     %result = %(payment-id => %args<payment-id>, refunded => True);
                 }
-                default { die Permanent.new(:message("Unknown payment operation '$operation'")) }
+                default { die Permanent.new: :message("Unknown payment operation '$operation'") }
             }
             $receipt.response = to-json(%result); $receipt.done = True; $receipt.^save;
             %result
         };
         register-service 'estate-notifications', sub (Str $operation, Capture $args, Str :$idempotency-key!) {
-            die Permanent.new(:message('Unknown notification operation')) unless $operation eq 'deliver';
+            die Permanent.new: :message('Unknown notification operation') unless $operation eq 'deliver';
             my %args = $args.hash;
-            my $chat = Conversation.^with-ids(:repair-id(%args<repair-id>));
+            my $chat = Conversation.^with-ids: :repair-id(%args<repair-id>);
             $chat.^create unless exists-in-store($chat);
-            $chat.post-message(:author('Hearth · updates'), :body(%args<body>),
-                :message-id($idempotency-key), :notification);
+            $chat.post-message: :author('Hearth · updates'), :body(%args<body>),
+                :message-id($idempotency-key), :notification;
         };
     }
     method tick(DateTime :$now = DateTime.now) {
-        self.locked({
+        self.locked: {
             try {
                 CATCH { default { $!controller-error = .message } }
                 $!controller-error = '';
@@ -135,12 +135,12 @@ class App is export {
                 # subscription rules. Retries and timers wake it independently.
                 for %!next-work.keys.sort -> $id {
                     next unless %affected{$id} || %!next-work{$id} <= $now.Instant.Num;
-                    my $workflow = RepairWorkflow.^with-ids(:repair-id($id)).^advance(:$now);
-                    my @due = $workflow.^state<timers>.values.map(*.<due>);
-                    my $action = $workflow.^state<actions>.first({ .<status> eq any(<running pending retry blocked>) });
-                    @due.push($action<status> eq 'running' ?? 0 !! $action<due>)
+                    my $workflow = RepairWorkflow.^with-ids(:repair-id($id)).^advance: :$now;
+                    my @due = $workflow.^state<timers>.values.map: *.<due>;
+                    my $action = $workflow.^state<actions>.first: { .<status> eq any(<running pending retry blocked>) };
+                    @due.push: $action<status> eq 'running' ?? 0 !! $action<due>
                         if $action && $action<status> ne 'blocked';
-                    @due.push(0) if $workflow.^status eq 'compensating'
+                    @due.push: 0 if $workflow.^status eq 'compensating'
                         && !$workflow.^state<actions>.first(*.<status> eq 'blocked');
                     %!next-work{$id} = @due ?? @due.min !! Inf;
                     %!workflow-versions{$id} = $workflow.^version;
@@ -148,7 +148,7 @@ class App is export {
                 $!controller-cursor = @recent.tail.id if @recent;
             }
             self!publish;
-        });
+        };
     }
     method start-controller {
         die 'Controller is already running' unless $!stopping;
@@ -157,7 +157,7 @@ class App is export {
         # that compete with HTTP requests for the database lock.
         $!controller = start {
             until $!stopping {
-                await Promise.in(1);
+                await Promise.in: 1;
                 self.tick unless $!stopping;
             }
         };
@@ -168,7 +168,7 @@ class App is export {
         await $!controller if $!controller.defined;
     }
     method read-model {
-        self.locked({
+        self.locked: {
             my $last = StoredEvent.^all.sort(-*.id).head;
             my $cursor = $last ?? $last.id !! 0;
             if !%!models || $cursor != $!model-cursor {
@@ -183,54 +183,54 @@ class App is export {
                     %(id => .id, operation => .operation, attempts => .attempts, done => .done,
                         result => from-json(.response))
                 }).Array, controller-error => $!controller-error)
-        })
+        }
     }
     method chat(Str $repair-id) {
-        self.locked({ RepairChat.^with-ids(:$repair-id).messages.list })
+        self.locked: { RepairChat.^with-ids(:$repair-id).messages.list }
     }
     method id(Str $prefix --> Str) { "$prefix-{DateTime.now.Instant.to-posix.head.Int}-{(100000..999999).pick}" }
     method execute(Str $action, %data) {
-        self.locked({
-            LEAVE self!publish(:force);
+        self.locked: {
+            LEAVE self!publish: :force;
             given $action {
                 when 'property' {
-                    my $p = Property.^with-ids(:property-id(self.id('property'))); $p.^create;
-                    $p.register(:name(%data<name>), :address(%data<address>),
-                        :monthly-rent(%data<monthly-rent>.Rat), :bedrooms(%data<bedrooms>.Int), :kind(%data<kind>));
+                    my $p = Property.^with-ids: :property-id(self.id('property')); $p.^create;
+                    $p.register: :name(%data<name>), :address(%data<address>),
+                        :monthly-rent(%data<monthly-rent>.Rat), :bedrooms(%data<bedrooms>.Int), :kind(%data<kind>);
                 }
                 when 'tenant' {
-                    my $p = Tenant.^with-ids(:tenant-id(self.id('tenant'))); $p.^create;
-                    $p.register(:name(%data<name>), :email(%data<email>), :phone(%data<phone> // ''));
+                    my $p = Tenant.^with-ids: :tenant-id(self.id('tenant')); $p.^create;
+                    $p.register: :name(%data<name>), :email(%data<email>), :phone(%data<phone> // '');
                 }
-                when 'tenancy' { Property.^with-ids(:property-id(%data<property-id>)).start-tenancy(:tenant-id(%data<tenant-id>)) }
+                when 'tenancy' { Property.^with-ids(:property-id(%data<property-id>)).start-tenancy: :tenant-id(%data<tenant-id>) }
                 when 'end-tenancy' { Property.^with-ids(:property-id(%data<property-id>)).end-tenancy }
-                when 'charge-rent' { Property.^with-ids(:property-id(%data<property-id>)).charge-rent(:period(%data<period>)) }
+                when 'charge-rent' { Property.^with-ids(:property-id(%data<property-id>)).charge-rent: :period(%data<period>) }
                 when 'receive-rent' {
-                    Property.^with-ids(:property-id(%data<property-id>)).receive-rent(
-                        :period(%data<period>), :amount(%data<amount>.Rat), :reference(%data<reference>));
+                    Property.^with-ids(:property-id(%data<property-id>)).receive-rent:
+                        :period(%data<period>), :amount(%data<amount>.Rat), :reference(%data<reference>);
                 }
                 when 'repair' {
-                    my $p = Repair.^with-ids(:repair-id(self.id('repair'))); $p.^create;
-                    $p.request-repair(:property-id(%data<property-id>), :title(%data<title>),
-                        :description(%data<description> // ''), :priority(%data<priority> // 'normal'));
+                    my $p = Repair.^with-ids: :repair-id(self.id('repair')); $p.^create;
+                    $p.request-repair: :property-id(%data<property-id>), :title(%data<title>),
+                        :description(%data<description> // ''), :priority(%data<priority> // 'normal');
                 }
                 when 'schedule' {
-                    Repair.^with-ids(:repair-id(%data<repair-id>)).schedule(
-                        :contractor(%data<contractor>), :estimate(%data<estimate>.Rat));
+                    Repair.^with-ids(:repair-id(%data<repair-id>)).schedule:
+                        :contractor(%data<contractor>), :estimate(%data<estimate>.Rat);
                 }
-                when 'finish' { Repair.^with-ids(:repair-id(%data<repair-id>)).finish(:cost(%data<cost>.Rat)) }
+                when 'finish' { Repair.^with-ids(:repair-id(%data<repair-id>)).finish: :cost(%data<cost>.Rat) }
                 when 'pay-repair' { Repair.^with-ids(:repair-id(%data<repair-id>)).pay-contractor }
-                when 'cancel-repair' { Repair.^with-ids(:repair-id(%data<repair-id>)).cancel(:reason(%data<reason>)) }
+                when 'cancel-repair' { Repair.^with-ids(:repair-id(%data<repair-id>)).cancel: :reason(%data<reason>) }
                 when 'message' {
-                    my $p = Conversation.^with-ids(:repair-id(%data<repair-id>));
+                    my $p = Conversation.^with-ids: :repair-id(%data<repair-id>);
                     $p.^create unless exists-in-store($p);
                     # Author identity is one of the explicit demo roles, not free text.
                     die 'Choose an agency, tenant or contractor role' unless %data<author> eq any(<Agency Tenant Contractor>);
-                    $p.post-message(:author(%data<author>), :body(%data<body>), :message-id(self.id('message')));
+                    $p.post-message: :author(%data<author>), :body(%data<body>), :message-id(self.id('message'));
                 }
                 when 'fail-next-payment' { my $s = ProviderSettings.^all.head; $s.failures-left = 1; $s.^save }
                 when 'compensate' {
-                    RepairWorkflow.^with-ids(:repair-id(%data<repair-id>)).^load.^compensate(:reason('Agency requested reversal'));
+                    RepairWorkflow.^with-ids(:repair-id(%data<repair-id>)).^load.^compensate: :reason('Agency requested reversal');
                 }
                 when 'checkpoint' {
                     $_.^with-ids.^load.^emit-snapshot for Portfolio, TenantDirectory, RentLedger, RepairBoard;
@@ -240,37 +240,37 @@ class App is export {
                 }
                 default { die "Unknown action '$action'" }
             }
-        })
+        }
     }
     method seed {
         my @tenants = ('tenant-ana', 'Ana Martins', 'ana@example.test', '07700 900101'),
                       ('tenant-james', 'James Wilson', 'james@example.test', '07700 900102'),
                       ('tenant-maya', 'Maya Patel', 'maya@example.test', '07700 900103');
         for @tenants -> @t {
-            my $p = Tenant.^with-ids(:tenant-id(@t[0])); $p.^create;
-            $p.register(:name(@t[1]), :email(@t[2]), :phone(@t[3]));
+            my $p = Tenant.^with-ids: :tenant-id(@t[0]); $p.^create;
+            $p.register: :name(@t[1]), :email(@t[2]), :phone(@t[3]);
         }
         my @properties = ('p-cedar', 'Cedar House', '18 Cedar Lane, Bristol', 'Townhouse', 3, 1650.0, 'tenant-ana'),
                          ('p-dock', 'Dockside Loft', '42 Harbour Walk, Bristol', 'Apartment', 2, 1425.0, 'tenant-james'),
                          ('p-garden', 'Garden Studio', '7 Willow Mews, Bristol', 'Studio', 1, 975.0, 'tenant-maya'),
                          ('p-park', 'Park View', '23 Clifton Road, Bristol', 'Apartment', 2, 1350.0, '');
-        my $period = Date.today.Str.substr(0, 7);
+        my $period = Date.today.Str.substr: 0, 7;
         for @properties -> @p {
-            my $p = Property.^with-ids(:property-id(@p[0])); $p.^create;
-            $p.register(:name(@p[1]), :address(@p[2]), :kind(@p[3]), :bedrooms(@p[4]), :monthly-rent(@p[5]));
-            if @p[6].chars { $p.start-tenancy(:tenant-id(@p[6])); $p.charge-rent(:$period) }
+            my $p = Property.^with-ids: :property-id(@p[0]); $p.^create;
+            $p.register: :name(@p[1]), :address(@p[2]), :kind(@p[3]), :bedrooms(@p[4]), :monthly-rent(@p[5]);
+            if @p[6].chars { $p.start-tenancy: :tenant-id(@p[6]); $p.charge-rent: :$period }
         }
-        Property.^with-ids(:property-id<p-cedar>).receive-rent(:$period, :amount(1650.0), :reference<seed-cedar>);
-        Property.^with-ids(:property-id<p-garden>).receive-rent(:$period, :amount(500.0), :reference<seed-garden>);
+        Property.^with-ids(:property-id<p-cedar>).receive-rent: :$period, :amount(1650.0), :reference<seed-cedar>;
+        Property.^with-ids(:property-id<p-garden>).receive-rent: :$period, :amount(500.0), :reference<seed-garden>;
         my @repairs = ('r-boiler', 'p-cedar', 'Boiler losing pressure', 'The heating cuts out in the evening.', 'urgent'),
                       ('r-window', 'p-dock', 'Bedroom window seal', 'A draught around the frame on windy days.', 'normal');
         for @repairs -> @r {
-            my $p = Repair.^with-ids(:repair-id(@r[0])); $p.^create;
-            $p.request-repair(:property-id(@r[1]), :title(@r[2]), :description(@r[3]), :priority(@r[4]));
+            my $p = Repair.^with-ids: :repair-id(@r[0]); $p.^create;
+            $p.request-repair: :property-id(@r[1]), :title(@r[2]), :description(@r[3]), :priority(@r[4]);
         }
-        Repair.^with-ids(:repair-id<r-boiler>).schedule(:contractor('Harris Heating'), :estimate(185.0));
-        my $chat = Conversation.^with-ids(:repair-id<r-boiler>); $chat.^create;
-        $chat.post-message(:author<Tenant>, :body('I am home after 4pm if the engineer needs access.'), :message-id<seed-chat-1>);
-        $chat.post-message(:author<Agency>, :body('Thanks Ana. Harris Heating will visit tomorrow after 4pm.'), :message-id<seed-chat-2>);
+        Repair.^with-ids(:repair-id<r-boiler>).schedule: :contractor('Harris Heating'), :estimate(185.0);
+        my $chat = Conversation.^with-ids: :repair-id<r-boiler>; $chat.^create;
+        $chat.post-message: :author<Tenant>, :body('I am home after 4pm if the engineer needs access.'), :message-id<seed-chat-1>;
+        $chat.post-message: :author<Agency>, :body('Thanks Ana. Harris Heating will visit tomorrow after 4pm.'), :message-id<seed-chat-2>;
     }
 }

@@ -54,9 +54,9 @@ use RedSourcing;
 use School; # include examples/school/lib at compile time
 red-sourcing-defaults(:driver<SQLite>, :database(':memory:'));
 my $school = School::App.new.initialize;
-$school.add-student('alice', 'Alice');
-$school.add-class('math', 'Mathematics');
-$school.enroll('alice', 'math');
+$school.add-student: 'alice', 'Alice';
+$school.add-class: 'math', 'Mathematics';
+$school.enroll: 'alice', 'math';
 say $school.student('alice').class-count;   # 1
 say $school.classroom('math').student-count; # 1
 ```

@@ -86,7 +86,7 @@ aggregate Counter {
     }
 
     method increment(Int :$amount where * > 0 = 1) is command {
-        self.counter-incremented(:$amount);
+        self.counter-incremented: :$amount;
         $!value
     }
 }
@@ -261,13 +261,13 @@ saga method can schedule an aggregate command or a registered service:
 
 ```raku
 method reserve-stock {
-    self.^command(Inventory, 'reserve', \(:order-id($.order-id)),
-        :retry{:3max, :2delay});
+    Inventory.^with-ids(:$.order-id).reserve:
+        :$.order-id,
+        :service-retry{:3max, :2delay};
 }
 
 method compensate-reserve-stock(Str :$reservation-id!, |) {
-    self.^command(Inventory, 'release', \(:$reservation-id),
-        :retry{:5max, :10delay});
+    Inventory.^with-ids(:$.order-id).release: :$reservation-id, :service-retry{:5max, :10delay};
 }
 ```
 
@@ -275,7 +275,10 @@ These are methods inside a saga whose `Inventory` aggregate defines those
 commands. The default compensator is `compensate-` plus the originating method
 name. A successful operation saves its inverse invocation; it does not run the
 inverse. `self.^compensate(:reason(...))` runs saved inverses in reverse order.
-Use `:!compensation` for effects without a meaningful inverse.
+On a proxy call, use `:service-retry{...}` to configure retries and
+`:!service-compensation` for effects without a meaningful inverse. These options
+belong to the saga action and are not passed to the aggregate command. The call
+returns an action ID; the controller executes the command later.
 
 A service adapter receives the operation, captured arguments and a stable
 idempotency key. Retry policies support fixed delays and exponential backoff.
@@ -283,9 +286,9 @@ Unknown external outcomes require reconciliation rather than assuming failure.
 Named deadlines persist across restarts:
 
 ```raku
-self.set-timeout('delivery-deadline', 15 * 60,
-    expire => \(reason => 'Delivery deadline exceeded'));
-self.cancel-timeout('delivery-deadline');
+self.set-timeout: 'delivery-deadline', 15 * 60,
+    expire => \(reason => 'Delivery deadline exceeded');
+self.cancel-timeout: 'delivery-deadline';
 ```
 
 The timeout names a method of that saga. An external controller must periodically

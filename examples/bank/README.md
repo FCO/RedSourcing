@@ -18,13 +18,13 @@ configuration; it does not need separate imports for roles, traits or commands.
 example). Create its initial zero-balance snapshot, then fund it through events:
 
 ```raku
-my $ana = Account.^with-ids(:client-id(1));
-my $bob = Account.^with-ids(:client-id(2));
+my $ana = Account.^with-ids: :client-id(1);
+my $bob = Account.^with-ids: :client-id(2);
 $ana.^create;
 $bob.^create;
-$ana.deposit(:amount(100.00));
+$ana.deposit: :amount(100.00);
 
-my %result = $ana.transfer(:to-client(2), :amount(25.50));
+my %result = $ana.transfer: :to-client(2), :amount(25.50);
 say %result<transaction-id>;
 say %result<remaining>; # 74.5
 ```
@@ -62,7 +62,7 @@ money again.
 To defer execution:
 
 ```raku
-my $pending = $ana.transfer(:to-client(2), :amount(1.25), :!sync);
+my $pending = $ana.transfer: :to-client(2), :amount(1.25), :!sync;
 $pending.run;
 ```
 
@@ -131,12 +131,12 @@ recipient's `TransferReceived` does not double-count a transfer. They consume
 events from every account stream and exclude entity snapshots.
 
 ```raku
-my $proxy = MonthlyStatement.^with-ids(:client-id(1));
+my $proxy = MonthlyStatement.^with-ids: :client-id(1);
 my $statement = $proxy.^load;
 say $statement.balance;
 say $statement.balance-by-month{202610};
 .say for $statement.transactions-by-month{202610}.list;
-say $proxy.amount-on-month(:period(202610));
+say $proxy.amount-on-month: :period(202610);
 $statement.^emit-snapshot;
 my $restored = $proxy.^load;
 ```

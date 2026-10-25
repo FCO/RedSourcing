@@ -19,7 +19,7 @@ method deposit(
     Rat() :$amount! where &positive-money,
     Str   :$timestamp = DateTime.now.Str,
 ) is command {
-    self.deposited(:$amount, :$timestamp);
+    self.deposited: :$amount, :$timestamp;
     $!amount
 }
 
@@ -31,7 +31,7 @@ method transfer(
     die 'Cannot transfer to the same account' if $to-client == $!client-id;
     die "Insufficient funds in account $!client-id" if $amount > $!amount;
 
-    my $target = ::?CLASS.^with-ids(:client-id($to-client));
+    my $target = ::?CLASS.^with-ids: :client-id($to-client);
     my $target-stream = $target.^stream-name;
     my $account-class = ::?CLASS.^name;
     my $*RED-FALLBACK = False;
@@ -43,13 +43,13 @@ method transfer(
 
     # The command executor already owns the transaction. Do not open a nested
     # transaction or invoke another command: both appends and Done commit together.
-    my $transaction = self.transaction(
+    my $transaction = self.transaction:
         :$to-client, :$amount, :$timestamp,
-    );
-    $receiver.transfer-received(
+    ;
+    $receiver.transfer-received:
         :transaction-id($transaction.id),
         :from-client($!client-id), :$amount, :$timestamp,
-    );
+    ;
 
     %(transaction-id => $transaction.id, from-client => $!client-id,
         :$to-client, :$amount, remaining => $!amount)

@@ -12,7 +12,7 @@ aggregate Counter is export {
     method APPLY(CounterIncremented $event) { $!value += $event.amount }
     #| Increase the value by a positive integer.
     method increment(Int :$amount where * > 0 = 1) is command {
-        self.counter-incremented(:$amount);
+        self.counter-incremented: :$amount;
         $!value
     }
 }

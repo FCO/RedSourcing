@@ -1,8 +1,8 @@
 use RedSourcing::Web::HTML;
 unit module Estate::View;
 
-sub money($amount --> Str) { '£' ~ ($amount // 0).Rat.fmt('%.2f') }
-sub short-date($value --> Str) { ($value // '').Str.substr(0, (($value // '').Str.chars min 16)).subst('T', ' ') }
+sub money($amount --> Str) { '£' ~ ($amount // 0).Rat.fmt: '%.2f' }
+sub short-date($value --> Str) { ($value // '').Str.substr(0, (($value // '').Str.chars min 16)).subst: 'T', ' ' }
 sub input(Str $name, Str $label, Str :$type = 'text', Str :$value = '', Str :$extra = '', Bool :$required = True) {
     '<label>' ~ escape-html($label) ~ '<input name="' ~ $name ~ '" type="' ~ $type ~ '" value="' ~ escape-html($value)
         ~ '" ' ~ ($required ?? 'required' !! '') ~ ' ' ~ $extra ~ '></label>'
@@ -78,10 +78,10 @@ sub view(Str $section, %model, Str $token, Str :$repair-id = '', :@messages = []
     given $section {
         when 'overview' {
             my $occupied = %model<properties>.values.grep(*.<tenant-id>.chars).elems;
-            my $charged = [+] %model<rent>.values.map(*.<amount>.Rat);
+            my $charged = [+] %model<rent>.values.map: *.<amount>.Rat;
             my $received = %model<received>.Rat;
             my $due = $charged - $received;
-            my @open = %model<repairs>.values.grep({ .<status> ne any(<paid cancelled>) }).sort(*.<repair-id>);
+            my @open = %model<repairs>.values.grep({ .<status> ne any(<paid cancelled>) }).sort: *.<repair-id>;
             my $pct = $charged > 0 ?? (($received / $charged * 100).Int min 100) !! 0;
             $content = heading('A little more settled', 'A clear view of your homes, your people and what needs attention.')
                 ~ '<div class="metrics"><div><span>Homes in your care</span><b>' ~ %model<properties>.elems ~ '</b><small>' ~ $occupied ~ ' occupied · '
@@ -116,7 +116,7 @@ sub view(Str $section, %model, Str $token, Str :$repair-id = '', :@messages = []
             my $fields = input('name', 'Full name') ~ input('email', 'Email', :type<email>) ~ input('phone', 'Phone', :type<tel>, :!required);
             my $rows = %model<tenants>.keys.sort.map(-> $id {
                 my %t = %model<tenants>{$id};
-                my @homes = %model<properties>.values.grep(*.<tenant-id> eq $id);
+                my @homes = %model<properties>.values.grep: *.<tenant-id> eq $id;
                 '<tr><td><div class="person"><span class="avatar">' ~ escape-html(%t<name>.words.map(*.substr(0,1)).head(2).join)
                     ~ '</span><strong>' ~ escape-html(%t<name>) ~ '</strong></div></td><td>' ~ escape-html(%t<email>) ~ '<small>' ~ escape-html(%t<phone>)
                     ~ '</small></td><td>' ~ escape-html(@homes.map(*.<name>).join(', ') || 'No active tenancy') ~ '</td><td>' ~ pill(@homes ?? 'Resident' !! 'Registered', @homes ?? 'done' !! '') ~ '</td></tr>'

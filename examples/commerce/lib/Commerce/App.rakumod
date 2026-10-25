@@ -21,7 +21,7 @@ class Shop is export {
     has %!wakeups;
 
     method !refresh {
-        my %types = (|@order-sagas, ReplenishmentSaga).map({ .^name => $_ });
+        my %types = (|@order-sagas, ReplenishmentSaga).map: { .^name => $_ };
         my %routes =
             OrderSubmitted.^name => [PurchaseSaga, NotificationSaga],
             OrderPaid.^name => [PurchaseSaga, FulfillmentSaga, NotificationSaga],
@@ -43,7 +43,7 @@ class Shop is export {
         %routes{ShipmentIssueReported.^name} = [NotificationSaga];
         for OrderSubmitted, OrderPaid, OrderShipped, OrderDelivered, OrderCancelled, ReturnCompleted,
             OrderIssueReported, ShipmentIssueReported -> $event {
-            (%routes{$event.^name} //= []).push(WebhookSaga);
+            (%routes{$event.^name} //= []).push: WebhookSaga;
         }
         for <StockReceived StockReserved StockReleased StockDispatched StockReturned ReplenishmentRequested> -> $name {
             %routes{"Commerce::Events::$name"} = [ReplenishmentSaga];
@@ -53,7 +53,7 @@ class Shop is export {
             if %types{$row.class}:exists {
                 if !(%!instances{$row.stream}:exists) {
                     my $type = %types{$row.class};
-                    my %ids = $type.^entity-id-names.map({ $_ => $row.data{$_} });
+                    my %ids = $type.^entity-id-names.map: { $_ => $row.data{$_} };
                     %!instances{$row.stream} = %(type => $type, proxy => $type.^with-ids(|%ids));
                     %!dirty{$row.stream} = True;
                 } else {
@@ -68,49 +68,49 @@ class Shop is export {
                     unless (%!instances{$row.stream}<wake-version> // 0) >= $row.version;
             }
             for (%routes{$row.class} // []).List -> $type {
-                my %ids = $type.^entity-id-names.map({ $_ => $row.data{$_} });
+                my %ids = $type.^entity-id-names.map: { $_ => $row.data{$_} };
                 my $stream = $type.^with-ids(|%ids).^stream-name;
                 %!dirty{$stream} = True if %!instances{$stream}:exists;
             }
         }
     }
     method !wake-after($live, DateTime $now) {
-        my @due = $live.^state<timers>.values.map(*.<due>);
-        my $action = $live.^state<actions>.first({ .<status> eq any(<pending retry running blocked>) });
+        my @due = $live.^state<timers>.values.map: *.<due>;
+        my $action = $live.^state<actions>.first: { .<status> eq any(<pending retry running blocked>) };
         if $action && $action<status> ne 'blocked' {
-            @due.push($action<status> eq 'running' ?? $now.Instant.Num + 1 !! $action<due>);
+            @due.push: $action<status> eq 'running' ?? $now.Instant.Num + 1 !! $action<due>;
         }
         %!wakeups{$live.^stream} = @due ?? @due.min !! Inf;
         %!instances{$live.^stream}<wake-version> = $live.^version;
     }
     method initialize {
-        .^create-table(:unless-exists) for StoredEvent, StoredCommand;
+        .^create-table: :unless-exists for StoredEvent, StoredCommand;
         register-commerce-providers;
         self
     }
     method product(Str $sku, Str :$warehouse-id = 'main', Str :$name!, Rat() :$price!, UInt :$quantity = 10,
                    Bool :$replenish = True) {
-        my $stock = Commerce::Inventory.^with-ids(:$warehouse-id, :$sku);
+        my $stock = Commerce::Inventory.^with-ids: :$warehouse-id, :$sku;
         die 'Product stream already exists' if entity-exists($stock);
-        $stock.^create; $stock.register(:$name, :unit-price($price));
-        $stock.receive(:$quantity, :reference("opening/$warehouse-id/$sku")) if $quantity;
+        $stock.^create; $stock.register: :$name, :unit-price($price);
+        $stock.receive: :$quantity, :reference("opening/$warehouse-id/$sku") if $quantity;
         ReplenishmentSaga.^with-ids(:$warehouse-id, :$sku).^create if $replenish;
         $stock
     }
-    method order(Str $order-id) { Commerce::Order.^with-ids(:$order-id) }
-    method shipment(Str $order-id) { Commerce::Shipment.^with-ids(:$order-id) }
+    method order(Str $order-id) { Commerce::Order.^with-ids: :$order-id }
+    method shipment(Str $order-id) { Commerce::Shipment.^with-ids: :$order-id }
     method purchase(Str $order-id, :%items!, Str :$warehouse-id = 'main',
                     Str :$email = 'customer@example.test', Str :$address = '18 Cedar Lane, Bristol',
                     Str :$webhook-url = $!webhook-url) {
         die 'Webhook URL must be HTTP, HTTPS, simulated://commerce or empty'
             unless !$webhook-url.chars || $webhook-url eq 'simulated://commerce'
                 || $webhook-url.starts-with('http://') || $webhook-url.starts-with('https://');
-        my $order = self.order($order-id);
+        my $order = self.order: $order-id;
         die 'Order stream already exists' if entity-exists($order);
         $order.^create; self.shipment($order-id).^create;
-        .^with-ids(:$order-id).^create for @order-sagas.grep({ !($_ === WebhookSaga) });
-        WebhookSaga.^with-ids(:$order-id).^create(:endpoint($webhook-url)) if $webhook-url.chars;
-        $order.submit(:$warehouse-id, :$email, :$address, :%items);
+        .^with-ids(:$order-id).^create for @order-sagas.grep: { !($_ === WebhookSaga) };
+        WebhookSaga.^with-ids(:$order-id).^create: :endpoint($webhook-url) if $webhook-url.chars;
+        $order.submit: :$warehouse-id, :$email, :$address, :%items;
         $order
     }
     method !proxies(Mu:U $type) {
@@ -122,12 +122,12 @@ class Shop is export {
         return unless $purchase.^status eq 'compensated' || $fulfillment.^status eq 'compensated';
         my $order = self.order($order-id).^load;
         if $order.status eq 'submitted' && $purchase.^status eq 'compensated' {
-            self.order($order-id).cancel(:reason($purchase.^state<reason> // 'Purchase failed'));
+            self.order($order-id).cancel: :reason($purchase.^state<reason> // 'Purchase failed');
         }
         if $fulfillment.^status eq 'compensated' && $order.status eq any(<paid cancellation-requested>) {
             my $reason = $fulfillment.^state<reason> // 'Fulfillment failed';
-            self.order($order-id).request-cancellation(:$reason) if $order.status eq 'paid';
-            self.shipment($order-id).cancel(:$reason) unless self.shipment($order-id).status eq 'cancelled';
+            self.order($order-id).request-cancellation: :$reason if $order.status eq 'paid';
+            self.shipment($order-id).cancel: :$reason unless self.shipment($order-id).status eq 'cancelled';
         }
     }
     method tick(DateTime :$now = DateTime.now, UInt :$limit = 100) {
@@ -139,18 +139,18 @@ class Shop is export {
                 %!dirty{$stream}:delete;
                 # Reload dirty state so an external resolution/checkpoint is observed.
                 my $live = $proxy.^load;
-                $live = $live.^advance(:$now, :$limit) if $live.^status eq any(<running compensating>);
+                $live = $live.^advance: :$now, :$limit if $live.^status eq any(<running compensating>);
                 %!instances{$stream}<live> = $live;
-                self!wake-after($live, $now);
+                self!wake-after: $live, $now;
             }
         }
-        for self!proxies(PurchaseSaga) -> $proxy { self!after-compensation($proxy.^ids-map<order-id>) }
+        for self!proxies(PurchaseSaga) -> $proxy { self!after-compensation: $proxy.^ids-map<order-id> }
         self
     }
     method drain(DateTime :$now = DateTime.now, UInt :$passes = 25) {
         for ^$passes {
             my $before = StoredEvent.^all.sort(-*.id).head.id // 0;
-            self.tick(:$now);
+            self.tick: :$now;
             my $after = StoredEvent.^all.sort(-*.id).head.id // 0;
             return self if $before == $after;
         }
@@ -159,7 +159,7 @@ class Shop is export {
     method checkpoint {
         self!refresh;
         for |@order-sagas, ReplenishmentSaga -> $type {
-            .^load.^emit-snapshot for self!proxies($type);
+            .^load.^emit-snapshot for self!proxies: $type;
         }
         WarehouseBoard.^with-ids.^load.^emit-snapshot;
         ShopDashboard.^with-ids.^load.^emit-snapshot;

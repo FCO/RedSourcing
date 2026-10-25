@@ -25,7 +25,7 @@ aggregate Order is export {
     #| Place this order exactly once.
     method place(Str :$item! where *.chars > 0) is command {
         die 'Order has already been placed' unless $!status eq 'new';
-        self.order-placed(:$item);
+        self.order-placed: :$item;
         %(status => $!status)
     }
     #| Confirm a previously placed order.
@@ -66,7 +66,7 @@ saga Confirmation is export {
         self.^complete;
     }
     method confirm-order {
-        self.^command(Order, 'confirm', \(), :!compensation);
+        Order.^with-ids(:$.order-id).confirm: :!service-compensation;
     }
 }
 

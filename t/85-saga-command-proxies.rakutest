@@ -1,0 +1,123 @@
+use Test;
+use RedSourcing;
+use lib 't/lib';
+use MicroblogTestStore;
+
+class ProxyActionAdded does Event { has Str $.id; has Int $.amount }
+aggregate ProxyActionCounter {
+    has Str $.id is entity-id;
+    has Int $.total is query = 0;
+    method APPLY(ProxyActionAdded $e) { $!total += $e.amount }
+    method add(Int :increment(:$amount) = 1) is command {
+        self.proxy-action-added(:$amount);
+        %(amount => $amount, total => $!total)
+    }
+    method policy-names(Str :$retry!, Str :$compensation!) is command {
+        %(:$retry, :$compensation)
+    }
+    method forbidden is query { ProxyActionCounter.^with-ids(:$!id).add }
+}
+saga ProxyActionSaga {
+    has Str $.id is entity-id;
+    method APPLY(ProxyActionAdded $e where { .id eq $!id }) { }
+    method schedule {
+        ProxyActionCounter.^with-ids(:$!id).add(:increment(2), :service-retry{:5max, :10delay})
+    }
+    method compensate-schedule(Int :$amount!, |) {
+        ProxyActionCounter.^with-ids(:$!id).add(:amount(-$amount), :!service-compensation)
+    }
+    method disabled { ProxyActionCounter.^with-ids(:$!id).add(:!service-compensation) }
+    method compensate-disabled(|) { die 'Disabled compensation must not run' }
+    method custom { ProxyActionCounter.^with-ids(:$!id).add(:service-compensation<undo>) }
+    method undo(Int :$amount!, |) { ProxyActionCounter.^with-ids(:$!id).add(:amount(-$amount)) }
+    method bad-option { ProxyActionCounter.^with-ids(:$!id).add(:service-typo) }
+    method bad-policy { ProxyActionCounter.^with-ids(:$!id).add(:service-retry{:0max}) }
+    method bad-undo { ProxyActionCounter.^with-ids(:$!id).add(:service-compensation<missing>) }
+    method bad-sync { ProxyActionCounter.^with-ids(:$!id).add(:!sync) }
+    method timer { self.set-timeout('issue', 0, schedule => \()) }
+    method nested($other) {
+        $other.^plan(-> $inner { $inner.disabled });
+        self.disabled
+    }
+}
+my $*RED-DB = test-store('85');
+schema(StoredEvent, StoredCommand).create;
+sub counter(Str $id) { ProxyActionCounter.^with-ids(:$id) }
+sub workflow(Str $id) { ProxyActionSaga.^with-ids(:$id).^load }
+
+counter('main').^create;
+my $saga = workflow('main');
+my $id = $saga.schedule;
+ok $id.contains('/action/'), 'proxy returns the durable saga action ID';
+is StoredCommand.^all.elems, 0, 'planning does not submit a child command';
+is counter('main').total, 0, 'planning does not execute the command';
+my %action = $saga.^state<actions>.head;
+is %action<retry><max>, 5, 'service-retry becomes the action retry policy';
+is %action<retry><delay>, 10, 'retry delay is preserved';
+is %action<compensation>, 'compensate-schedule', 'default compensation uses the originating saga method';
+is %action<args><named>.elems, 1, 'service options are absent from command arguments';
+is %action<args><named>.values.head, 2, 'command aliases are normalized by normal preparation';
+$saga.^advance;
+is counter('main').total, 2, 'controller executes the planned command';
+ok !StoredCommand.^all.head.data.keys.grep(*.starts-with('service-')), 'service options never enter the persisted command payload';
+$saga.^compensate;
+$saga.^advance;
+is counter('main').total, 0, 'implicit proxy compensation executes the inverse';
+is $saga.^status, 'compensated', 'compensation completes normally';
+
+for <disabled custom> -> $method {
+    counter($method).^create;
+    my $s = workflow($method);
+    $s."$method"();
+    is $s.^state<actions>.head<compensation>, ($method eq 'custom' ?? 'undo' !! ''), "$method compensation option is forwarded";
+    $s.^advance;
+    $s.^compensate;
+    $s.^advance;
+    is counter($method).total, ($method eq 'custom' ?? 0 !! 1), "$method compensation has the expected effect";
+}
+for <bad-option bad-policy bad-undo bad-sync> -> $method {
+    my $s = workflow($method);
+    throws-like { $s."$method"() }, Exception, "$method is rejected";
+    is $s.^state<actions>.elems, 0, 'invalid planning leaves no partial action';
+}
+throws-like { counter('main').add(:service-retry{:5max}) }, Exception, :message(/ 'saga planning context' /);
+throws-like { counter('main').add(:service-typo) }, Exception, :message(/ 'Unknown saga command option' /);
+throws-like { counter('main').forbidden }, Exception, :message(/ 'QUERY' /);
+
+counter('business-options').^create;
+my $business = workflow('business-options');
+$business.^plan(-> $working {
+    counter('business-options').policy-names(:retry<business>, :compensation<value>,
+        :service-retry{:2max}, :!service-compensation)
+});
+is-deeply $business.^state<actions>.head<args><named>, %(retry => 'business', compensation => 'value'),
+    'unprefixed retry and compensation remain ordinary business arguments';
+is $business.^state<actions>.head<retry><max>, 2, 'prefixed retry still configures the action';
+$business.^advance;
+is-deeply $business.^state<actions>.head<result>, %(retry => 'business', compensation => 'value'),
+    'business arguments arrive unchanged at execution';
+
+my $timer = workflow('timer');
+$timer.timer;
+$timer.^advance(:now(DateTime.now.later(:seconds(1))), :limit(0));
+is $timer.^state<actions>.elems, 1, 'timer callbacks bind their current saga for proxy scheduling';
+is $timer.^state<actions>.head<ids><id>, 'timer', 'timer keeps its target identity';
+my $inner = workflow('inner');
+my $outer = workflow('outer');
+$outer.nested($inner);
+is $inner.^state<actions>.elems, 1, 'nested plan records its own action';
+is $outer.^state<actions>.elems, 1, 'outer plan regains its context';
+is $inner.^state<actions>.head<ids><id>, 'inner', 'inner target IDs are isolated';
+is $outer.^state<actions>.head<ids><id>, 'outer', 'outer target IDs are isolated';
+
+my @jobs = <a b>.map(-> $key {
+    start {
+        my $*RED-DB = database 'SQLite', :database(':memory:');
+        schema(StoredEvent, StoredCommand).create;
+        my $s = workflow($key);
+        $s.disabled;
+        $s.^state<actions>.head<ids><id>
+    }
+});
+is-deeply (await @jobs).sort.Array, [<a b>], 'concurrent plans keep separate dynamic saga receivers';
+done-testing;

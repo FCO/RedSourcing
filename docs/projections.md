@@ -27,7 +27,7 @@ sequenceDiagram
         end
         P-->>Application: Updated projection
     end
-    Application->>P: load for reading
+    Application->>P: query (is query)
     P-->>Application: Reconstructed or retained state, without a new snapshot
     Note over P,J: Red translates APPLY rule<br/>blocks into SQL filters
     Note over P,J: Snapshot row ID is distinct<br/>from the consumed source<br/>cursor
@@ -35,6 +35,10 @@ sequenceDiagram
 
 Projections consume domain events and build read models. They cannot declare
 commands or emit domain events. Use aggregate commands to change domain state.
+
+Declare public read methods or accessors with `is query` and call them directly
+on the proxy. Their results preserve Raku types and copy collections, so callers
+cannot mutate the projection through a returned value.
 
 By default, each `$proxy.^load` restores the latest projection checkpoint and
 replays matching events. `.^advance` also catches up an existing instance or a
@@ -103,25 +107,25 @@ aggregate Account {
     has Int $.amount = 0;
     method APPLY(Credited $event) { $!amount += $event.amount }
     method credit(Int :$amount!) is command {
-        self.credited(:$amount);
+        self.credited: :$amount;
         $!amount
     }
 }
 
 projection Balance {
     has Str $.id is entity-id;
-    has Int $.amount = 0;
+    has Int $.amount is query = 0;
     method APPLY(Credited $event where { .account-id eq $!id })
         is transactional {
         $!amount += $event.amount;
     }
 }
 
-my $account = Account.^with-ids(:account-id<a1>);
+my $account = Account.^with-ids: :account-id<a1>;
 $account.^create;
-$account.credit(:amount(5));
+$account.credit: :amount(5);
 # Balance: id = a1 already has a committed checkpoint with amount 5.
-say Balance.^with-ids(:id<a1>).^load.amount;
+say Balance.^with-ids(:id<a1>).amount;
 ```
 
 The event triggers an ordered advance of the **whole projection** through that
@@ -193,10 +197,10 @@ Replace the earlier `Balance` declaration with this one. Load the identity befor
 submitting credits so the retained instance participates in updates:
 
 ```raku
-my $proxy = Balance.^with-ids(:id<a1>);
+my $proxy = Balance.^with-ids: :id<a1>;
 my $view = $proxy.^load;
 # Repeated load returns this registered instance on the same connection/pool.
-$account.credit(:amount(2));
+$account.credit: :amount(2);
 say $view.amount; # 7, after the command's transaction commits
 $proxy.^advance; # Catch up facts written by another process
 $proxy.^release; # Stop retaining this identity

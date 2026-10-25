@@ -159,7 +159,7 @@ method set-menu-item(
     Rat() :$unit-price! where { $_ > 0 && ($_ * 100).denominator == 1 },
     Bool :$available = True,
 ) is command {
-    self.menu-item-set(:$item-id, :$name, :$unit-price, :$available);
+    self.menu-item-set: :$item-id, :$name, :$unit-price, :$available;
     %!menu{$item-id}
 }
 ```
@@ -208,10 +208,10 @@ short names for `RedSourcing::StoredEvent` and `RedSourcing::StoredCommand`.
 Create a proxy with `.^with-ids`, then publish its first snapshot:
 
 ```raku
-my $restaurant = Restaurant.^with-ids(:restaurant-id<green-kitchen>);
-$restaurant.^create(:name('Green Kitchen'));
-$restaurant.set-menu-item(:item-id<bowl>, :name('Rice bowl'), :unit-price(12.50));
-$restaurant.set-menu-item(:item-id<juice>, :name('Orange juice'), :unit-price(3.25));
+my $restaurant = Restaurant.^with-ids: :restaurant-id<green-kitchen>;
+$restaurant.^create: :name('Green Kitchen');
+$restaurant.set-menu-item: :item-id<bowl>, :name('Rice bowl'), :unit-price(12.50);
+$restaurant.set-menu-item: :item-id<juice>, :name('Orange juice'), :unit-price(3.25);
 $restaurant.open-for-orders;
 ```
 
@@ -240,8 +240,8 @@ method place-order(
     Str :$address! where *.chars > 0,
     :%items! where *.elems > 0,
 ) is command {
-    self!require-status('new');
-    my $restaurant-proxy = Restaurant.^with-ids(:$restaurant-id);
+    self!require-status: 'new';
+    my $restaurant-proxy = Restaurant.^with-ids: :$restaurant-id;
     die "Restaurant '$restaurant-id' does not exist"
         unless StoredEvent.^all.grep({
             .class eq Restaurant.^name && .stream eq $restaurant-proxy.^stream-name
@@ -261,11 +261,11 @@ method place-order(
         %(item-id => $item-id, name => %item<name>,
             unit-price => %item<unit-price>.Rat, :$quantity)
     };
-    my Rat $subtotal = [+] @lines.map({ .<unit-price> * .<quantity> });
+    my Rat $subtotal = [+] @lines.map: { .<unit-price> * .<quantity> };
     my Rat $delivery-fee = 2.50;
     my Rat $total = $subtotal + $delivery-fee;
-    self.order-placed(:$restaurant-id, :$customer-id, :$address,
-        :items(@lines), :$subtotal, :$delivery-fee, :$total);
+    self.order-placed: :$restaurant-id, :$customer-id, :$address,
+        :items(@lines), :$subtotal, :$delivery-fee, :$total;
     %(:$!order-id, :$!status, :$!subtotal, :$!delivery-fee, :$!total, :$!items)
 }
 ```
@@ -284,12 +284,12 @@ receipt and changes the status to `placed`. The handler returns the updated rece
 Create and place an order like this:
 
 ```raku
-my $order = DeliveryOrder.^with-ids(:order-id<order-1001>);
+my $order = DeliveryOrder.^with-ids: :order-id<order-1001>;
 $order.^create;
-my %receipt = $order.place-order(
+my %receipt = $order.place-order:
     :restaurant-id<green-kitchen>, :customer-id<ana>,
     :address('10 Market Street'), :items{ bowl => 2, juice => 1 },
-);
+;
 say %receipt<subtotal>;     # 28.25
 say %receipt<delivery-fee>; # 2.5
 say %receipt<total>;        # 30.75
@@ -337,8 +337,8 @@ method !require-status(Str $expected) {
 method !event-ids { %(:$!restaurant-id, :$!customer-id) }
 
 method accept is command {
-    self!require-status('placed');
-    self.order-accepted(|self!event-ids);
+    self!require-status: 'placed';
+    self.order-accepted: |self!event-ids;
     $!status
 }
 ```
@@ -352,7 +352,7 @@ Continue the order through the kitchen and assign a courier:
 ```raku
 $order.accept;                         # accepted
 $order.mark-ready;                     # ready
-$order.assign-courier(:courier-id<sam>); # assigned
+$order.assign-courier: :courier-id<sam>; # assigned
 ```
 
 `pick-up` and `deliver` check both the current state and the assigned courier ID.
@@ -401,7 +401,7 @@ It does not require an initial snapshot: a customer with no history starts with
 an empty view.
 
 ```raku
-my $customer = CustomerOrders.^with-ids(:customer-id<ana>);
+my $customer = CustomerOrders.^with-ids: :customer-id<ana>;
 say $customer.tracking(:order-id<order-1001>)<status>; # assigned
 say $customer.orders-list.elems;                    # 1
 ```
@@ -411,7 +411,7 @@ uses the same role with `where { .restaurant-id eq $!restaurant-id }`. Its
 `active-orders` query excludes delivered and cancelled orders:
 
 ```raku
-my $board = RestaurantBoard.^with-ids(:restaurant-id<green-kitchen>);
+my $board = RestaurantBoard.^with-ids: :restaurant-id<green-kitchen>;
 say $board.active-orders.elems; # 1
 ```
 
@@ -436,8 +436,8 @@ handler through the executor and returns the result to the caller.
 Pass `:!sync` to store the command and receive its `StoredCommand` record instead:
 
 ```raku
-$order.pick-up(:courier-id<sam>);
-my $pending = $order.deliver(:courier-id<sam>, :!sync);
+$order.pick-up: :courier-id<sam>;
+my $pending = $order.deliver: :courier-id<sam>, :!sync;
 say $pending.state; # Pending
 say $pending.run;   # delivered
 say $pending.run;   # delivered, using the persisted result
@@ -502,11 +502,11 @@ outcomes twice.
 Create a second order, then cancel it before preparation completes:
 
 ```raku
-my $other = DeliveryOrder.^with-ids(:order-id<order-1002>);
+my $other = DeliveryOrder.^with-ids: :order-id<order-1002>;
 $other.^create;
-$other.place-order(:restaurant-id<green-kitchen>, :customer-id<bob>,
-    :address('20 Market Street'), :items{ bowl => 1 });
-$other.cancel(:reason('Customer changed plans'));
+$other.place-order: :restaurant-id<green-kitchen>, :customer-id<bob>,
+    :address('20 Market Street'), :items{ bowl => 1 };
+$other.cancel: :reason('Customer changed plans');
 
 my %totals = DeliveryTotals.^with-ids.report;
 say %totals<placed>;          # 2

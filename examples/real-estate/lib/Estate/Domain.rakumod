@@ -47,7 +47,7 @@ aggregate Tenant is export {
     method register(Str :$name! where *.trim.chars > 0,
                     Str :$email! where *.contains('@'), Str :$phone = '') is command {
         die 'Tenant is already registered' if $!name.chars;
-        self.tenant-registered(:$name, :$email, :$phone);
+        self.tenant-registered: :$name, :$email, :$phone;
         %(:$!tenant-id)
     }
 }
@@ -76,24 +76,24 @@ aggregate Property is export {
                     Rat() :$monthly-rent! where * > 0,
                     Str :$kind = 'Apartment', UInt :$bedrooms = 1) is command {
         die 'Property is already registered' if $!name.chars;
-        self.property-registered(:$name, :$address, :$kind, :$bedrooms, :$monthly-rent);
+        self.property-registered: :$name, :$address, :$kind, :$bedrooms, :$monthly-rent;
         %(:$!property-id)
     }
     method start-tenancy(Str :$tenant-id!) is command {
         die 'Register the property first' unless $!name.chars;
         die 'This property already has a tenant' if $!tenant-id.chars;
-        my $proxy = Tenant.^with-ids(:$tenant-id);
+        my $proxy = Tenant.^with-ids: :$tenant-id;
         die 'Tenant does not exist' unless exists-in-store($proxy);
         my $tenant = $proxy.^load;
         die 'Tenant does not exist' unless $tenant.name.chars;
-        self.tenancy-started(:$tenant-id, :tenant-name($tenant.name), :monthly-rent($!monthly-rent));
+        self.tenancy-started: :$tenant-id, :tenant-name($tenant.name), :monthly-rent($!monthly-rent);
         %(:$!property-id, :$tenant-id)
     }
     method end-tenancy is command {
         die 'There is no active tenancy' unless $!tenant-id.chars;
         die 'Settle outstanding rent before ending the tenancy'
             if $!bills.values.first({ .<paid>.Rat < .<amount>.Rat });
-        self.tenancy-ended(:tenant-id($!tenant-id));
+        self.tenancy-ended: :tenant-id($!tenant-id);
         %(:$!property-id)
     }
     method charge-rent(Str :$period! where /^ \d ** 4 '-' \d ** 2 $/) is command {
@@ -101,7 +101,7 @@ aggregate Property is export {
         die 'Rent has already been charged for this month' if $!bills{$period}:exists;
         my $month = $period.substr(5).Int;
         die 'Month must be between 01 and 12' unless 1 <= $month <= 12;
-        self.rent-charged(:tenant-id($!tenant-id), :$period, :amount($!monthly-rent));
+        self.rent-charged: :tenant-id($!tenant-id), :$period, :amount($!monthly-rent);
         %(:$period, :amount($!monthly-rent))
     }
     method receive-rent(Str :$period!, Rat() :$amount! where * > 0,
@@ -111,7 +111,7 @@ aggregate Property is export {
         die 'Payment exceeds the outstanding balance' if $amount > %bill<amount>.Rat - %bill<paid>.Rat;
         die 'Payment reference has already been used' if StoredEvent.list-events(
             :row, :stream(self.^stream), (RentReceived) => %(reference => $reference)).head;
-        self.rent-received(:tenant-id(%bill<tenant-id>), :$period, :$amount, :$reference);
+        self.rent-received: :tenant-id(%bill<tenant-id>), :$period, :$amount, :$reference;
         %(:$!property-id, :$period, :$amount)
     }
 }
@@ -136,20 +136,20 @@ aggregate Repair is export {
                           Str :$description = '', Str :$priority = 'normal') is command {
         die 'Repair has already been requested' unless $!status eq 'new';
         die 'Choose normal or urgent priority' unless $priority eq any(<normal urgent>);
-        my $proxy = Property.^with-ids(:$property-id);
+        my $proxy = Property.^with-ids: :$property-id;
         die 'Property does not exist' unless exists-in-store($proxy);
         my $property = $proxy.^load;
         die 'Property does not exist' unless $property.name.chars;
-        self.repair-requested(:$property-id, :tenant-id($property.tenant-id), :$title, :$description, :$priority);
+        self.repair-requested: :$property-id, :tenant-id($property.tenant-id), :$title, :$description, :$priority;
         %(:$!repair-id)
     }
     method schedule(Str :$contractor! where *.trim.chars > 0, Rat() :$estimate! where * > 0) is command {
         die 'Only requested repairs can be scheduled' unless $!status eq 'requested';
-        self.repair-scheduled(:$contractor, :$estimate); %(:$!repair-id)
+        self.repair-scheduled: :$contractor, :$estimate; %(:$!repair-id)
     }
     method finish(Rat() :$cost! where * > 0) is command {
         die 'Schedule the repair before completing it' unless $!status eq 'scheduled';
-        self.repair-completed(:$cost); %(:$!repair-id, :$cost)
+        self.repair-completed: :$cost; %(:$!repair-id, :$cost)
     }
     method pay-contractor is command {
         die 'Only completed repairs can be paid' unless $!status eq 'completed';
@@ -158,15 +158,15 @@ aggregate Repair is export {
     method record-payment(Str :$payment-id!, Rat() :$amount!) is command {
         die 'Repair payment was not requested' unless $!status eq 'payment-pending';
         die 'Payment does not match the repair cost' unless $amount == $!cost;
-        self.repair-paid(:$payment-id, :$amount); %(:$!repair-id, :$payment-id)
+        self.repair-paid: :$payment-id, :$amount; %(:$!repair-id, :$payment-id)
     }
     method reverse-payment(Str :$payment-id!) is command {
         die 'Payment does not match' unless $!status eq 'paid' && $payment-id eq $!payment-id;
-        self.repair-payment-reversed(:$payment-id); %(:$!repair-id)
+        self.repair-payment-reversed: :$payment-id; %(:$!repair-id)
     }
     method cancel(Str :$reason!) is command {
         die 'This repair cannot be cancelled' unless $!status eq any(<requested scheduled>);
-        self.repair-cancelled(:$reason); %(:$!repair-id)
+        self.repair-cancelled: :$reason; %(:$!repair-id)
     }
 }
 
@@ -184,7 +184,7 @@ aggregate Conversation is export {
         # Stable IDs make a retry after a lost acknowledgement harmless.
         return %(message-id => $message-id) if $!messages.first(*.<message-id> eq $message-id);
         die 'Messages must have at most 2000 characters' if $body.chars > 2000;
-        self.message-posted(:$author, :$body, :$message-id, :$notification, :sent-at(DateTime.now.Str));
+        self.message-posted: :$author, :$body, :$message-id, :$notification, :sent-at(DateTime.now.Str);
         %(:$message-id)
     }
 }
@@ -262,46 +262,50 @@ saga RepairWorkflow is export {
     multi method APPLY(StepSucceeded $e where { .step eq 'send-payment' }) { $!payment-id = $e.result<payment-id> }
     multi method APPLY(StepSucceeded $e where { .step eq 'notify' }) { $!last-notification = $e.result<message-id> }
     multi method REACT(RepairRequested $e where { .repair-id eq $!repair-id }) {
-        self.notify(:body("Repair opened: {$e.title}. Our team will arrange a contractor."));
-        self.set-timeout('repair-follow-up', 24 * 60 * 60, remind => \());
+        self.notify: :body("Repair opened: {$e.title}. Our team will arrange a contractor.");
+        self.set-timeout: 'repair-follow-up', 24 * 60 * 60, remind => \();
     }
     multi method REACT(RepairScheduled $e where { .repair-id eq $!repair-id }) {
-        self.notify(:body("{$e.contractor} is booked. Estimated cost: £{$e.estimate.fmt('%.2f')}."));
+        self.notify: :body("{$e.contractor} is booked. Estimated cost: £{$e.estimate.fmt('%.2f')}.");
     }
     multi method REACT(RepairCompleted $e where { .repair-id eq $!repair-id }) {
-        self.cancel-timeout('repair-follow-up');
-        self.notify(:body("Work completed. Final cost: £{$e.cost.fmt('%.2f')}. Awaiting payment approval."));
+        self.cancel-timeout: 'repair-follow-up';
+        self.notify: :body("Work completed. Final cost: £{$e.cost.fmt('%.2f')}. Awaiting payment approval.");
     }
     multi method REACT(RepairCancelled $e where { .repair-id eq $!repair-id }) {
-        self.cancel-timeout('repair-follow-up');
-        self.notify(:body("Repair cancelled: {$e.reason}"));
+        self.cancel-timeout: 'repair-follow-up';
+        self.notify: :body("Repair cancelled: {$e.reason}");
     }
     multi method REACT(RepairPaymentStarted $e where { .repair-id eq $!repair-id }) { self.send-payment }
     multi method REACT(StepSucceeded $e where { .step eq 'send-payment' }) {
-        self.record-payment(:payment-id($e.result<payment-id>), :amount($e.result<amount>.Rat));
+        self.record-payment: :payment-id($e.result<payment-id>), :amount($e.result<amount>.Rat);
     }
     multi method REACT(StepSucceeded $e where { .step eq 'record-payment' }) {
-        self.notify(:body('Contractor payment confirmed. Thank you for your patience.'));
+        self.notify: :body('Contractor payment confirmed. Thank you for your patience.');
     }
-    multi method REACT(StepFailed $e) { self.^compensate(:reason($e.error)) }
+    multi method REACT(StepFailed $e) { self.^compensate: :reason($e.error) }
     method notify(Str :$body!) {
-        self.^service('estate-notifications', 'deliver', \(:repair-id($.repair-id), :$body),
-            :retry{:3max, :1delay}, :!compensation);
+        self.^service: 'estate-notifications', 'deliver', \(:$.repair-id, :$body),
+            :retry{:3max, :1delay}, :!compensation;
     }
     method remind {
-        self.notify(:body('Your repair is still open. Please use this chat if you need an update.'));
+        self.notify: :body('Your repair is still open. Please use this chat if you need an update.');
     }
     method send-payment {
-        self.^service('estate-payments', 'pay', \(:repair-id($.repair-id), :amount($.cost)),
-            :retry{:3max, :backoff(Exponential), :1init-delay, :4max-delay});
+        self.^service: 'estate-payments', 'pay', \(:$.repair-id, :amount($.cost)),
+            :retry{:3max, :backoff(Exponential), :1init-delay, :4max-delay};
     }
     method compensate-send-payment(Str :$payment-id!, |) {
-        self.^service('estate-payments', 'refund', \(:$payment-id), :retry{:5max, :2delay});
+        self.^service: 'estate-payments', 'refund', \(:$payment-id), :retry{:5max, :2delay};
     }
     method record-payment(Str :$payment-id!, Rat() :$amount!) {
-        self.^command(Repair, 'record-payment', \(:$payment-id, :$amount), :retry{:3max, :1delay});
+        Repair.^with-ids(:$.repair-id).record-payment:
+            :$payment-id, :$amount,
+            :service-retry{:3max, :1delay};
     }
     method compensate-record-payment(Str :$payment-id!, |) {
-        self.^command(Repair, 'reverse-payment', \(:$payment-id), :retry{:5max, :2delay});
+        Repair.^with-ids(:$.repair-id).reverse-payment:
+            :$payment-id,
+            :service-retry{:5max, :2delay};
     }
 }

@@ -26,14 +26,14 @@ multi method APPLY(ReplenishmentRequested $) { }
 method register(Str :$name! where *.chars > 0,
                 Rat() :$unit-price! where { $_ > 0 && ($_ * 100).denominator == 1 }) is command {
     die 'Product is already registered' if $!name.chars;
-    self.product-registered(:$name, :$unit-price);
+    self.product-registered: :$name, :$unit-price;
     %(:$!warehouse-id, :$!sku)
 }
 method receive(UInt :$quantity! where * > 0, Str :$reference! where *.chars > 0) is command {
     die 'Register the product first' unless $!name.chars;
     if $!receipts{$reference}:exists {
         die 'Receipt reference reused with different quantity' unless $!receipts{$reference} == $quantity;
-    } else { self.stock-received(:$quantity, :$reference, :available(self.available + $quantity)) }
+    } else { self.stock-received: :$quantity, :$reference, :available(self.available + $quantity) }
     %(:$!warehouse-id, :$!sku, :$quantity, :$reference, available => self.available)
 }
 method reserve(Str :$order-id!, UInt :$quantity! where * > 0) is command {
@@ -41,20 +41,20 @@ method reserve(Str :$order-id!, UInt :$quantity! where * > 0) is command {
     if $!reservations{$order-id}:exists {
         die 'Reservation reused with different quantity' unless $!reservations{$order-id} == $quantity;
     } else {
-        die Permanent.new(:message("Insufficient stock for '$!sku'")) if self.available < $quantity;
-        self.stock-reserved(:$order-id, :$quantity, :available(self.available - $quantity));
+        die Permanent.new: :message("Insufficient stock for '$!sku'") if self.available < $quantity;
+        self.stock-reserved: :$order-id, :$quantity, :available(self.available - $quantity);
     }
     %(:$!warehouse-id, :$!sku, :$order-id, :$quantity)
 }
 method release(Str :$order-id!) is command {
     require Commerce::Order;
     my $order = Commerce::Order.^with-ids(:$order-id).^load;
-    die Permanent.new(:message('Dispatch-authorized reservations cannot be released'))
+    die Permanent.new: :message('Dispatch-authorized reservations cannot be released')
         if $order.defined && $order.status eq any(<dispatching shipped delivered return-requested return-received returned>);
     die 'Dispatched stock needs a physical return' if $!dispatched{$order-id}:exists;
     if $!reservations{$order-id}:exists {
         my $quantity = $!reservations{$order-id};
-        self.stock-released(:$order-id, :$quantity, :available(self.available + $quantity));
+        self.stock-released: :$order-id, :$quantity, :available(self.available + $quantity);
     }
     %(released => True, :$order-id)
 }
@@ -67,7 +67,7 @@ method dispatch(Str :$order-id!, UInt :$quantity! where * > 0) is command {
         die 'Physical handoff must be confirmed first' unless $shipment.defined && $shipment.status eq any(<dispatched delivered>);
         die 'Missing or mismatched reservation' unless $!reservations{$order-id}:exists
             && $!reservations{$order-id} == $quantity;
-        self.stock-dispatched(:$order-id, :$quantity, :available(self.available));
+        self.stock-dispatched: :$order-id, :$quantity, :available(self.available);
     }
     %(:$order-id, :$!sku, :$quantity)
 }
@@ -79,7 +79,7 @@ method restock-return(Str :$order-id!, UInt :$quantity! where * > 0) is command 
         && $!dispatched{$order-id} == $quantity;
     if $!returns{$order-id}:exists {
         die 'Return reused with different quantity' unless $!returns{$order-id} == $quantity;
-    } else { self.stock-returned(:$order-id, :$quantity, :available(self.available + $quantity)) }
+    } else { self.stock-returned: :$order-id, :$quantity, :available(self.available + $quantity) }
     %(restocked => True, :$order-id, :$!sku)
 }
 method request-replenishment is command { self.replenishment-requested; True }

@@ -33,6 +33,8 @@ is %typed<fraction>, 1/3, 'executor preserves exact value';
 isa-ok %typed<date>, DateTime, 'executor preserves DateTime';
 my $copy = $ca.bind({ $a.details })(); $copy<array>[0] = 99;
 is $ca.bind({ $a.details<array>[0] })(), 1, 'service query collection is detached';
+throws-like { $ca.bind({ $target.add(:service-retry{:2max}) })() }, Exception,
+    :message(/ 'saga planning context' /), 'saga retry adverbs cannot bypass a service callback fence';
 my @jobs = ($ca,$cb).map(-> $ctx { start $ctx.bind({ $target.add(:!sync) })() });
 my @queued = await @jobs;
 is-deeply @queued.map(*.service-context<service-id>).sort.Array, [$ida,$idb].sort.Array,

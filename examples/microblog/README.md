@@ -69,7 +69,7 @@ Queries are also available outside services, for example:
 
 ```raku
 Directory.^with-ids(:application-id<microblog>).list;
-UserTweets.^with-ids(:application-id<microblog>, :user-id<ana>).page(:limit(10));
+UserTweets.^with-ids(:application-id<microblog>, :user-id<ana>).page: :limit(10);
 ```
 
 ## API

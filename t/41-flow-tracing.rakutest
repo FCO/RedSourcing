@@ -43,7 +43,7 @@ saga FlowWorkflow {
     multi method REACT(BeginFlow $e where { .id eqv $!id }) { self.credit-account }
     multi method REACT(StepSucceeded $e where { .step eq 'credit-account' }) { self.send-mail }
     multi method REACT(StepSucceeded $e where { .step eq 'send-mail' }) { self.^complete }
-    method credit-account { self.^command(FlowAccount, 'credit', \(:amount(2)), :!compensation) }
+    method credit-account { FlowAccount.^with-ids(:id($.id)).credit(:amount(2), :!service-compensation) }
     method send-mail { self.^service('flow-mail', 'send', \(:id($.id)), :!compensation) }
 }
 my $*RED-DB;

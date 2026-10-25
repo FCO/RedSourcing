@@ -68,11 +68,11 @@ saga CheckoutSaga {
     multi method REACT(StepFailed $e) { self.^compensate(:reason($e.error)) }
 
     method reserve-stock(Int :$order-id!) {
-        self.^command(SagaInventory, 'reserve', \(:$order-id), :retry{:3max,:2delay})
+        SagaInventory.^with-ids(:id($.id)).reserve(:$order-id, :service-retry{:3max, :2delay})
     }
     method compensate-reserve-stock(Str :$reservation-id!, |) {
         $compensator-calls++;
-        self.^command(SagaInventory, 'release', \(:$reservation-id), :retry{:3max,:10delay})
+        SagaInventory.^with-ids(:id($.id)).release(:$reservation-id, :service-retry{:3max, :10delay})
     }
     method charge-payment {
         self.^service('payments', 'charge', \($.id, :amount(12.50)),
@@ -84,7 +84,7 @@ saga CheckoutSaga {
     }
     method finish { self.^complete if $!paid && $!delivered }
     method expire(Str :$reason!) is command { self.^compensate(:$reason) }
-    method scalar { self.^command(SagaInventory, 'scalar', \(), :!compensation) }
+    method scalar { SagaInventory.^from(self).scalar(:!service-compensation) }
 }
 
 saga BadApplySaga {
@@ -111,14 +111,14 @@ saga ReactionOnlySaga {
     has Int $.id is entity-id;
     method APPLY(SagaDelivered $e where { .id eqv $!id }) { }
     method REACT(SagaStarted $e where { .id eqv $!id }) {
-        self.^command(SagaInventory, 'scalar', \());
+        SagaInventory.^from(self).scalar;
     }
 }
 saga ValidationSaga {
     has Int $.id is entity-id;
     method APPLY(SagaStarted $e) { }
-    method operation { self.^command(SagaInventory, 'scalar', \(), :compensation<undo>) }
-    method undo(Str :$reservation-id!, |) { self.^command(SagaInventory, 'release', \(:$reservation-id)) }
+    method operation { SagaInventory.^from(self).scalar(:service-compensation<undo>) }
+    method undo(Str :$reservation-id!, |) { SagaInventory.^from(self).release(:$reservation-id) }
     method no-operation { }
     method invalid-undo { self.^service('payments', 'charge', \(), :compensation<no-operation>) }
 }
@@ -137,9 +137,9 @@ saga RoutingSaga {
     has Int $.id is entity-id;
     has Int $.warehouse-id = 1;
     method APPLY(SagaRouted $e where { .id eqv $!id }) { $!warehouse-id = $e.warehouse-id }
-    method reserve { self.^command(SagaWarehouse, 'reserve', \()) }
+    method reserve { SagaWarehouse.^from(self).reserve }
     method compensate-reserve(:$reservation-id!, Int :$warehouse-id! where { $_ == self.warehouse-id }, |) {
-        self.^command(SagaWarehouse, 'release', \(:$reservation-id))
+        SagaWarehouse.^from(self).release(:$reservation-id)
     }
 }
 saga BadRunSaga {
@@ -362,7 +362,7 @@ subtest 'named timeout replacement, cancellation and terminal firing survive rel
 };
 
 subtest 'APPLY forbids effects and REACT rejects domain mutation before releasing intents' => {
-    for BadApplySaga, BadReactSaga, DirectReactSaga -> $type {
+    for BadApplySaga, BadReactSaga -> $type {
         fresh; started;
         my $p = proxy($type);
         my $rows = StoredEvent.^all.elems;
@@ -375,6 +375,17 @@ subtest 'APPLY forbids effects and REACT rejects domain mutation before releasin
     my $bad = proxy(BadReactSaga).^load;
     is-deeply $bad.details, {}, 'nested domain mutation was discarded';
     is $bad.amount, 0, 'scalar domain mutation was discarded';
+};
+
+subtest 'commands called directly in REACT are durable saga actions' => {
+    fresh; started;
+    my $p = proxy(DirectReactSaga);
+    my $planned = advance($p, :limit(0));
+    is $planned.^state<actions>.elems, 1, 'direct proxy call plans one action';
+    is StoredCommand.^all.elems, 0, 'planning does not submit a command';
+    is-deeply @effects, [], 'planning has no external effects';
+    is advance($p).^state<actions>.head<status>, 'done', 'controller executes the action later';
+    is StoredCommand.^all.elems, 1, 'controller submits one child command';
 };
 
 subtest 'REACT signatures also select events and direct calls plan operations' => {
@@ -429,12 +440,12 @@ subtest 'invalid compensation binding blocks a confirmed success without running
 subtest 'policy, target and timeout validation fail before persisting an intent' => {
     fresh; my $s = proxy().^load;
     for {:0max}, {:delay(-1)}, {:wat(1)}, {:backoff('linear')} -> %policy {
-        dies-ok { $s.^command(SagaInventory, 'scalar', \(), :retry(%policy)) }, 'invalid retry policy';
+        dies-ok { $s.^plan(-> $working { SagaInventory.^from($working).scalar(:service-retry(%policy)) }) }, 'invalid retry policy';
     }
-    dies-ok { $s.^command(SagaInventory, 'missing', \()) }, 'only registered commands are accepted';
-    dies-ok { $s.^command(SagaInventory, 'scalar', \(1)) }, 'aggregate arguments must be named';
-    dies-ok { $s.^command(CheckoutSaga, 'expire', \(:reason<x>)) }, 'sagas are not aggregate targets';
-    dies-ok { $s.^command(SagaInventory, 'scalar', \(), :compensation<missing>) }, 'explicit compensators must exist';
+    dies-ok { $s.^plan(-> $working { SagaInventory.^from($working).missing }) }, 'only registered commands are accepted';
+    dies-ok { $s.^plan(-> $working { SagaInventory.^from($working).scalar(1) }) }, 'aggregate arguments must be named';
+    dies-ok { $s.^plan(-> $working { CheckoutSaga.^from($working).expire(:reason<x>) }) }, 'sagas are not aggregate targets';
+    dies-ok { $s.^plan(-> $working { SagaInventory.^from($working).scalar(:service-compensation<missing>) }) }, 'explicit compensators must exist';
     dies-ok { $s.^service('missing', 'charge', \()) }, 'services must be registered';
     dies-ok { $s.set-timeout('bad', -1, expire => \()) }, 'negative timeout';
     dies-ok { $s.set-timeout('bad', 1) }, 'missing timeout method';
@@ -450,7 +461,7 @@ subtest 'policy, target and timeout validation fail before persisting an intent'
 subtest 'normalized aggregate arguments freeze aliases and defaults across retries' => {
     my $*REDSOURCING-NOW = DateTime.new('2026-01-01T00:00:00Z');
     fresh; my $p = proxy(); my $s = $p.^load;
-    my $id = $s.^command(SagaInventory, 'defaulted', \(), :retry{:2max,:1delay});
+    my $id = $s.^plan(-> $working { SagaInventory.^from($working).defaulted(:service-retry{:2max, :1delay}) });
     is $defaults, 1, 'defaults are evaluated when planning';
     is $s.^state<actions>.head<args><named><value>, 1, 'the canonical default is persisted';
     my $now = $*REDSOURCING-NOW.later(:seconds(1));
@@ -458,11 +469,11 @@ subtest 'normalized aggregate arguments freeze aliases and defaults across retri
     $s = advance($p, $now.later(:seconds(1)));
     is $s.^state<actions>.head<result>, 1, 'a retry retains the first default value';
     is $defaults, 1, 'execution does not reevaluate a normalized default';
-    $s.^command(SagaInventory.^with-ids(:id(1)), 'defaulted', \(:selection(8)));
+    $s.^plan(-> $working { SagaInventory.^with-ids(:1id).defaulted(:selection(8)) });
     $s = advance($p, $now.later(:seconds(2)));
     is $s.^state<actions>.tail<result>, 8, 'an explicit proxy and a named alias are accepted';
     my $count = $s.^state<actions>.elems;
-    dies-ok { $s.^command(SagaInventory,'even',\(:a(3))) }, 'native constraints are checked before persisting';
+    dies-ok { $s.^plan(-> $working { SagaInventory.^from($working).even(:a(3)) }) }, 'native constraints are checked before persisting';
     is $s.^state<actions>.elems, $count, 'invalid arguments create no action';
 };
 

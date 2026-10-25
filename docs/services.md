@@ -15,11 +15,11 @@ aggregate Room {
     method serve(ServiceContext $runtime, Str :$topic = 'general') is service {
         start {
             # Open resources, then register their cleanup:
-            $runtime.on-stop({ ... });
+            $runtime.on-stop: { ... };
             $runtime.ready;
             # For each received message:
             # $runtime.touch;
-            # $runtime.aggregate.record-message(:text(...));
+            # $runtime.proxy.record-message(:text(...));
             await $runtime.stopping;
         }
     }
@@ -47,10 +47,10 @@ projection Directory {
     }
     method list is query { %!users.keys.sort.Array }
 }
-my $directory = Directory.^with-ids(:application-id<demo>);
+my $directory = Directory.^with-ids: :application-id<demo>;
 my $names = $directory.list;
 my %users = $directory.users;
-$user.tweet(:text('Hello'));
+$user.tweet: :text('Hello');
 ```
 
 Queries work inside and outside services. Outside, the proxy loads the entity
@@ -83,16 +83,21 @@ binds request processing, including delayed request bodies. For callbacks invoke
 by outside emitters or timers, capture the context explicitly:
 
 ```raku
-my &receive = $runtime.bind(-> %message {
-    $user.tweet(:text(%message<text>));
-});
-my $subscription = $incoming.Supply.tap(&receive);
+my &receive = $runtime.bind: -> %message {
+    $user.tweet: :text(%message<text>);
+};
+my $subscription = $incoming.Supply.tap: &receive;
 ```
 
 `bind` preserves arguments and protected query scopes. It binds the exact service
 instance, not just its runtime. Revoked generations and closed executors fail;
 they never fall back to ordinary application access. `on-stop` callbacks are
 bound automatically. `runtime.proxy` returns the owning entity's normal proxy.
+
+The `:service-retry` and `:service-compensation` command adverbs configure
+[saga actions](sagas.md), so they require a saga planning context. They are not
+retry options for long-lived service callbacks. Commands from a service continue
+to use its ownership fence; there is no `:!service` bypass.
 
 The explicit `read`, `command`, `aggregate` and `state` helpers remain compatible.
 In particular, `read($proxy, :method, :arguments)` keeps its existing JSON data
@@ -112,12 +117,12 @@ Pass a block containing Cro endpoint declarations directly to the context:
 ```raku
 use Cro::HTTP::Router;
 method serve(ServiceContext $runtime, Int :$port = 3000) is service {
-    $runtime.http(:$port, {
+    $runtime.http: :$port, {
         get -> 'messages' {
             $runtime.touch;
             content 'application/json', $runtime.state.messages.Array;
         }
-    })
+    }
 }
 ```
 
@@ -136,14 +141,14 @@ After selecting a store and creating its normal event/command schema:
 
 ```raku
 my $runtime = ServiceRuntime.new.initialize;
-my $room = Room.^with-ids(:room-id<general>);
+my $room = Room.^with-ids: :room-id<general>;
 $room.^create; # Normal aggregate creation, once.
-$room.^start-service('serve', :args(%(:topic<general>)), :idle-timeout(300));
+$room.^start-service: 'serve', :args(%(:topic<general>)), :idle-timeout(300);
 my $controller = $runtime.run;
 
-$room.^touch-service('serve');
-my %status = $room.^service-status('serve');
-$room.^stop-service('serve');
+$room.^touch-service: 'serve';
+my %status = $room.^service-status: 'serve';
+$room.^stop-service: 'serve';
 $runtime.shutdown;
 await $controller;
 ```

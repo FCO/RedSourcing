@@ -86,18 +86,19 @@ saga OrderSaga {
         $!amount = $event.amount;
     }
     method REACT(OrderSubmitted $event where { .order-id eq $!order-id }) {
-        self.set-timeout('delivery-deadline', 15 * 60,
-            expire => \(reason => 'Delivery deadline exceeded'));
+        self.set-timeout: 'delivery-deadline', 15 * 60,
+            expire => \(reason => 'Delivery deadline exceeded');
         self.reserve-stock;
     }
     method reserve-stock {
-        self.^command(Inventory, 'reserve', \(), :retry{:3max,:2delay})
+        Inventory.^with-ids(:$.order-id).reserve: :service-retry{:3max,:2delay}
     }
     method compensate-reserve-stock(Str :$reservation-id!, |) {
-        self.^command(Inventory, 'release', \(:$reservation-id),
-            :retry{:5max,:10delay})
+        Inventory.^with-ids(:$.order-id).release:
+            :$reservation-id,
+            :service-retry{:5max,:10delay}
     }
-    method expire(Str :$reason!) is command { self.^compensate(:$reason) }
+    method expire(Str :$reason!) is command { self.^compensate: :$reason }
 }
 ```
 
@@ -113,8 +114,9 @@ before and after the reaction. Scalar and nested collection changes cause an
 exception; the copy and intents are discarded and the source cursor stays put.
 This checks the net change at the end of the reaction. It does not trap every write
 instruction, including a write followed by restoration of the original value.
-Direct aggregate proxy calls are forbidden in `REACT`; use `.^command` so effects
-remain buffered until validation finishes. Public attributes must be JSON-compatible,
+Direct aggregate proxy calls in `REACT` are routed to the current saga
+and buffered until validation finishes. They return a durable action ID, not
+the business result of the command. Public attributes must be JSON-compatible,
 as they already must be for snapshots. Private domain fields are not persisted.
 
 `.^load` restores committed controls and checkpoints without running `REACT`,
@@ -133,14 +135,31 @@ my $action-id = $saga.reserve-stock;
 $saga.^advance;
 ```
 
-`.^command(AggregateType, 'method', Capture, ...)` infers the target's entity IDs
-from public attributes of the saga. A required target ID need not itself be an ID
-of the saga. Missing attributes raise an error. `Target.^from($source)` exposes
-this inference independently. Passing an explicit aggregate proxy to `.^command`
-selects that proxy's identity instead. Aggregate commands accept named arguments.
-The same preparation as a normal proxy call validates constraints, normalizes
-aliases and evaluates defaults before persisting the action. Retries reuse those
-values rather than evaluating defaults again.
+Command proxies accept `:service-retry{...}` and `:service-compensation` during
+saga planning. These become `:retry` and `:compensation` options on the saga action;
+they are removed before command arguments are validated or persisted. For example,
+`:!service-compensation` disables automatic compensation, while
+`:service-compensation<undo-reservation>` selects a named saga method. Omitting
+these options preserves the normal retry and compensation defaults.
+
+The `service-` prefix is reserved. Unknown options and use outside saga planning
+raise errors, including in a long-lived `is service` method. Such services still
+route normal proxy commands through their fenced `ServiceContext`. `:!sync` is
+not supported during saga planning: the action is always scheduled for the
+controller. Commands remain forbidden in `APPLY` and `is query` bodies.
+
+Build the target proxy with `Target.^with-ids(...)`, or use `Target.^from(self)`
+to infer its entity IDs from public attributes of the saga. A required target ID
+need not itself be an ID of the saga; missing attributes raise an error. For example:
+
+```raku
+Inventory.^from(self).reserve: :service-retry{:3max, :2delay};
+```
+
+Aggregate commands accept named arguments. The same preparation as a normal
+proxy call validates constraints, normalizes aliases and evaluates defaults
+before persisting the action. Retries reuse those values rather than evaluating
+defaults again.
 
 `.^service('adapter-name', 'operation', Capture, ...)` accepts both positional and
 named arguments. Register the adapter in each process that runs the controller:
@@ -227,9 +246,9 @@ possibly incomplete workflow.
 After checking the provider, reconcile explicitly:
 
 ```raku
-$saga.^resolve-action($action-id, :result{payment-id => 'confirmed-payment'});
+$saga.^resolve-action: $action-id, :result{payment-id => 'confirmed-payment'};
 # Or, only after confirming that no effect occurred:
-$saga.^resolve-action($action-id, :error('Payment was rejected'));
+$saga.^resolve-action: $action-id, :error('Payment was rejected');
 $saga.^advance;
 ```
 
@@ -245,7 +264,7 @@ a follow-up item.
 self.set-timeout:
     'delivery-deadline', 15 * 60,
     expire => \(reason => 'Delivery deadline exceeded');
-self.cancel-timeout('delivery-deadline');
+self.cancel-timeout: 'delivery-deadline';
 ```
 
 The third argument is exactly one named entry whose value is a `Capture`. The

@@ -18,7 +18,7 @@ multi method APPLY(ShippingRecoveryRequested $) { }
 method book(Str :$booking-id!, Str :$tracking-code!) is command {
     if $!status eq 'booked' && $!booking-id eq $booking-id { return %(booked => True) }
     die 'Shipment cannot be booked in this state' unless $!status eq 'new';
-    self.shipment-booked(:$booking-id, :$tracking-code); %(booked => True)
+    self.shipment-booked: :$booking-id, :$tracking-code; %(booked => True)
 }
 method dispatch is command {
     return %(dispatched => True) if $!status eq any(<dispatched delivered>);
@@ -31,7 +31,7 @@ method dispatch is command {
             && $stock.reservations{$!order-id} == %line<quantity>;
     }
     # In this simulation the warehouse confirms the physical carrier handoff.
-    self.shipment-dispatched(:warehouse-id($order.warehouse-id), :items($order.items)); %(dispatched => True)
+    self.shipment-dispatched: :warehouse-id($order.warehouse-id), :items($order.items); %(dispatched => True)
 }
 method deliver is command {
     return %(delivered => True) if $!status eq 'delivered';
@@ -41,9 +41,9 @@ method deliver is command {
 method cancel(Str :$reason!) is command {
     return %(cancelled => True) if $!status eq 'cancelled';
     die 'Physical dispatch cannot be undone' unless $!status eq any(<new booked>);
-    self.shipment-cancelled(:$reason); %(cancelled => True)
+    self.shipment-cancelled: :$reason; %(cancelled => True)
 }
-method report-issue(Str :$reason!) is command { self.shipment-issue-reported(:$reason); %(reported => True) }
+method report-issue(Str :$reason!) is command { self.shipment-issue-reported: :$reason; %(reported => True) }
 method resume-processing is command {
     die 'Only dispatched shipments can resume processing' unless $!status eq any(<dispatched delivered>);
     self.shipping-recovery-requested; True

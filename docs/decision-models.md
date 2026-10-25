@@ -166,7 +166,7 @@ counted once per event. Map-style event queries resolve aliases to their source
 attributes:
 
 ```raku
-StoredEvent.list-events((NickChanged) => %(nick => 'Alice'));
+StoredEvent.list-events: (NickChanged) => %(nick => 'Alice');
 ```
 
 A field-wide counter supports predicates whose values are not known in advance:

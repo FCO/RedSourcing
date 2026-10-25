@@ -13,15 +13,15 @@ method amount-on-month(UInt :$period!) is query { %!balance-by-month{$period} }
 
 # Events arrive in timestamp order. Each month's last entry sets its closing balance.
 multi method APPLY(Deposited $_ where { .client-id == $!client-id }) {
-    self!record($_, .amount, 'deposit');
+    self!record: $_, .amount, 'deposit';
 }
 
 multi method APPLY(Transaction $_ where { .from-client == $!client-id }) {
-    self!record($_, -.amount, 'outgoing');
+    self!record: $_, -.amount, 'outgoing';
 }
 
 multi method APPLY(Transaction $_ where { .to-client == $!client-id }) {
-    self!record($_, .amount, 'incoming');
+    self!record: $_, .amount, 'incoming';
 }
 
 method !record($event, Rat $change, Str $direction) {

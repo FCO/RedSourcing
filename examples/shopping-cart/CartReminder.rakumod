@@ -16,20 +16,20 @@ class ReminderEmailSent is export does Event {
 sub register-cart-reminder-email is export {
     register-service 'cart-reminder-email', sub (Str $operation, Capture $arguments,
                                                Str :$idempotency-key!) {
-        die Permanent.new(:message("Unknown email operation '$operation'"))
+        die Permanent.new: :message("Unknown email operation '$operation'")
             unless $operation eq 'send';
         my %args = $arguments.hash;
         my $stream = "ShoppingCartEmail: $idempotency-key";
         my $receipt = StoredEvent.list-events(:types[ReminderEmailSent], :$stream).head;
         if $receipt {
-            die Permanent.new(:message('Email idempotency key reused with different arguments'))
+            die Permanent.new: :message('Email idempotency key reused with different arguments')
                 unless $receipt.cart-id eq %args<cart-id> && $receipt.email eq %args<email>
                     && $receipt.activity-id == %args<activity-id>;
             return %(sent => True, message-id => $receipt.message-id);
         }
         # Recheck at delivery time: checkout/new activity can arrive after the
         # timer queued an action, including while a provider retry was waiting.
-        my $proxy = Cart.^with-ids(:cart-id(%args<cart-id>));
+        my $proxy = Cart.^with-ids: :cart-id(%args<cart-id>);
         my $cart = $proxy.^load;
         return %(sent => False, reason => 'Cart is closed or empty')
             unless $cart.defined && !$cart.checked-out && $cart.items;
@@ -37,10 +37,10 @@ sub register-cart-reminder-email is export {
             :types[ItemAdded, QuantityChanged, ItemRemoved]).tail;
         return %(sent => False, reason => 'Cart activity changed')
             unless $last && $last.id == %args<activity-id>;
-        ReminderEmailSent.emit(:$stream, :version(1),
+        ReminderEmailSent.emit: :$stream, :version(1),
             :cart-id(%args<cart-id>), :email(%args<email>),
             :activity-id(%args<activity-id>), :message-id($idempotency-key),
-            :subject('You left something in your cart'));
+            :subject('You left something in your cart');
         %(sent => True, message-id => $idempotency-key)
     }
 }
@@ -85,7 +85,7 @@ saga AbandonedCartReminder is export {
     multi method REACT(QuantityChanged $event where { .cart-id eq $!cart-id }) { self.schedule-reminder }
     multi method REACT(ItemRemoved $event where { .cart-id eq $!cart-id }) { self.schedule-reminder }
     multi method REACT(CartCheckedOut $event where { .cart-id eq $!cart-id }) {
-        self.cancel-timeout('abandoned-cart');
+        self.cancel-timeout: 'abandoned-cart';
         self.^complete unless self!has-unsettled-email;
     }
     multi method REACT(StepSucceeded $event where { .step eq 'send-reminder' }) {
@@ -97,24 +97,24 @@ saga AbandonedCartReminder is export {
         }
     }
     multi method REACT(StepFailed $event where { .step eq 'send-reminder' }) {
-        self.^compensate(:reason($event.error));
+        self.^compensate: :reason($event.error);
     }
     method !has-unsettled-email {
-        so self.^state<actions>.first({ .<status> eq any(<pending running retry blocked>) })
+        so self.^state<actions>.first: { .<status> eq any(<pending running retry blocked>) }
     }
     method schedule-reminder {
-        self.cancel-timeout('abandoned-cart');
+        self.cancel-timeout: 'abandoned-cart';
         return if $.checked-out || $.reminded || !$.item-count || self!has-unsettled-email;
         # Anchor to journal time, so a late controller does not add another day.
         my $delay = ($.last-activity + 24 * 60 * 60 - self.^now.Instant.Num) max 0;
-        self.set-timeout('abandoned-cart', $delay, send-reminder => \());
+        self.set-timeout: 'abandoned-cart', $delay, send-reminder => \();
     }
     method send-reminder {
         return if $.checked-out || $.reminded || !$.item-count || self!has-unsettled-email;
         return self.schedule-reminder if self.^now.Instant.Num < $.last-activity + 24 * 60 * 60;
-        self.^service('cart-reminder-email', 'send',
-            \(:cart-id($.cart-id), :email($.email), :activity-id($.activity-id)),
-            :retry{:3max, :300delay}, :!compensation);
+        self.^service: 'cart-reminder-email', 'send',
+            \(:$.cart-id, :$.email, :$.activity-id),
+            :retry{:3max, :300delay}, :!compensation;
     }
 }
 

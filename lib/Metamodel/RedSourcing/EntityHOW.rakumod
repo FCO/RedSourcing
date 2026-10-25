@@ -259,6 +259,18 @@ method compose(Mu \entity, |) {
 		# TODO: use the original signature
 		$!proxy.^add_method: $name, my method (Mu \SELF: :$sync = True, *%pars) {
             my $phase = (try $*REDSOURCING-PHASE) // '';
+            my %options;
+            for %pars.keys.grep(*.starts-with('service-')) -> $option {
+                die "Unknown saga command option: $option"
+                    unless $option eq any(<service-retry service-compensation>);
+                %options{$option.substr(8)} = %pars{$option}:delete;
+            }
+            my $saga = $phase eq 'REACT' ?? (try $*REDSOURCING-SAGA) !! Any;
+            if $phase eq 'REACT' && $saga.defined {
+                die ':!sync is not supported when planning a saga action' unless $sync;
+                return $saga.^command(SELF, $name, \(|%pars), |%options);
+            }
+            die ':service-* options require a saga planning context' if %options;
             my $context = try $*REDSOURCING-SERVICE-CONTEXT;
             if $context.defined && $phase eq 'SERVICE' {
                 return $context.executor.context-command($context, $name, \(:$sync, |%pars), :target(SELF));

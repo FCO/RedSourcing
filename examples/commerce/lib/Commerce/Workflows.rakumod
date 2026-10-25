@@ -5,9 +5,9 @@ use Commerce::Order;
 use Commerce::Shipment;
 unit module Commerce::Workflows;
 
-sub unsettled($saga) { so $saga.^state<actions>.first({ .<status> eq any(<pending running retry blocked>) }) }
+sub unsettled($saga) { so $saga.^state<actions>.first: { .<status> eq any(<pending running retry blocked>) } }
 sub order(Str $order-id) { Commerce::Order.^with-ids(:$order-id).^load }
-sub stock(Str $warehouse-id, Str $sku) { Commerce::Inventory.^with-ids(:$warehouse-id, :$sku) }
+sub stock(Str $warehouse-id, Str $sku) { Commerce::Inventory.^with-ids: :$warehouse-id, :$sku }
 sub remaining($saga, DateTime $emitted, Numeric $seconds) { ($emitted.Instant.Num + $seconds - $saga.^now.Instant.Num) max 0 }
 
 #| Reserves each product, captures payment, and confirms the paid order.
@@ -21,7 +21,7 @@ saga PurchaseSaga is export {
     multi method APPLY(StepSucceeded $e where { .step eq 'reserve-next' }) { $!index++ }
     multi method APPLY(StepSucceeded $e where { .step eq 'charge-payment' }) { $!payment-id = $e.result<payment-id> }
     multi method REACT(OrderSubmitted $e where { .order-id eq $!order-id }) {
-        self.set-timeout('purchase-deadline', remaining(self, $e.emitted-at, 15 * 60), expire => \());
+        self.set-timeout: 'purchase-deadline', remaining(self, $e.emitted-at, 15 * 60), expire => \();
         self.reserve-next;
     }
     multi method REACT(StepSucceeded $e where { .step eq 'reserve-next' }) {
@@ -30,28 +30,31 @@ saga PurchaseSaga is export {
     multi method REACT(StepSucceeded $e where { .step eq 'charge-payment' }) {
         self.confirm-payment;
     }
-    multi method REACT(OrderPaid $e where { .order-id eq $!order-id }) { self.cancel-timeout('purchase-deadline') }
+    multi method REACT(OrderPaid $e where { .order-id eq $!order-id }) { self.cancel-timeout: 'purchase-deadline' }
     multi method REACT(StepSucceeded $e where { .step eq 'confirm-payment' }) { self.^complete }
-    multi method REACT(StepFailed $e) { self.^compensate(:reason($e.error)) }
+    multi method REACT(StepFailed $e) { self.^compensate: :reason($e.error) }
     method reserve-next {
         my %line = $.items[$.index];
-        self.^command(stock($.warehouse-id, %line<sku>), 'reserve', \(:order-id($.order-id), :quantity(%line<quantity>)),
-            :retry{:3max, :2delay});
+        stock($.warehouse-id, %line<sku>).reserve:
+            :$.order-id, :quantity(%line<quantity>),
+            :service-retry{:3max, :2delay};
     }
     method compensate-reserve-next(Str :$warehouse-id!, Str :$sku!, Str :$order-id!, |) {
-        self.^command(stock($warehouse-id, $sku), 'release', \(:$order-id), :retry{:5max, :2delay});
+        stock($warehouse-id, $sku).release: :$order-id, :service-retry{:5max, :2delay};
     }
     method confirm-payment {
-        self.^command(Commerce::Order, 'confirm-payment', \(:payment-id($.payment-id), :amount($.total)), :!compensation);
+        Commerce::Order.^with-ids(:$.order-id).confirm-payment:
+            :$.payment-id, :amount($.total),
+            :!service-compensation;
     }
     method charge-payment {
-        self.^service('commerce-payments', 'charge', \(:order-id($.order-id), :amount($.total)),
-            :retry{:3max, :backoff(Exponential), :1init-delay, :4max-delay});
+        self.^service: 'commerce-payments', 'charge', \(:$.order-id, :amount($.total)),
+            :retry{:3max, :backoff(Exponential), :1init-delay, :4max-delay};
     }
     method compensate-charge-payment(Str :$payment-id!, |) {
-        self.^service('commerce-payments', 'refund', \(:$payment-id), :retry{:5max, :2delay});
+        self.^service: 'commerce-payments', 'refund', \(:$payment-id), :retry{:5max, :2delay};
     }
-    method expire { self.^compensate(:reason('Purchase deadline exceeded')) }
+    method expire { self.^compensate: :reason('Purchase deadline exceeded') }
 }
 
 #| Books a carrier and waits for warehouse authorization before physical handoff.
@@ -67,39 +70,45 @@ saga FulfillmentSaga is export {
         self.book-shipment;
     }
     multi method REACT(ShipmentBooked $e where { .order-id eq $!order-id }) {
-        self.set-timeout('warehouse-handoff', remaining(self, $e.emitted-at, 86400), expire => \()) unless $.authorized;
+        self.set-timeout: 'warehouse-handoff', remaining(self, $e.emitted-at, 86400), expire => \() unless $.authorized;
     }
     multi method REACT(OrderDispatchAuthorized $e where { .order-id eq $!order-id }) {
-        self.cancel-timeout('warehouse-handoff');
+        self.cancel-timeout: 'warehouse-handoff';
         self.dispatch-shipment;
     }
     multi method REACT(StepSucceeded $e where { .step eq 'dispatch-shipment' }) { self.^complete }
-    multi method REACT(CancellationRequested $e where { .order-id eq $!order-id }) { self.^compensate(:reason($e.reason)) }
+    multi method REACT(CancellationRequested $e where { .order-id eq $!order-id }) { self.^compensate: :reason($e.reason) }
     multi method REACT(OrderCancelled $e where { .order-id eq $!order-id }) { self.^complete unless unsettled(self) }
     multi method REACT(StepFailed $e) {
         if $.authorized {
-            self.report-issue(:reason($e.error))
+            self.report-issue: :reason($e.error)
                 unless $e.step eq 'report-issue';
-        } else { self.^compensate(:reason($e.error)) }
+        } else { self.^compensate: :reason($e.error) }
     }
     method book-shipment {
-        self.^command(Commerce::Shipment, 'book', \(:booking-id($.booking-id), :tracking-code($.tracking-code)), :!compensation);
+        Commerce::Shipment.^with-ids(:$.order-id).book:
+            :$.booking-id, :$.tracking-code,
+            :!service-compensation;
     }
     method dispatch-shipment {
-        self.^command(Commerce::Shipment, 'dispatch', \(), :retry{:3max, :2delay}, :!compensation);
+        Commerce::Shipment.^with-ids(:$.order-id).dispatch:
+            :service-retry{:3max, :2delay},
+            :!service-compensation;
     }
     method report-issue(Str :$reason!) {
-        self.^command(Commerce::Shipment, 'report-issue', \(:$reason), :!compensation);
+        Commerce::Shipment.^with-ids(:$.order-id).report-issue:
+            :$reason,
+            :!service-compensation;
     }
     method book-carrier {
         my $order = order($.order-id);
-        self.^service('commerce-carrier', 'book', \(:order-id($.order-id), :address($order.address)),
-            :retry{:3max, :2delay});
+        self.^service: 'commerce-carrier', 'book', \(:$.order-id, :address($order.address)),
+            :retry{:3max, :2delay};
     }
     method compensate-book-carrier(Str :$booking-id!, |) {
-        self.^service('commerce-carrier', 'cancel', \(:order-id($.order-id), :$booking-id), :retry{:5max, :2delay});
+        self.^service: 'commerce-carrier', 'cancel', \(:$.order-id, :$booking-id), :retry{:5max, :2delay};
     }
-    method expire { self.^compensate(:reason('Warehouse handoff deadline exceeded')) }
+    method expire { self.^compensate: :reason('Warehouse handoff deadline exceeded') }
 }
 
 #| Records stock movements and delivery after the physical handoff; no rollback of shipped goods.
@@ -117,16 +126,16 @@ saga ShippingSaga is export {
     multi method REACT(ShippingRecoveryRequested $e where { .order-id eq $!order-id }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'consume-next' }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'mark-shipped' }) {
-        self.set-timeout('delivery-deadline', 3 * 86400, overdue => \()) unless $.delivered;
+        self.set-timeout: 'delivery-deadline', 3 * 86400, overdue => \() unless $.delivered;
         self.resume;
     }
     multi method REACT(ShipmentDelivered $e where { .order-id eq $!order-id }) {
-        self.cancel-timeout('delivery-deadline'); self.resume;
+        self.cancel-timeout: 'delivery-deadline'; self.resume;
     }
     multi method REACT(StepSucceeded $e where { .step eq 'mark-delivered' }) { self.^complete }
     multi method REACT(OrderCancelled $e where { .order-id eq $!order-id }) { self.^complete }
     multi method REACT(StepFailed $e) {
-        self.report-issue(:reason($e.error))
+        self.report-issue: :reason($e.error)
             unless $e.step eq 'report-issue';
     }
     method resume {
@@ -137,21 +146,27 @@ saga ShippingSaga is export {
     }
     method consume-next {
         my %line = $.items[$.index];
-        self.^command(stock($.warehouse-id, %line<sku>), 'dispatch', \(:order-id($.order-id), :quantity(%line<quantity>)),
-            :retry{:3max, :2delay}, :!compensation);
+        stock($.warehouse-id, %line<sku>).dispatch:
+            :$.order-id, :quantity(%line<quantity>),
+            :service-retry{:3max, :2delay},
+            :!service-compensation;
     }
     method mark-shipped {
-        my $shipment = Commerce::Shipment.^with-ids(:order-id($.order-id)).^load;
-        self.^command(Commerce::Order, 'mark-shipped', \(:tracking-code($shipment.tracking-code)), :!compensation);
+        my $shipment = Commerce::Shipment.^with-ids(:$.order-id).^load;
+        Commerce::Order.^with-ids(:$.order-id).mark-shipped:
+            :tracking-code($shipment.tracking-code),
+            :!service-compensation;
     }
     method mark-delivered {
-        self.^command(Commerce::Order, 'mark-delivered', \(), :!compensation);
+        Commerce::Order.^with-ids(:$.order-id).mark-delivered: :!service-compensation;
     }
     method report-issue(Str :$reason!) {
-        self.^command(Commerce::Shipment, 'report-issue', \(:$reason), :!compensation);
+        Commerce::Shipment.^with-ids(:$.order-id).report-issue:
+            :$reason,
+            :!service-compensation;
     }
     method overdue {
-        self.report-issue(:reason('Delivery deadline exceeded; investigate with carrier'));
+        self.report-issue: :reason('Delivery deadline exceeded; investigate with carrier');
     }
 }
 
@@ -178,15 +193,20 @@ saga CancellationSaga is export {
         else { self.cancel-order }
     }
     method refund {
-        self.^service('commerce-payments', 'refund', \(:payment-id(order($.order-id).payment-id)),
-            :retry{:5max, :2delay}, :!compensation);
+        self.^service: 'commerce-payments', 'refund', \(:payment-id(order($.order-id).payment-id)),
+            :retry{:5max, :2delay}, :!compensation;
     }
     method release-next {
         my $order = order($.order-id); my %line = $order.items[$.index];
-        self.^command(stock($order.warehouse-id, %line<sku>), 'release', \(:order-id($.order-id)), :retry{:5max, :2delay}, :!compensation);
+        stock($order.warehouse-id, %line<sku>).release:
+            :$.order-id,
+            :service-retry{:5max, :2delay},
+            :!service-compensation;
     }
     method cancel-order {
-        self.^command(Commerce::Order, 'cancel', \(:reason(order($.order-id).issue)), :!compensation);
+        Commerce::Order.^with-ids(:$.order-id).cancel:
+            :reason(order($.order-id).issue),
+            :!service-compensation;
     }
 }
 
@@ -201,16 +221,16 @@ saga ReturnSaga is export {
     multi method APPLY(StepSucceeded $e where { .step eq 'refund-return' }) { $!refunded = True }
     multi method REACT(ReturnRequested $e where { .order-id eq $!order-id }) {
         self.return-label;
-        self.set-timeout('return-deadline', remaining(self, $e.emitted-at, 14 * 86400), overdue => \());
+        self.set-timeout: 'return-deadline', remaining(self, $e.emitted-at, 14 * 86400), overdue => \();
     }
-    multi method REACT(ReturnReceived $e where { .order-id eq $!order-id }) { self.cancel-timeout('return-deadline'); self.resume }
+    multi method REACT(ReturnReceived $e where { .order-id eq $!order-id }) { self.cancel-timeout: 'return-deadline'; self.resume }
     multi method REACT(ReturnRecoveryRequested $e where { .order-id eq $!order-id }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'return-label' }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'restock-next' }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'refund-return' }) { self.resume }
     multi method REACT(StepSucceeded $e where { .step eq 'finish-return' }) { self.^complete }
     multi method REACT(StepFailed $e) {
-        self.report-issue(:reason($e.error)) unless $e.step eq 'report-issue';
+        self.report-issue: :reason($e.error) unless $e.step eq 'report-issue';
     }
     multi method REACT(OrderCancelled $e where { .order-id eq $!order-id }) { self.^complete }
     method resume {
@@ -222,23 +242,25 @@ saga ReturnSaga is export {
     }
     method restock-next {
         my $order = order($.order-id); my %line = $order.items[$.index];
-        self.^command(stock($order.warehouse-id, %line<sku>), 'restock-return', \(:order-id($.order-id), :quantity(%line<quantity>)),
-            :retry{:3max, :2delay}, :!compensation);
+        stock($order.warehouse-id, %line<sku>).restock-return:
+            :$.order-id, :quantity(%line<quantity>),
+            :service-retry{:3max, :2delay},
+            :!service-compensation;
     }
     method refund-return {
-        self.^service('commerce-payments', 'refund', \(:payment-id(order($.order-id).payment-id)), :retry{:5max, :2delay}, :!compensation);
+        self.^service: 'commerce-payments', 'refund', \(:payment-id(order($.order-id).payment-id)), :retry{:5max, :2delay}, :!compensation;
     }
     method return-label {
-        self.^service('commerce-carrier', 'return-label', \(:order-id($.order-id)), :retry{:3max, :2delay}, :!compensation);
+        self.^service: 'commerce-carrier', 'return-label', \(:$.order-id), :retry{:3max, :2delay}, :!compensation;
     }
     method finish-return {
-        self.^command(Commerce::Order, 'finish-return', \(), :!compensation);
+        Commerce::Order.^with-ids(:$.order-id).finish-return: :!service-compensation;
     }
     method report-issue(Str :$reason!) {
-        self.^command(Commerce::Order, 'report-issue', \(:$reason), :!compensation);
+        Commerce::Order.^with-ids(:$.order-id).report-issue: :$reason, :!service-compensation;
     }
     method overdue {
-        self.report-issue(:reason('Return has not reached the warehouse'));
+        self.report-issue: :reason('Return has not reached the warehouse');
     }
 }
 
@@ -257,7 +279,7 @@ saga ReplenishmentSaga is export {
     multi method REACT(StockDispatched $e where { .warehouse-id eq $!warehouse-id && .sku eq $!sku }) { self.reorder }
     multi method REACT(ReplenishmentRequested $e where { .warehouse-id eq $!warehouse-id && .sku eq $!sku }) { self.reorder }
     multi method REACT(StepSucceeded $e where { .step eq 'order-stock' }) {
-        self.receive-stock(:reference($e.result<supply-id>), :quantity($e.result<quantity>));
+        self.receive-stock: :reference($e.result<supply-id>), :quantity($e.result<quantity>);
     }
     method reorder {
         die 'Replenishment target must exceed threshold' unless $.target > $.threshold;
@@ -265,11 +287,14 @@ saga ReplenishmentSaga is export {
         self.order-stock;
     }
     method order-stock {
-        self.^service('commerce-supplier', 'deliver', \(:warehouse-id($.warehouse-id), :sku($.sku), :quantity($.target - $.available)),
-            :retry{:3max, :10delay}, :!compensation);
+        self.^service: 'commerce-supplier', 'deliver', \(:$.warehouse-id, :$.sku, :quantity($.target - $.available)),
+            :retry{:3max, :10delay}, :!compensation;
     }
     method receive-stock(Str :$reference!, UInt :$quantity!) {
-        self.^command(Commerce::Inventory, 'receive', \(:$reference, :$quantity), :retry{:5max, :2delay}, :!compensation);
+        Commerce::Inventory.^with-ids(:$.warehouse-id, :$.sku).receive:
+            :$reference, :$quantity,
+            :service-retry{:5max, :2delay},
+            :!service-compensation;
     }
 }
 
@@ -278,16 +303,16 @@ saga NotificationSaga is export {
     has Str $.order-id is entity-id;
     has UInt $.sent = 0;
     multi method APPLY(StepSucceeded $e where { .step eq 'notify' }) { $!sent++ }
-    multi method REACT(OrderSubmitted $e where { .order-id eq $!order-id }) { self.notify(:message('Order received')) }
-    multi method REACT(OrderPaid $e where { .order-id eq $!order-id }) { self.notify(:message('Payment confirmed')) }
-    multi method REACT(OrderShipped $e where { .order-id eq $!order-id }) { self.notify(:message('Order shipped')) }
-    multi method REACT(OrderDelivered $e where { .order-id eq $!order-id }) { self.notify(:message('Order delivered')) }
-    multi method REACT(OrderCancelled $e where { .order-id eq $!order-id }) { self.notify(:message('Order cancelled')) }
-    multi method REACT(ReturnCompleted $e where { .order-id eq $!order-id }) { self.notify(:message('Return refunded')) }
-    multi method REACT(OrderIssueReported $e where { .order-id eq $!order-id }) { self.notify(:message($e.reason)) }
-    multi method REACT(ShipmentIssueReported $e where { .order-id eq $!order-id }) { self.notify(:message($e.reason)) }
+    multi method REACT(OrderSubmitted $e where { .order-id eq $!order-id }) { self.notify: :message('Order received') }
+    multi method REACT(OrderPaid $e where { .order-id eq $!order-id }) { self.notify: :message('Payment confirmed') }
+    multi method REACT(OrderShipped $e where { .order-id eq $!order-id }) { self.notify: :message('Order shipped') }
+    multi method REACT(OrderDelivered $e where { .order-id eq $!order-id }) { self.notify: :message('Order delivered') }
+    multi method REACT(OrderCancelled $e where { .order-id eq $!order-id }) { self.notify: :message('Order cancelled') }
+    multi method REACT(ReturnCompleted $e where { .order-id eq $!order-id }) { self.notify: :message('Return refunded') }
+    multi method REACT(OrderIssueReported $e where { .order-id eq $!order-id }) { self.notify: :message($e.reason) }
+    multi method REACT(ShipmentIssueReported $e where { .order-id eq $!order-id }) { self.notify: :message($e.reason) }
     method notify(Str :$message!) {
-        self.^service('commerce-email', 'send', \(:order-id($.order-id), :email(order($.order-id).email), :$message),
-            :retry{:3max, :5delay}, :!compensation);
+        self.^service: 'commerce-email', 'send', \(:$.order-id, :email(order($.order-id).email), :$message),
+            :retry{:3max, :5delay}, :!compensation;
     }
 }

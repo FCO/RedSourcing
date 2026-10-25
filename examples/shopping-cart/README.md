@@ -21,12 +21,12 @@ The event-store API and Red's database configuration are available through
 empty, open cart. Create it before submitting commands:
 
 ```raku
-my $cart = Cart.^with-ids(:cart-id<ana>);
+my $cart = Cart.^with-ids: :cart-id<ana>;
 $cart.^create;
-$cart.add-item(:product-id<coffee>, :name<Coffee>, :unit-price(12.50), :quantity(2));
-$cart.add-item(:product-id<mug>, :name<Mug>, :unit-price(8.90));
-$cart.set-quantity(:product-id<coffee>, :quantity(3));
-$cart.remove-item(:product-id<mug>);
+$cart.add-item: :product-id<coffee>, :name<Coffee>, :unit-price(12.50), :quantity(2);
+$cart.add-item: :product-id<mug>, :name<Mug>, :unit-price(8.90);
+$cart.set-quantity: :product-id<coffee>, :quantity(3);
+$cart.remove-item: :product-id<mug>;
 my %order = $cart.checkout;
 say %order<order-id>;
 say %order<total>; # 37.5
@@ -62,7 +62,7 @@ the example does not charge a payment provider or reserve inventory.
 ## Deferred execution and retry
 
 ```raku
-my $pending = $cart.checkout(:!sync);
+my $pending = $cart.checkout: :!sync;
 my %receipt = $pending.run;
 my %same-receipt = $pending.run;
 ```
@@ -85,7 +85,7 @@ the number of distinct product lines, total units, total price and checkout stat
 Its `summary` method is declared `is query` and can be called directly on the proxy:
 
 ```raku
-my $proxy = CartSummary.^with-ids(:cart-id<ana>);
+my $proxy = CartSummary.^with-ids: :cart-id<ana>;
 my %summary = $proxy.summary;
 say %summary<item-count>;
 say %summary<total>;
@@ -119,11 +119,11 @@ use RedSourcing;
 use Cart;
 use CartReminder;
 
-my $cart = Cart.^with-ids(:cart-id<ana>);
+my $cart = Cart.^with-ids: :cart-id<ana>;
 $cart.^create;
-my $reminder = AbandonedCartReminder.^with-ids(:cart-id<ana>);
-$reminder.^create(:email<ana@example.test>);
-$cart.add-item(:product-id<coffee>, :name<Coffee>, :unit-price(12.50));
+my $reminder = AbandonedCartReminder.^with-ids: :cart-id<ana>;
+$reminder.^create: :email<ana@example.test>;
+$cart.add-item: :product-id<coffee>, :name<Coffee>, :unit-price(12.50);
 $reminder.^advance;
 
 # A controller calls this periodically, including after a process restart:

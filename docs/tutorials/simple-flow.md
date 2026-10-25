@@ -26,8 +26,8 @@ schedules a command; its `APPLY(StepSucceeded ...)` records success and its
 `REACT(StepSucceeded ...)` completes the workflow. Native success controls belong
 to that saga's own stream.
 
-`self.^command(Order, 'confirm', \(), :!compensation)` gets the aggregate's
-`order-id` from the saga. This small workflow has one attempt and no compensating
+`Order.^with-ids(:$.order-id).confirm(:!service-compensation)`
+schedules the aggregate command through its proxy using the saga's `order-id`. This small workflow has one attempt and no compensating
 operation. There is no external service to configure.
 
 ## Start the REPL
@@ -62,11 +62,11 @@ same walkthrough in its stack volume.
 ## 2. Create identities and initial snapshots
 
 ```raku
-my $order = Order.^with-ids(:order-id<demo-1>);
+my $order = Order.^with-ids: :order-id<demo-1>;
 $order.^create; say 'Order created';
-my $workflow = Confirmation.^with-ids(:order-id<demo-1>);
+my $workflow = Confirmation.^with-ids: :order-id<demo-1>;
 $workflow.^create; say 'Saga created';
-my $view = OrderCard.^with-ids(:order-id<demo-1>);
+my $view = OrderCard.^with-ids: :order-id<demo-1>;
 show-journal;
 ```
 
@@ -83,7 +83,7 @@ The helper marks snapshots, domain events and saga controls separately.
 ## 3. Save a command without executing it
 
 ```raku
-my $pending = $order.place(:item<Pizza>, :!sync);
+my $pending = $order.place: :item<Pizza>, :!sync;
 say $pending.state;
 say $order.status;
 show-journal;
@@ -111,7 +111,7 @@ has run yet: an event in the journal does not execute every consumer automatical
 ## 5. Let the saga decide, but pause before executing its action
 
 ```raku
-my $saga = $workflow.^advance(:limit(0)); show-actions($saga);
+my $saga = $workflow.^advance: :limit(0); show-actions($saga);
 say $order.^list-commands.elems;
 show-journal;
 ```
@@ -147,7 +147,7 @@ recovers the decision.
 ## 7. Execute the saga action and refresh the read model
 
 ```raku
-$saga = $workflow.^advance(:limit(1)); show-actions($saga);
+$saga = $workflow.^advance: :limit(1); show-actions($saga);
 say $order.status;
 say $card.status;
 $card = $view.^load; say "{$card.item}: {$card.status}";
@@ -168,7 +168,7 @@ produces `Pizza: confirmed` without writing consumption telemetry.
 ```raku
 my $action = $saga.^state<actions>[0];
 say "E{$action<source-event-id>} -> confirm-order -> C{$action<row-id>}";
-say flow-links(:source-kind<command>, :source($action<row-id>.Str)).map({ "C{.<source>} -> E{.<target>} ({.<relation>})" }).join("\n");
+say flow-links(:source-kind<command>, :source($action<row-id>.Str)).map({ "C{.<source>} -> E{.<target>} ({.<relation>})" }).join: "\n";
 say 'Projection state: ' ~ $view.status;
 ```
 

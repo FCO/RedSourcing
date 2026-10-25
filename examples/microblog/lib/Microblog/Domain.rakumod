@@ -50,11 +50,11 @@ sub tweet-page (Str $application, @authors, Int :$before = 0, Int :$limit = 50 -
     die "before must be nonnegative" if $before < 0;
     my $*RED-FALLBACK = False; # Paging must stay in SQL, never materialize the full table.
     my @selected-authors = @authors.unique;
-    my $query = TweetRecord.^all.grep(*.application eq $application);
+    my $query = TweetRecord.^all.grep: *.application eq $application;
     $query = @selected-authors.elems == 1
         ?? $query.grep(*.author eq @selected-authors[0])
-        !! $query.grep(-> $tweet { [OR] @selected-authors.map({ $tweet.author eq $_ }) });
-    $query = $query.grep(*.position < $before) if $before;
+        !! $query.grep(-> $tweet { [OR] @selected-authors.map: { $tweet.author eq $_ } });
+    $query = $query.grep: *.position < $before if $before;
     my @rows = $query.sort(-*.position).head($limit + 1).Array;
     my $more = @rows.elems > $limit;
     @rows.pop if $more;
@@ -90,7 +90,7 @@ aggregate User is export {
         die "Use a user ID containing 1–40 letters, digits, underscores or hyphens" unless $!user-id ~~ /^ <+[a..z A..Z 0..9 _ \-]> ** 1..40 $ /;
         my $clean = $name.trim;
         die "Name must contain 1–80 characters" unless 1 <= $clean.chars <= 80;
-        self.user-registered(:name($clean));
+        self.user-registered: :name($clean);
         %(id => $!user-id, name => $!name)
     }
 
@@ -99,7 +99,7 @@ aggregate User is export {
         my $clean = $text.trim;
         die "Tweet must contain 1–280 characters" unless 1 <= $clean.chars <= 280;
         my $id = nqp::sha1($!application-id ~ $!user-id ~ now.Str ~ (2 ** 63).rand.Str);
-        self.tweet-published(:tweet-id($id), :text($clean), :published-at(DateTime.now.Str));
+        self.tweet-published: :tweet-id($id), :text($clean), :published-at(DateTime.now.Str);
         %(id => $id)
     }
 
@@ -107,14 +107,14 @@ aggregate User is export {
         die "User does not exist" unless $!registered;
         die "Cannot follow yourself" if $author-id eq $!user-id;
         die "Author does not exist" unless User.^with-ids(:application-id($!application-id), :user-id($author-id)).registered;
-        self.user-followed(:author-id($author-id)) unless %!following{$author-id}:exists;
+        self.user-followed: :author-id($author-id) unless %!following{$author-id}:exists;
         True
     }
 
     method unfollow (Str :$author-id!) is command {
         die "User does not exist" unless $!registered;
         die "Cannot unfollow yourself" if $author-id eq $!user-id;
-        self.user-unfollowed(:author-id($author-id)) if %!following{$author-id}:exists;
+        self.user-unfollowed: :author-id($author-id) if %!following{$author-id}:exists;
         True
     }
 }
@@ -133,10 +133,10 @@ aggregate Accounts is export {
 
     method register-user (Str :$user-id!, Str :$name!) is command {
         die "User already exists" if %!registered{$user-id}:exists;
-        my $user = User.^with-ids(:application-id($!application-id), :user-id($user-id));
+        my $user = User.^with-ids: :application-id($!application-id), :user-id($user-id);
         $user.^create;
-        my $result = $user.register(:name($name));
-        self.account-reserved(:user-id($user-id));
+        my $result = $user.register: :name($name);
+        self.account-reserved: :user-id($user-id);
         $result
     }
 }
@@ -148,10 +148,10 @@ projection TweetIndex is export {
         .application-id eq $!application-id
     }) is transactional {
         my $*RED-FALLBACK = False;
-        my $record = TweetRecord.^find(:application($!application-id), :tweet($e.tweet-id));
+        my $record = TweetRecord.^find: :application($!application-id), :tweet($e.tweet-id);
         unless $record.defined {
-            $record = TweetRecord.^create(:application($!application-id), :tweet($e.tweet-id),
-                :author($e.user-id), :body($e.text), :published($e.published-at), :position($e.StoredEvent.id));
+            $record = TweetRecord.^create: :application($!application-id), :tweet($e.tweet-id),
+                :author($e.user-id), :body($e.text), :published($e.published-at), :position($e.StoredEvent.id);
         }
         die "Conflicting tweet identity" unless $record.author eq $e.user-id
             && $record.body eq $e.text && $record.published eq $e.published-at
@@ -221,15 +221,15 @@ projection Directory is export {
 }
 
 sub seed (Str $application) is export {
-    my $accounts     = Accounts.^with-ids(:application-id($application));
+    my $accounts     = Accounts.^with-ids: :application-id($application);
     my $known        = $accounts.^load;
     my Bool $new-ana = False;
     for <ana bruno clara> Z ["Ana Costa", "Bruno Lima", "Clara Alves"] -> ($id, $name) {
-        my $user = User.^with-ids(:application-id($application), :user-id($id));
+        my $user = User.^with-ids: :application-id($application), :user-id($id);
         unless $known.registered{$id}:exists {
             $new-ana = True if $id eq "ana";
-            $accounts.register-user(:user-id($id), :name($name));
-            $user.tweet(:text(do given $id {
+            $accounts.register-user: :user-id($id), :name($name);
+            $user.tweet: :text(do given $id {
                 when "ana" {
                     "Uma ideia pequena também pode começar uma boa conversa."
                 }
@@ -239,17 +239,17 @@ sub seed (Str $application) is export {
                 default {
                     "Um lugar para compartilhar o que está acontecendo, uma mensagem de cada vez."
                 }
-            }))
+            })
         }
     }
-    User.^with-ids(:application-id($application), :user-id<ana>).follow(:author-id<bruno>) if $new-ana
+    User.^with-ids(:application-id($application), :user-id<ana>).follow: :author-id<bruno> if $new-ana
 }
 
 sub rebuild-tweets (Str $application) is export {
     journal-do {
         my $*RED-FALLBACK = False;
         TweetRecord.^all.grep(*.application eq $application).delete;
-        my $index       = TweetIndex.bless(:application-id($application));
+        my $index       = TweetIndex.bless: :application-id($application);
         my UInt $cursor = 0;
         loop {
             my @ids = StoredEvent.^all.grep(*.id > $cursor)
@@ -258,7 +258,7 @@ sub rebuild-tweets (Str $application) is export {
             for @ids -> $id {
                 my $record = StoredEvent.^all.grep(*.id == $id).head;
                 if $record.class eq TweetPublished.^name && $record.data<application-id> eq $application {
-                    $index.APPLY($record.COERCE(TweetPublished))
+                    $index.APPLY: $record.COERCE(TweetPublished)
                 }
                 $cursor = $id.UInt
             }
@@ -268,12 +268,12 @@ sub rebuild-tweets (Str $application) is export {
 }
 
 sub initialize-tweets is export {
-    TweetRecord.^create-table(:unless-exists);
+    TweetRecord.^create-table: :unless-exists;
     TweetRecord.^create-indexes;
     TweetIndex.^subscribe
 }
 
 sub initialize-application (Str $application) is export {
-    my $accounts = Accounts.^with-ids(:application-id($application));
+    my $accounts = Accounts.^with-ids: :application-id($application);
     journal-do { $accounts.^create unless StoredEvent.^all.grep(*.stream eq $accounts.^stream-name).head.defined }
 }
