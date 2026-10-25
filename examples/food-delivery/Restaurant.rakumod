@@ -30,7 +30,7 @@ method set-menu-item(
 
 method open-for-orders is command {
     die "Restaurant '$!restaurant-id' has no available menu items"
-        unless %!menu.values.grep(*.<available>);
+        unless %!menu.values.grep: *.<available>;
     self.restaurant-opened unless $!open;
     $!open
 }

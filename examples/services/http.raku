@@ -7,7 +7,7 @@ class HTTPMessageRecorded does Event { has Str $.room-id; has Str $.text }
 aggregate HTTPRoom[:!auto-snapshot] {
     has Str $.room-id is entity-id;
     has @.messages is query;
-    method APPLY(HTTPMessageRecorded $event) { @!messages.push($event.text) }
+    method APPLY(HTTPMessageRecorded $event) { @!messages.push: $event.text }
     method record-message(Str :$text!) is command {
         self.http-message-recorded: :$text;
         @!messages.elems

@@ -58,9 +58,9 @@ method add-item(
         die "Product '$product-id' already has a different name or price"
             unless %item<name> eq $name && %item<unit-price>.Rat == $unit-price;
     }
-    self.item-added(
+    self.item-added:
         :$product-id, :$name, :$unit-price, :$quantity,
-    );
+    ;
     %(product-id => $product-id, quantity => %!items{$product-id}<quantity>,
         total => $!total)
 }

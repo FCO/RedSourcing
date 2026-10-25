@@ -10,7 +10,7 @@ saga WebhookSaga is export {
     has Array $.failures = [];
     multi method APPLY(StepSucceeded $e where { .step eq 'deliver-webhook' }) { $!delivered++ }
     multi method APPLY(StepFailed $e where { .step eq 'deliver-webhook' }) {
-        $!failures.push(%(action-id => $e.action-id, error => $e.error));
+        $!failures.push: %(action-id => $e.action-id, error => $e.error);
     }
     multi method REACT(OrderSubmitted $e where { .order-id eq $!order-id }) { self.deliver-webhook: $e }
     multi method REACT(OrderPaid $e where { .order-id eq $!order-id }) { self.deliver-webhook: $e }

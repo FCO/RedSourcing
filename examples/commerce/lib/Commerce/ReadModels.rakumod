@@ -15,8 +15,8 @@ projection OrderNotifications is export {
     multi method APPLY(OrderIssueReported $e where { .order-id eq $!order-id }) { self!add: $e, $e.reason }
     multi method APPLY(ShipmentIssueReported $e where { .order-id eq $!order-id }) { self!add: $e, $e.reason }
     method !add(Event $event, Str $message) {
-        $!messages.push(%(id => $event.StoredEvent.id, type => $event.^name,
-            emitted-at => $event.emitted-at.Str, :$message));
+        $!messages.push: %(id => $event.StoredEvent.id, type => $event.^name,
+            emitted-at => $event.emitted-at.Str, :$message);
     }
 }
 

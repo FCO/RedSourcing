@@ -38,13 +38,13 @@ class App is export {
     has UInt $!model-cursor = 0;
     has Str $.csrf-token = (1..32).map({ ('a'..'z', 'A'..'Z', '0'..'9').flat.pick }).join;
 
-    method locked(&work) { $!lock.protect(&work) }
+    method locked(&work) { $!lock.protect: &work }
     method !publish(Bool :$force = False) {
         my $last = StoredEvent.^all.sort(-*.id).head;
         my $revision = ($last ?? $last.id !! 0).Str;
         if $force || $revision ne $!revision {
             $!revision = $revision;
-            $!updates.emit($revision);
+            $!updates.emit: $revision;
         }
     }
     method updates {

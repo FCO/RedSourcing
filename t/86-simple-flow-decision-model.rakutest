@@ -1,0 +1,50 @@
+use Test;
+use lib 't/lib', 'examples/simple-flow-decision-model/lib';
+use MicroblogTestStore;
+use RedSourcing;
+use DecisionFlow;
+my $*RED-DB = test-store('86');
+schema(StoredEvent, StoredCommand).create;
+sub order($id) { Order.^with-ids(:order-id($id)) }
+sub card($id) { OrderCard.^with-ids(:order-id($id)) }
+sub facts { StoredEvent.list-events(:types[OrderPlaced, OrderConfirmed]).elems }
+my $order = order('one');
+$order.^create;
+my $pending = $order.place: :item<Pizza>, :!sync;
+is $pending.state.Str, 'Pending', 'command can be deferred';
+is $order.status, 'new', 'deferred command has not changed state';
+is facts, 0, 'no domain facts before execution';
+is $pending.run<status>, 'confirmed', 'one command confirms the order';
+is card('one').info<item>, 'Pizza', 'decision sees its own placement event';
+is card('one').status, 'confirmed', 'projection sees confirmation';
+is facts, 2, 'two business facts';
+is $order.^list-commands.elems, 1, 'no child command';
+is StoredEvent.^all.grep(*.mro.contains('|RedSourcing::Saga::Control|')).elems,
+    0, 'no saga controls';
+is $pending.run<status>, 'confirmed', 'completed execution reuses result';
+is facts, 2, 'completed execution emits nothing again';
+my $other = order('two');
+$other.^create;
+is $other.place(:item<Soup>)<status>, 'confirmed', 'second identity works';
+is card('one').info<item>, 'Pizza', 'first identity remains isolated';
+is card('two').info<item>, 'Soup', 'second identity binds current IDs';
+my $broken = order('broken');
+$broken.^create;
+my $inside-status;
+throws-like {
+    red-do :transaction, {
+        $inside-status = $broken.place(:item<Cake>)<status>;
+        die 'Injected transaction failure';
+    }
+}, Exception, 'failure after confirmation aborts the transaction';
+is $inside-status, 'confirmed', 'decision completes inside outer transaction';
+is facts, 4, 'both facts from failed command rolled back';
+is $broken.status, 'new', 'aggregate rolled back';
+is card('broken').status, 'new', 'projection has no aborted placement';
+is $broken.place(:item<Cake>)<status>, 'confirmed', 'retry with a new command succeeds';
+$order.^load.^emit-snapshot;
+is $order.status, 'confirmed', 'aggregate checkpoint preserves state';
+is card('one').status, 'confirmed', 'projection replay after checkpoint works';
+throws-like { $order.place(:item<Again>) }, Exception, 'duplicate placement rejected';
+is facts, 6, 'rejected placement creates no domain facts';
+done-testing;

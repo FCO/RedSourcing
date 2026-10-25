@@ -92,7 +92,7 @@ aggregate Property is export {
     method end-tenancy is command {
         die 'There is no active tenancy' unless $!tenant-id.chars;
         die 'Settle outstanding rent before ending the tenancy'
-            if $!bills.values.first({ .<paid>.Rat < .<amount>.Rat });
+            if $!bills.values.first: { .<paid>.Rat < .<amount>.Rat };
         self.tenancy-ended: :tenant-id($!tenant-id);
         %(:$!property-id)
     }
@@ -182,7 +182,7 @@ aggregate Conversation is export {
                         Str :$message-id!, Bool :$notification = False) is command {
         die 'Repair does not exist' unless exists-in-store(Repair.^with-ids(:repair-id($!repair-id)));
         # Stable IDs make a retry after a lost acknowledgement harmless.
-        return %(message-id => $message-id) if $!messages.first(*.<message-id> eq $message-id);
+        return %(message-id => $message-id) if $!messages.first: *.<message-id> eq $message-id;
         die 'Messages must have at most 2000 characters' if $body.chars > 2000;
         self.message-posted: :$author, :$body, :$message-id, :$notification, :sent-at(DateTime.now.Str);
         %(:$message-id)

@@ -84,3 +84,7 @@ separate monitor at `http://127.0.0.1:3001/monitor`. See the
 Simple status reads use `is query` through the proxy. The tutorial deliberately
 keeps a loaded `OrderCard` to compare captured state with a later reload; saga
 loads also remain explicit when inspecting durable decisions.
+
+## Compare the two approaches
+
+[Simple flow with a decision-model](../simple-flow-decision-model/README.md) replaces the original example’s only saga with one atomic command and explains the changed transaction boundaries and when a saga is still needed.

@@ -363,3 +363,8 @@ application callback for completed compensation. Commerce's controller routes
 new input, tracks due work and bridges fully compensated state to idempotent domain
 commands. See [API feedback](../examples/commerce/README.md#saga-api-feedback) and
 the [roadmap](next-steps.md) for these limits and proposed improvements.
+
+
+## Compare the two approaches
+
+[Simple flow with a decision-model](../examples/simple-flow-decision-model/README.md) replaces the original example’s only saga with one atomic command and explains the changed transaction boundaries and when a saga is still needed.

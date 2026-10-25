@@ -275,3 +275,7 @@ with active writers or decisions. No automatic cleanup resets counter versions.
 
 See the [DCB specification](https://dcb.events/specification/) and
 [Axoniq's introduction](https://www.axoniq.io/concepts/dynamic-consistency-boundary).
+
+## Compare the two approaches
+
+[Simple flow with a decision-model](../examples/simple-flow-decision-model/README.md) replaces the original example’s only saga with one atomic command and explains the changed transaction boundaries and when a saga is still needed.

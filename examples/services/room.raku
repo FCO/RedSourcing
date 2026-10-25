@@ -8,7 +8,7 @@ class MessageRecorded does Event { has Str $.room-id; has Str $.text }
 aggregate Room[:!auto-snapshot] {
     has Str $.room-id is entity-id;
     has @.messages is query;
-    method APPLY(MessageRecorded $event) { @!messages.push($event.text) }
+    method APPLY(MessageRecorded $event) { @!messages.push: $event.text }
     method record-message(Str :$text!) is command {
         self.message-recorded: :$text;
         @!messages.elems

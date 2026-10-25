@@ -113,7 +113,7 @@ projection SchoolOverview is export {
     multi method APPLY(EnrollmentCancelled $event) {
         %!enrollments{$event.student-id}{$event.class-id}:delete;
     }
-    method enrollment-count is query { [+] %!enrollments.values.map(*.elems) }
+    method enrollment-count is query { [+] %!enrollments.values.map: *.elems }
 }
 
 sub ensure($proxy) {
