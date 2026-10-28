@@ -215,3 +215,7 @@ docker compose -f examples/bank/compose.yaml up --build -d
 This uses the shared RedSourcing image, an isolated database volume and a
 separate monitor at `http://127.0.0.1:3001/monitor`. See the
 [Docker guide](../../docs/docker.md) for ports, services and persistent data.
+
+## Compare transaction boundaries
+
+[Internal bank transfer](../bank-transfer/README.md) implements the same transfer with a saga and a decision-model, showing intermediate balances, compensation and atomic commit.

@@ -1,0 +1,81 @@
+use Test;
+use File::Temp;
+use RedSourcing;
+use RedSourcing::Config;
+use lib 'examples/bank-transfer/lib';
+use BankTransfer;
+my $database = %*ENV<RED_SOURCING_TEST_PG_DATABASE>;
+unless $database.defined { skip 'Set RED_SOURCING_TEST_PG_DATABASE for concurrent transfer writers'; done-testing; exit }
+require ::('DB::Pg');
+my $admin = ::('DB::Pg').new(:conninfo("dbname=$database"));
+my $schema = 'rs_bank_race_' ~ $*PID;
+$admin.execute("CREATE SCHEMA $schema");
+LEAVE $admin.execute("DROP SCHEMA $schema CASCADE");
+my $*RED-DB = store-driver('Pg', $database, :connection{
+    dbh => ::('DB::Pg').new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>)) });
+schema(StoredEvent, StoredCommand).create;
+for <a b c> -> $id {
+    my $account = Account.^with-ids: :account-id($id);
+    $account.^create; $account.open;
+}
+Account.^with-ids(:account-id<a>).deposit: :amount(10000);
+for <first second> -> $id { Transfer.^with-ids(:transfer-id($id)).^create }
+my $first = Transfer.^with-ids(:transfer-id<first>).execute: :from<a>, :to<b>, :amount(8000), :!sync;
+my $directory = tempdir.IO;
+my $barrier = $directory.add('barrier').Str;
+my $worker = $directory.add('worker.raku');
+$worker.spurt(q:to/WORKER/);
+use RedSourcing;
+use RedSourcing::Config;
+use BankTransfer;
+use DB::Pg;
+my ($database, $schema, $id, $barrier) = @*ARGS;
+my $*RED-DB = store-driver('Pg', $database, :connection{
+    dbh => DB::Pg.new(:conninfo("dbname=$database options='-csearch_path=$schema -cclient_min_messages=warning'"),
+        :converters(<DateTime UUID Geometric>)) });
+BankTransfer::Account.^find_method('money-debited').wrap(method (|) {
+    unless ($barrier ~ '.ready').IO.e {
+        ($barrier ~ '.ready').IO.spurt('ready');
+        my $deadline = now + 60;
+        until ($barrier ~ '.resume').IO.e {
+            die 'Barrier timed out' if now > $deadline;
+            await Promise.in(0.02);
+        }
+    }
+    callsame
+});
+try {
+    say StoredCommand.^all.grep(*.id == $id.UInt).head.run;
+    CATCH { default { say 'REJECTED: ' ~ .message } }
+}
+WORKER
+my $process = Proc::Async.new($*EXECUTABLE.Str, '-Ilib', '-Iexamples/bank-transfer/lib',
+    $worker.Str, $database, $schema, $first.id.Str, $barrier);
+my ($out, $err) = '', '';
+$process.stdout.tap(-> $s { $out ~= $s });
+$process.stderr.tap(-> $s { $err ~= $s });
+my $finished = $process.start;
+LEAVE $process.kill if $finished.status ~~ Planned;
+my $deadline = now + 60;
+until ($barrier ~ '.ready').IO.e {
+    die "Worker exited: $err" unless $finished.status ~~ Planned;
+    die 'Worker did not reach decision barrier' if now > $deadline;
+    await Promise.in(0.02);
+}
+is Transfer.^with-ids(:transfer-id<second>).execute(:from<a>, :to<c>, :amount(8000)),
+    'completed', 'competing transfer spends the available balance';
+($barrier ~ '.resume').IO.spurt('resume');
+await Promise.anyof($finished, Promise.in(60));
+die 'Worker did not finish' if $finished.status ~~ Planned;
+is (await $finished).exitcode, 0, 'worker exits normally';
+is $err, '', 'no database diagnostics';
+like $out, /'REJECTED: Insufficient funds'/, 'losing decision retries and rechecks balance';
+$first.^refresh;
+is $first.tries, 2, 'entire losing command executed twice';
+is $first.state.Str, 'Failed', 'retry rejects the second spend';
+is Balance.^with-ids(:account-id<a>).amount, 2000, 'source never overdrawn';
+is Balance.^with-ids(:account-id<b>).amount, 0, 'losing credit rolled back';
+is Balance.^with-ids(:account-id<c>).amount, 8000, 'winning credit committed';
+is Transfer.^with-ids(:transfer-id<first>).status, 'new', 'losing completion rolled back';
+done-testing;

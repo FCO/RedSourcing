@@ -1,0 +1,5 @@
+use RedSourcing::Config;
+config {
+    .driver = 'SQLite'; .database = ':memory:';
+    .includes = <lib>; .modules = <BankTransfer>;
+}

@@ -1,0 +1,73 @@
+name: Red master
+
+on:
+  push:
+    branches:
+      - '*'
+    tags-ignore:
+      - '*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  red-master:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: redsourcing_test
+          POSTGRES_USER: redsourcing_test
+          POSTGRES_PASSWORD: redsourcing-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U redsourcing_test -d redsourcing_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Raku/setup-raku@v1
+        with:
+          raku-version: '2026.09'
+      - name: Install native libraries
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev libsqlite3-dev libssl-dev uuid-dev
+      - name: Install dependencies
+        run: zef install --/test --test-depends --deps-only .
+      - name: Select Red master for tests and subprocesses
+        run: |
+          git clone --depth=1 --branch=master https://github.com/FCO/Red.git "$RUNNER_TEMP/red-master"
+          git -C "$RUNNER_TEMP/red-master" rev-parse HEAD
+          echo "RAKULIB=$RUNNER_TEMP/red-master/lib" >> "$GITHUB_ENV"
+      - name: Verify Red comes from the master checkout
+        run: |
+          # Preserve Raku variables for the interpreter.
+          # shellcheck disable=SC2016
+          raku -e 'use Red; my $repo = $*REPO.resolve(CompUnit::DependencySpecification.new(:short-name<Red>)).repo; say $repo.prefix; die "Red master was not selected" unless $repo.prefix.IO.resolve eq %*ENV<RAKULIB>.IO.resolve'
+      - name: Run the complete SQLite suite
+        run: prove6 --exec="raku -Ilib" t
+      - name: Run PostgreSQL integration tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: redsourcing_test
+          PGPASSWORD: redsourcing-test
+          RED_SOURCING_TEST_PG_DATABASE: redsourcing_test
+        run: |
+          prove6 --exec="raku -Ilib" \
+            t/*-pg.rakutest \
+            t/14-real-estate-example.rakutest \
+            t/18-web-metrics.rakutest \
+            t/34-postgres-json.rakutest \
+            t/41-flow-tracing.rakutest \
+            t/43-saga-controller.rakutest \
+            t/52-journal-savepoints.rakutest \
+            t/53-storage-indexes.rakutest \
+            t/59-storage-performance.rakutest \
+            t/63-pg-mro-array.rakutest \
+            t/71-stream-existence.rakutest \
+            t/72-decision-state-cache.rakutest \
+            t/76-service-migration.rakutest \
+            t/80-microblog.rakutest

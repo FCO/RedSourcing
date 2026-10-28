@@ -63,6 +63,24 @@ handles a programmatically sent `SIGINT` gracefully run on Unix platforms only.
 uses `TerminateProcess` for that request, which bypasses the child's handler.
 Direct Operations cancellation and shutdown remain tested on every platform.
 
+The `Red master` GitHub Actions workflow runs the full SQLite suite and
+PostgreSQL integrations against a fresh checkout of `FCO/Red`'s `master`, using
+Rakudo 2026.09. It logs the exact commit and verifies the selected repository;
+`RAKULIB` keeps CLI and worker subprocesses on the same checkout. It runs on
+pushes and pull requests and can also be started manually.
+
+To check compatibility with Red's current `master` locally, install this project's
+dependencies first, then use a separate checkout through `RAKULIB`. The
+environment variable also selects that checkout in CLI and worker subprocesses:
+
+```sh
+git clone --branch master https://github.com/FCO/Red.git /tmp/redsourcing-red-master
+RAKULIB=/tmp/redsourcing-red-master/lib prove6 --jobs=4 --exec='raku -Ilib' t
+```
+
+Record `git -C /tmp/redsourcing-red-master rev-parse HEAD` with the results.
+Use the same `RAKULIB` for coverage and PostgreSQL checks below.
+
 ## Coverage
 
 ```sh

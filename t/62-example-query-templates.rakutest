@@ -1,8 +1,9 @@
 use Test;
 use lib 'examples/bank', 'examples/shopping-cart', 'examples/food-delivery',
-    'examples/counter/lib', 'examples/school/lib', 'examples/simple-flow/lib',
+    'examples/bank-transfer/lib', 'examples/counter/lib', 'examples/school/lib', 'examples/simple-flow/lib',
     'examples/simple-flow-decision-model/lib', 'examples/real-estate/lib', 'examples/commerce/lib';
 need Balance;
+need BankTransfer;
 need BankTotals;
 need MonthlyStatement;
 need CartSummary;
@@ -17,7 +18,7 @@ need DecisionFlow;
 need Estate::Domain;
 need Commerce::ReadModels;
 
-for Balance, BankTotals, MonthlyStatement, CartSummary, ShopSales,
+for BankTransfer::Balance, Balance, BankTotals, MonthlyStatement, CartSummary, ShopSales,
     CustomerOrders, RestaurantBoard, DeliveryTotals,
     CounterDemo::CounterTotal, School::StudentClasses, School::ClassRoster,
     School::SchoolOverview, SimpleFlow::OrderCard, DecisionFlow::OrderCard,

@@ -6,6 +6,8 @@ use Red::AST::Infixes;
 use Red::AST::Unary;
 use JSON::Fast;
 use Red::Driver::Pg;
+use RedSourcing::StoredEvent;
+use Red::AST::Insert;
 
 # Exercise Red's real path translator and our remaining scalar adaptations.
 # A placeholder handle avoids opening a server connection.
@@ -18,6 +20,39 @@ class Translator is Red::Driver::Pg does RedSourcing::PgJSON {
 }
 sub translator() { Translator.new(:dbh(True)) }
 sub item($key) { Red::AST::JsonItem.new(ast-value('document'), ast-value($key)) }
+subtest 'event MRO SQL preserves the string interface over native arrays' => {
+    my $*RED-INTERNAL = True;
+    my $column = RedSourcing::StoredEvent.mro;
+    is translator().translate($column, 'column-type').key, 'text[]',
+        'MRO storage uses a native PostgreSQL array';
+    my $select = translator().translate($column, 'select');
+    like $select.key, / 'array_to_string' /, 'ORM reads render the logical string';
+    like $select.key, / ' AS ' /, 'ordinary reads retain a column alias';
+    my $prefixed = translator().translate($column, 'select', :RED-OVERRIDE-COLUMN-AS-PREFIX<event>);
+    like $prefixed.key, / 'event.mro' /, 'joined reads retain their requested alias';
+    {
+        my $*RED-INSIDE-COMPUTATION = True;
+        unlike translator().translate($column, 'select').key, / ' AS ' /,
+            'computed expressions omit the column alias';
+    }
+    my $like = translator().translate(Red::AST::Like.new($column, ast-value('%|SomeEvent|%')), 'bind');
+    like $like.key, / 'array_to_string' /, 'legacy string membership reads the array as text';
+    is-deeply $like.value.Array, ['%|SomeEvent|%'], 'membership patterns remain bound';
+    my $update = translator().translate(ast-value($column => ast-value('|SomeEvent|')), 'update');
+    like $update.key, / 'string_to_array' /, 'ORM updates convert strings to arrays';
+    is-deeply $update.value.Array, ['|SomeEvent|'], 'updates keep their bound value';
+    my $insert = Red::AST::Insert.new(:into(RedSourcing::StoredEvent), :values{
+        mro => Red::AST::Value.new(:$column, :value('|SomeEvent|')),
+        class => Red::AST::Value.new(:column(RedSourcing::StoredEvent.class), :value('SomeEvent')),
+    });
+    my $sql = translator().translate($insert);
+    like $sql.key, / 'string_to_array' /, 'inserts convert MRO to an array';
+    like $sql.key, / 'RETURNING *' $ /, 'inserts retain the hydration contract';
+    is-deeply $sql.value.Array, ['SomeEvent', '|SomeEvent|'], 'insert binds follow sorted column order';
+    is translator().translate(Red::AST::Insert.new(:into(RedSourcing::StoredEvent))).key,
+        'INSERT INTO "red_sourcing_event" DEFAULT VALUES RETURNING *',
+        'empty inserts retain PostgreSQL default values';
+};
 subtest 'JSON path keys are bound, including nested keys and array indexes' => {
     my $driver = translator();
     my $key = q[a,b}'{quoted];

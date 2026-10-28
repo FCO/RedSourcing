@@ -425,6 +425,7 @@ Run these commands from the repository root:
 | [School](examples/school/README.md) | Dynamic consistency: at most 10 classes per student and 30 students per class | `raku -Ilib examples/school/main.raku` |
 | [Simple flow](examples/simple-flow/README.md) | One aggregate, projection and saga, inspected line by line in the REPL | See the linked REPL walkthrough |
 | [Simple flow with decision-model](examples/simple-flow-decision-model/README.md) | Replace all sagas in a local flow; compare transaction boundaries | `raku -Ilib examples/simple-flow-decision-model/main.raku` |
+| [Bank transfer](examples/bank-transfer/README.md) | Compare saga compensation with an atomic decision-model transfer | `raku -Ilib examples/bank-transfer/main.raku` |
 | [Bank](examples/bank/README.md) | Rational money, transfers and monthly projections | `raku -Ilib -Iexamples/bank examples/bank/main.raku` |
 | [Shopping cart](examples/shopping-cart/README.md) | Checkout and a 24-hour abandoned-cart email saga | `raku -Ilib -Iexamples/shopping-cart examples/shopping-cart/main.raku` |
 | [Food delivery](examples/food-delivery/README.md) | Menus, delivery lifecycle and customer/restaurant views | `raku -Ilib -Iexamples/food-delivery examples/food-delivery/main.raku` |

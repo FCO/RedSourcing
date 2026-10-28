@@ -1,0 +1,73 @@
+use Test;
+use RedSourcing;
+use lib 't/lib', 'examples/bank-transfer/lib';
+use MicroblogTestStore;
+use BankTransfer;
+my $*RED-DB = test-store('87');
+schema(StoredEvent, StoredCommand).create;
+sub account($id, Int $amount = 0) {
+    my $a = Account.^with-ids: :account-id($id);
+    $a.^create; $a.open;
+    $a.deposit: :$amount if $amount;
+    $a
+}
+sub transfer($id) { my $t = Transfer.^with-ids: :transfer-id($id); $t.^create; $t }
+sub balance($id) { Balance.^with-ids(:account-id($id)).amount }
+account('a', 10000); account('b');
+my $atomic = transfer('atomic');
+my $command = $atomic.execute: :from<a>, :to<b>, :amount(3000), :!sync;
+is $command.run, 'completed', 'decision completes transfer';
+is balance('a'), 7000, 'source debited';
+is balance('b'), 3000, 'target credited';
+is Account.^with-ids(:account-id<a>).amount, 7000, 'aggregate agrees with projection';
+is $command.run, 'completed', 'saved command result reused';
+is balance('b'), 3000, 'replay does not duplicate credit';
+throws-like { $atomic.execute(:from<a>, :to<b>, :amount(1)) }, Exception, 'transfer ID cannot be reused';
+throws-like { transfer('poor').execute(:from<a>, :to<b>, :amount(8000)) }, Exception, 'insufficient funds';
+throws-like { transfer('missing').execute(:from<a>, :to<unknown>, :amount(100)) }, Exception, 'unknown target rejected';
+throws-like { transfer('same').execute(:from<a>, :to<a>, :amount(100)) }, Exception, 'self transfer rejected';
+throws-like { transfer('zero').execute(:from<a>, :to<b>, :amount(0)) }, Exception, 'zero rejected';
+throws-like { transfer('negative').execute(:from<a>, :to<b>, :amount(-1)) }, Exception, 'negative rejected';
+is balance('a'), 7000, 'failed decisions leave source unchanged';
+is balance('b'), 3000, 'failed decisions leave destination unchanged';
+my $rollback = transfer('rollback');
+throws-like {
+    red-do :transaction, {
+        $rollback.execute: :from<a>, :to<b>, :amount(1000);
+        die 'Injected failure after both appends';
+    }
+}, Exception, 'outer transaction aborts both appends';
+is balance('a'), 7000, 'debit rolled back';
+is balance('b'), 3000, 'credit rolled back';
+is $rollback.status, 'new', 'completion rolled back';
+is $rollback.execute(:from<a>, :to<b>, :amount(1000)), 'completed', 'can submit again after rollback';
+account('s-a', 10000); account('s-b');
+my $saga-transfer = transfer('saga');
+my $workflow = TransferWorkflow.^with-ids: :transfer-id<saga>;
+$workflow.^create;
+$saga-transfer.request: :from<s-a>, :to<s-b>, :amount(3000);
+$workflow.^advance: :limit(1);
+is balance('s-a'), 7000, 'saga debit commits separately';
+is balance('s-b'), 0, 'saga credit still pending';
+is $saga-transfer.status, 'requested', 'transfer not yet complete';
+is $workflow.^advance.^status, 'completed', 'saga completes';
+is balance('s-b'), 3000, 'saga credit committed';
+is $saga-transfer.status, 'completed', 'completion recorded';
+$workflow.^advance;
+is balance('s-b'), 3000, 'controller replay does not duplicate credit';
+account('refund-a', 10000);
+# A stream exists, but its account has not been opened: credit will fail.
+Account.^with-ids(:account-id<unopened>).^create;
+my $failed = transfer('refund');
+my $refund = TransferWorkflow.^with-ids: :transfer-id<refund>;
+$refund.^create;
+$failed.request: :from<refund-a>, :to<unopened>, :amount(3000);
+$refund.^advance: :limit(1);
+is balance('refund-a'), 7000, 'debit precedes failed credit';
+my $done = $refund.^advance;
+is $done.^status, 'compensated', 'failed credit triggers compensation';
+is balance('refund-a'), 10000, 'debit refunded';
+is balance('unopened'), 0, 'failed credit never changed target';
+$refund.^advance;
+is balance('refund-a'), 10000, 'compensation replay does not duplicate refund';
+done-testing;

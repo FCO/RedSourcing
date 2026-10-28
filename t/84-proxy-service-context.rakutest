@@ -1,11 +1,11 @@
 use Test;
+use File::Temp;
 use RedSourcing;
 use RedSourcing::Config;
 use RedSourcing::Service;
 use lib 't/lib';
 use ProxyQueryDomain;
-my $file = $*TMPDIR.add('proxy-service-test-' ~ $*PID ~ '.db');
-LEAVE $file.unlink if $file.e;
+my $file = tempdir.IO.add('proxy-service.db');
 red-sourcing-defaults(:driver<SQLite>, :database($file.Str), :!flow-tracing);
 my $target = ProxyQueryCounter.^with-ids(:id<target>); $target.^create;
 my $runtime = ServiceRuntime.new(:poll-interval(.02), :stop-grace(1)).initialize;
